@@ -4,20 +4,31 @@ export type TransformMode = 'select' | 'translate' | 'rotate' | 'scale';
 
 export type TransformSpace = 'world' | 'local';
 
-export type ProximityStrength = 'subtle' | 'normal' | 'strong';
+export type MagnetStrength = 'subtle' | 'normal' | 'strong';
 
 export type RotationSnapStep = 0 | 5 | 15 | 45 | 90;
 
 export interface SnapSettings {
   enabled: boolean; // Master Smart Snap switch
-  grid: boolean; // Snap to Grid
+  /**
+   * Unified Object Magnet: combines Magnetic Surface Contact + Edge/Corner Snap + Proximity Pull
+   * so nearby blocks lock flush together seamlessly without gaps.
+   */
+  objectMagnet: boolean;
+  magnetStrength: MagnetStrength;
+  /**
+   * Distant Alignment Guides: aligns centers/edges across the room with laser guide lines.
+   */
+  alignment: boolean;
+  /**
+   * Floor Grid Snap: steps movement & scale to meter grid increments in open space.
+   */
+  grid: boolean;
   gridStep: number; // 0.1 | 0.25 | 0.5 | 1.0 (meters)
-  magnetic: boolean; // Surface-to-surface flush contact & floor magnet
-  edge: boolean; // Corner vertex & edge midpoint snapping
-  alignment: boolean; // Smart alignment guides (center & flush bounds)
-  proximity: boolean; // Proximity threshold filtering & magnetic pull
-  proximityStrength: ProximityStrength;
-  rotationSnapDeg: RotationSnapStep; // Controlled rotation angle step
+  /**
+   * Controlled Rotation Angle Snap step in degrees (0 = free smooth).
+   */
+  rotationSnapDeg: RotationSnapStep;
 }
 
 export interface Vec3 {
@@ -60,17 +71,15 @@ export interface DragFeedback {
 
 export const DEFAULT_SNAP_SETTINGS: SnapSettings = {
   enabled: true,
+  objectMagnet: true,
+  magnetStrength: 'normal',
+  alignment: true,
   grid: true,
   gridStep: 0.25,
-  magnetic: true,
-  edge: true,
-  alignment: true,
-  proximity: true,
-  proximityStrength: 'normal',
   rotationSnapDeg: 15,
 };
 
-export const PROXIMITY_RADIUS_MAP: Record<ProximityStrength, number> = {
+export const MAGNET_RADIUS_MAP: Record<MagnetStrength, number> = {
   subtle: 0.12,
   normal: 0.22,
   strong: 0.36,

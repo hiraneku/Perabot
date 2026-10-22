@@ -91,23 +91,17 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
           <div className="help-box help-box-full">
             <div className="help-box-title">
               <Magnet size={16} />
-              <span>5 Sistem Snap Pintar (Menu Snap di Atas)</span>
+              <span>3 Fitur Snap Pintar (Menu Snap di Atas)</span>
             </div>
             <ul className="help-list">
               <li>
-                <strong>Magnetic Snapping:</strong> Menempelkan permukaan dinding ke dinding, atap di atas kubus, atau ke lantai (Y=0) rapat tanpa celah (indikator bidang cyan).
+                <strong>Magnet Blok & Sudut (Gabungan Magnetic + Edge + Proximity):</strong> Otomatis menarik permukaan, garis tepi, dan titik sudut blok saat berdekatan supaya menyatu mulus tanpa celah maupun garis sambungan.
               </li>
               <li>
-                <strong>Edge & Corner Snap:</strong> Mengunci titik sudut & garis tepi antar objek secara presisi (indikator berlian kuning).
+                <strong>Garis Sejajar (Alignment):</strong> Memunculkan garis bantu laser saat posisi tengah atau batas objek sejajar lurus dengan objek lain dari jarak jauh.
               </li>
               <li>
-                <strong>Alignment Snapping:</strong> Garis laser bantu otomatis saat titik tengah atau batas tepi sejajar dengan objek lain.
-              </li>
-              <li>
-                <strong>Proximity Snapping:</strong> Mengatur kepekaan tarik magnetik terhadap objek di sekitar (Halus / Normal / Kuat).
-              </li>
-              <li>
-                <strong>Snap to Grid:</strong> Mengunci pergerakan pada kelipatan meter lantai (<code>0.1m</code>–<code>1.0m</code>).
+                <strong>Snap Grid Lantai:</strong> Mengunci langkah geser & skala ke ukuran petak meter (<code>0.1m</code>–<code>1.0m</code>) di area terbuka.
               </li>
             </ul>
           </div>

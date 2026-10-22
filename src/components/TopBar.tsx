@@ -14,7 +14,7 @@ import {
   Check,
 } from 'lucide-react';
 import { CameraPresetType } from '../engine/viewportHelpers';
-import { ProximityStrength, SnapSettings } from '../types/studio';
+import { MagnetStrength, SnapSettings } from '../types/studio';
 
 interface TopBarProps {
   canUndo: boolean;
@@ -78,10 +78,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   }, []);
 
   const activeSnapCount = [
-    snapSettings.magnetic,
-    snapSettings.edge,
+    snapSettings.objectMagnet,
     snapSettings.alignment,
-    snapSettings.proximity,
     snapSettings.grid,
   ].filter(Boolean).length;
 
@@ -96,7 +94,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span className="axis-dot axis-z" />
           </span>
           <span className="brand-title">Perabot</span>
-          <span className="brand-tag">3D</span>
+          <span className="brand-tag hide-xs">3D</span>
         </div>
 
         <div className="topbar-divider hide-xs" />
@@ -125,7 +123,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </div>
 
-      {/* Center: Smart Snapping Menu, Grid, Focus, Camera Views */}
+      {/* Center: Consolidated Smart Snapping Menu, Grid, Focus, Camera Views */}
       <div className="topbar-group topbar-center">
         <div className="dropdown-wrap" ref={snapRef}>
           <div className="split-btn">
@@ -136,9 +134,9 @@ export const TopBar: React.FC<TopBarProps> = ({
               title="Aktifkan / Matikan Sistem Snap Pintar"
             >
               <Magnet size={15} />
-              <span className="hide-xs">Snap</span>
+              <span>Snap</span>
               {snapSettings.enabled && (
-                <span className="snap-badge">{activeSnapCount} Mode</span>
+                <span className="snap-badge">{activeSnapCount}</span>
               )}
             </button>
             <button
@@ -146,7 +144,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               className={`chip-caret ${snapSettings.enabled ? 'active' : ''}`}
               onClick={() => setSnapMenuOpen((v) => !v)}
               aria-label="Pengaturan Snap Pintar"
-              title="Atur Magnetic, Edge, Alignment, Proximity & Grid Snap"
+              title="Atur Magnet Blok, Garis Sejajar & Snap Grid"
             >
               <ChevronDown size={13} />
             </button>
@@ -165,95 +163,49 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </button>
               </div>
 
-              {/* 1. Magnetic Snapping */}
-              <button
-                type="button"
-                className={`snap-option-row ${snapSettings.magnetic ? 'checked' : ''}`}
-                onClick={() =>
-                  onUpdateSnap({ enabled: true, magnetic: !snapSettings.magnetic })
-                }
-              >
-                <div className="snap-option-text">
-                  <strong>Magnetic Snapping</strong>
-                  <span>Tempel rapat permukaan dinding, atap & lantai</span>
-                </div>
-                <span className="snap-check-box">
-                  {snapSettings.magnetic && <Check size={13} />}
-                </span>
-              </button>
-
-              {/* 2. Edge & Vertex Snapping */}
-              <button
-                type="button"
-                className={`snap-option-row ${snapSettings.edge ? 'checked' : ''}`}
-                onClick={() =>
-                  onUpdateSnap({ enabled: true, edge: !snapSettings.edge })
-                }
-              >
-                <div className="snap-option-text">
-                  <strong>Edge & Corner Snap</strong>
-                  <span>Kunci presisi ke garis tepi & titik sudut 3D</span>
-                </div>
-                <span className="snap-check-box">
-                  {snapSettings.edge && <Check size={13} />}
-                </span>
-              </button>
-
-              {/* 3. Alignment Snapping */}
-              <button
-                type="button"
-                className={`snap-option-row ${snapSettings.alignment ? 'checked' : ''}`}
-                onClick={() =>
-                  onUpdateSnap({ enabled: true, alignment: !snapSettings.alignment })
-                }
-              >
-                <div className="snap-option-text">
-                  <strong>Alignment Snapping</strong>
-                  <span>Garis bantu sejajar tengah & rata batas objek</span>
-                </div>
-                <span className="snap-check-box">
-                  {snapSettings.alignment && <Check size={13} />}
-                </span>
-              </button>
-
-              {/* 4. Proximity Snapping */}
+              {/* 1. Unified Magnet Blok & Sudut (Magnetic + Edge + Proximity combined) */}
               <div className="snap-subblock">
                 <button
                   type="button"
                   className={`snap-option-row compact ${
-                    snapSettings.proximity ? 'checked' : ''
+                    snapSettings.objectMagnet ? 'checked' : ''
                   }`}
                   onClick={() =>
-                    onUpdateSnap({ enabled: true, proximity: !snapSettings.proximity })
+                    onUpdateSnap({
+                      enabled: true,
+                      objectMagnet: !snapSettings.objectMagnet,
+                    })
                   }
                 >
                   <div className="snap-option-text">
-                    <strong>Proximity Snapping</strong>
-                    <span>Tarik otomatis saat mendekati objek sekitar</span>
+                    <strong>Magnet Blok & Sudut</strong>
+                    <span>
+                      Tempel rapat permukaan, garis tepi & sudut otomatis saat blok berdekatan
+                    </span>
                   </div>
                   <span className="snap-check-box">
-                    {snapSettings.proximity && <Check size={13} />}
+                    {snapSettings.objectMagnet && <Check size={13} />}
                   </span>
                 </button>
-                {snapSettings.proximity && (
+                {snapSettings.objectMagnet && (
                   <div className="segmented-pills">
                     {(
                       [
                         { id: 'subtle', label: 'Halus' },
                         { id: 'normal', label: 'Normal' },
                         { id: 'strong', label: 'Kuat' },
-                      ] as Array<{ id: ProximityStrength; label: string }>
+                      ] as Array<{ id: MagnetStrength; label: string }>
                     ).map((item) => (
                       <button
                         key={item.id}
                         type="button"
                         className={`seg-pill ${
-                          snapSettings.proximityStrength === item.id ? 'active' : ''
+                          snapSettings.magnetStrength === item.id ? 'active' : ''
                         }`}
                         onClick={() =>
                           onUpdateSnap({
                             enabled: true,
-                            proximityStrength: item.id,
+                            magnetStrength: item.id,
                           })
                         }
                       >
@@ -264,7 +216,24 @@ export const TopBar: React.FC<TopBarProps> = ({
                 )}
               </div>
 
-              {/* 5. Snap to Grid */}
+              {/* 2. Garis Sejajar (Alignment Guides across distance) */}
+              <button
+                type="button"
+                className={`snap-option-row ${snapSettings.alignment ? 'checked' : ''}`}
+                onClick={() =>
+                  onUpdateSnap({ enabled: true, alignment: !snapSettings.alignment })
+                }
+              >
+                <div className="snap-option-text">
+                  <strong>Garis Sejajar (Alignment)</strong>
+                  <span>Garis bantu laser saat lurus tengah/tepi dengan objek jauh</span>
+                </div>
+                <span className="snap-check-box">
+                  {snapSettings.alignment && <Check size={13} />}
+                </span>
+              </button>
+
+              {/* 3. Snap to Grid */}
               <div className="snap-subblock">
                 <button
                   type="button"
@@ -276,8 +245,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                   }
                 >
                   <div className="snap-option-text">
-                    <strong>Snap to Grid</strong>
-                    <span>Kunci gerakan ke ukuran petak meter lantai</span>
+                    <strong>Snap Grid Lantai</strong>
+                    <span>Kunci langkah geser & skala ke ukuran petak meter</span>
                   </div>
                   <span className="snap-check-box">
                     {snapSettings.grid && <Check size={13} />}
@@ -423,7 +392,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             title="Ekspor ke file 3D (.glb / .gltf)"
           >
             <Download size={15} />
-            <span>Ekspor</span>
+            <span className="hide-xs">Ekspor</span>
             <ChevronDown size={13} />
           </button>
 

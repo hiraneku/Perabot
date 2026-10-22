@@ -31,7 +31,6 @@ interface InternalTransformControls {
   rotationAngle?: number;
   rotationAxis?: THREE.Vector3;
   _quaternionStart?: THREE.Quaternion;
-  _parentQuaternionInv?: THREE.Quaternion;
 }
 
 export interface StudioEngineCallbacks {
@@ -46,6 +45,16 @@ export interface StudioEngineCallbacks {
 
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
+
+// BoxGeometry group normals in exact group index order: 0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z
+const BOX_FACE_LOCAL_NORMALS: THREE.Vector3[] = [
+  new THREE.Vector3(1, 0, 0),
+  new THREE.Vector3(-1, 0, 0),
+  new THREE.Vector3(0, 1, 0),
+  new THREE.Vector3(0, -1, 0),
+  new THREE.Vector3(0, 0, 1),
+  new THREE.Vector3(0, 0, -1),
+];
 
 function round3(n: number): number {
   return Math.round(n * 1000) / 1000;
@@ -65,6 +74,8 @@ export class StudioEngine {
 
   private objectGroup = new THREE.Group();
   private meshMap = new Map<string, THREE.Mesh>();
+  private hiddenFaceMaterial = new THREE.MeshBasicMaterial({ visible: false });
+
   private selectedId: string | null = null;
   private transformMode: TransformMode = 'translate';
   private transformSpace: TransformSpace = 'world';
@@ -108,18 +119,15 @@ export class StudioEngine {
     this.container = container;
     this.callbacks = callbacks;
 
-    // 1. Scene
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#171a21');
     this.scene.fog = new THREE.Fog('#171a21', 38, 95);
 
-    // 2. Camera
     const width = Math.max(container.clientWidth, 1);
     const height = Math.max(container.clientHeight, 1);
     this.camera = new THREE.PerspectiveCamera(46, width / height, 0.05, 250);
     this.camera.position.set(4.6, 3.6, 5.2);
 
-    // 3. Renderer
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: 'high-performance',
@@ -138,20 +146,16 @@ export class StudioEngine {
     this.renderer.domElement.style.outline = 'none';
     container.appendChild(this.renderer.domElement);
 
-    // 4. Studio Lighting
     this.setupLighting();
 
-    // 5. Architectural Floor Grid + Red/Blue Blender Ground Axes
     this.floorGroup = createFloorGrid();
     this.scene.add(this.floorGroup);
 
-    // 6. User Objects + Visual Snap & Protractor Overlays
     this.objectGroup.name = 'PerabotSceneObjects';
     this.scene.add(this.objectGroup);
     this.scene.add(this.snapVisualizer.group);
     this.scene.add(this.protractorVisualizer.group);
 
-    // 7. Orbit Controls
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
     this.orbitControls.dampingFactor = 0.08;
@@ -164,7 +168,6 @@ export class StudioEngine {
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
 
-    // 8. Transform Controls (Blender RGB Arrows + Controlled 360° Rotate Rings)
     this.transformControls = new TransformControls(
       this.camera,
       this.renderer.domElement
@@ -184,6 +187,7 @@ export class StudioEngine {
       } else {
         this.snapVisualizer.clear();
         this.protractorVisualizer.hide();
+        this.updateSeamlessTouchFaces();
         this.pushHistorySnapshot();
         this.emitDragFeedback(false);
         this.emitState();
@@ -195,29 +199,28 @@ export class StudioEngine {
       this.handleGizmoObjectChange();
     });
 
-    // 9. Interactive 3D Axis ViewHelper
     this.viewHelper = new ViewHelper(this.camera, this.renderer.domElement);
     this.viewHelper.setLabelStyle('bold 24px system-ui, sans-serif', '#0d1016', 16);
     this.viewHelper.setLabels('X', 'Y', 'Z');
     this.viewHelper.center.copy(this.orbitControls.target);
 
-    // 10. Pointer listeners
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
 
-    // 11. Resize observer
     this.resizeObserver = new ResizeObserver(() => {
       this.handleResize();
     });
     this.resizeObserver.observe(this.container);
 
-    // 12. Spawn initial default Cube
     this.spawnPrimitive('cube', false);
     this.pushHistorySnapshot();
     this.emitState();
 
-    // 13. Start render loop
     this.animate();
+  }
+
+  private getBaseMaterial(mesh: THREE.Mesh): THREE.MeshStandardMaterial {
+    return mesh.userData.baseMaterial as THREE.MeshStandardMaterial;
   }
 
   private handleGizmoObjectChange(): void {
@@ -241,6 +244,7 @@ export class StudioEngine {
           this.snapSettings
         );
         mesh.position.copy(snapRes.snappedPosition);
+        this.updateSeamlessTouchFaces();
         this.snapVisualizer.update(snapRes);
         this.protractorVisualizer.hide();
         this.emitDragFeedback(true, { snapLabel: snapRes.snapLabel });
@@ -251,7 +255,6 @@ export class StudioEngine {
         const startQuat = internal._quaternionStart;
         const rotAxis = internal.rotationAxis;
 
-        // Controlled rotation: calm sensitivity (0.42x) + optional crisp degree snapping
         let controlledAngle = rawAngle * 0.42;
         const stepDeg = this.snapSettings.rotationSnapDeg;
         if (stepDeg > 0) {
@@ -275,13 +278,13 @@ export class StudioEngine {
           this.protractorVisualizer.show(mesh.position, axis, controlledAngle, radiusScale);
         }
 
+        this.updateSeamlessTouchFaces();
         const deltaDeg = Math.round(controlledAngle * RAD2DEG);
         this.emitDragFeedback(true, {
           deltaAngleDeg: deltaDeg,
           snapLabel: stepDeg > 0 ? `Kunci Sudut ${stepDeg}°` : 'Putar Halus Bebas',
         });
       } else {
-        // scale mode
         this.snapVisualizer.clear();
         this.protractorVisualizer.hide();
         mesh.scale.set(
@@ -289,6 +292,7 @@ export class StudioEngine {
           Math.max(0.05, mesh.scale.y),
           Math.max(0.05, mesh.scale.z)
         );
+        this.updateSeamlessTouchFaces();
         this.emitDragFeedback(true, {
           snapLabel:
             this.snapSettings.enabled && this.snapSettings.grid
@@ -303,8 +307,109 @@ export class StudioEngine {
     this.emitState();
   }
 
+  /**
+   * Suppresses internal coplanar faces between touching axis-aligned cubes so joined blocks
+   * merge visually into a single continuous solid surface with zero subpixel seam lines.
+   */
+  private updateSeamlessTouchFaces(): void {
+    const cubes: Array<{
+      mesh: THREE.Mesh;
+      box: THREE.Box3;
+      center: THREE.Vector3;
+    }> = [];
+
+    for (const mesh of this.meshMap.values()) {
+      if (!mesh.visible || mesh.userData.kind !== 'cube') continue;
+      // Check if cube is axis-aligned (normals align with X, Y, Z)
+      const testX = new THREE.Vector3(1, 0, 0).applyQuaternion(mesh.quaternion);
+      const testY = new THREE.Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
+      const isOrtho =
+        (Math.abs(testX.x) > 0.999 ||
+          Math.abs(testX.y) > 0.999 ||
+          Math.abs(testX.z) > 0.999) &&
+        (Math.abs(testY.x) > 0.999 ||
+          Math.abs(testY.y) > 0.999 ||
+          Math.abs(testY.z) > 0.999);
+
+      const baseMat = this.getBaseMaterial(mesh);
+      if (!isOrtho) {
+        mesh.material = baseMat;
+        continue;
+      }
+
+      const box = this.computeWorldBounds(mesh);
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      cubes.push({ mesh, box, center });
+    }
+
+    const EPS = 0.004;
+
+    for (const item of cubes) {
+      const baseMat = this.getBaseMaterial(item.mesh);
+      const faceMats: THREE.Material[] = [
+        baseMat,
+        baseMat,
+        baseMat,
+        baseMat,
+        baseMat,
+        baseMat,
+      ];
+      let anyHidden = false;
+
+      for (let g = 0; g < 6; g++) {
+        const worldNormal = BOX_FACE_LOCAL_NORMALS[g]
+          .clone()
+          .applyQuaternion(item.mesh.quaternion);
+
+        // Identify which world axis (+x, -x, +y, -y, +z, -z) this face points toward
+        let ax: 'x' | 'y' | 'z' = 'x';
+        let dir: 1 | -1 = 1;
+        if (Math.abs(worldNormal.x) > 0.9) {
+          ax = 'x';
+          dir = worldNormal.x > 0 ? 1 : -1;
+        } else if (Math.abs(worldNormal.y) > 0.9) {
+          ax = 'y';
+          dir = worldNormal.y > 0 ? 1 : -1;
+        } else {
+          ax = 'z';
+          dir = worldNormal.z > 0 ? 1 : -1;
+        }
+
+        const [p1, p2]: ['x' | 'y' | 'z', 'x' | 'y' | 'z'] =
+          ax === 'x' ? ['y', 'z'] : ax === 'y' ? ['x', 'z'] : ['x', 'y'];
+
+        const faceCoord = dir === 1 ? item.box.max[ax] : item.box.min[ax];
+
+        for (const other of cubes) {
+          if (other.mesh === item.mesh) continue;
+          // Ensure neighbor is genuinely on the outward side of this face
+          if ((other.center[ax] - item.center[ax]) * dir <= 0.01) continue;
+
+          const neighborOppCoord = dir === 1 ? other.box.min[ax] : other.box.max[ax];
+          if (Math.abs(faceCoord - neighborOppCoord) > EPS) continue;
+
+          // Check if neighbor face completely covers this face on both perpendicular axes
+          const coversP1 =
+            other.box.min[p1] <= item.box.min[p1] + EPS &&
+            other.box.max[p1] >= item.box.max[p1] - EPS;
+          const coversP2 =
+            other.box.min[p2] <= item.box.min[p2] + EPS &&
+            other.box.max[p2] >= item.box.max[p2] - EPS;
+
+          if (coversP1 && coversP2) {
+            faceMats[g] = this.hiddenFaceMaterial;
+            anyHidden = true;
+            break;
+          }
+        }
+      }
+
+      item.mesh.material = anyHidden ? faceMats : baseMat;
+    }
+  }
+
   private applyControlSnapConfig(): void {
-    // Translation & Rotation snapping are handled with higher intelligence in handleGizmoObjectChange
     this.transformControls.setTranslationSnap(null);
     this.transformControls.setRotationSnap(null);
     if (this.snapSettings.enabled && this.snapSettings.grid) {
@@ -315,7 +420,7 @@ export class StudioEngine {
   }
 
   private setupLighting(): void {
-    const hemiLight = new THREE.HemisphereLight('#dce8ff', '#282d38', 0.95);
+    const hemiLight = new THREE.HemisphereLight('#dce8ff', '#282d38', 0.98);
     hemiLight.position.set(0, 25, 0);
     this.scene.add(hemiLight);
 
@@ -331,7 +436,9 @@ export class StudioEngine {
     keyLight.shadow.camera.right = d;
     keyLight.shadow.camera.top = d;
     keyLight.shadow.camera.bottom = -d;
-    keyLight.shadow.bias = -0.0005;
+    // normalBias prevents internal coplanar joints from bleeding dark shadow stripes
+    keyLight.shadow.bias = -0.0002;
+    keyLight.shadow.normalBias = 0.045;
     this.scene.add(keyLight);
 
     const fillLight = new THREE.DirectionalLight('#9ec5ff', 0.55);
@@ -495,6 +602,7 @@ export class StudioEngine {
     const mesh = this.buildMeshFromData(data);
     this.objectGroup.add(mesh);
     this.meshMap.set(id, mesh);
+    this.updateSeamlessTouchFaces();
 
     if (this.transformMode === 'select') {
       this.transformMode = 'translate';
@@ -510,15 +618,19 @@ export class StudioEngine {
     return id;
   }
 
+  /**
+   * Builds pure clean 3D geometry WITHOUT permanent black wireframe border lines,
+   * so touching blocks fuse cleanly into continuous walls/roofs without dividing lines.
+   */
   private buildMeshFromData(data: SceneObjectData): THREE.Mesh {
     const geometry = createPrimitiveGeometry(data.kind);
-    const material = new THREE.MeshStandardMaterial({
+    const baseMaterial = new THREE.MeshStandardMaterial({
       color: new THREE.Color(data.color),
       roughness: data.roughness,
       metalness: data.metalness,
     });
 
-    const mesh = new THREE.Mesh(geometry, material);
+    const mesh = new THREE.Mesh(geometry, baseMaterial);
     mesh.name = data.name;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -533,37 +645,20 @@ export class StudioEngine {
     mesh.userData = {
       objectId: data.id,
       kind: data.kind,
+      baseMaterial,
     };
-
-    const edgesGeo = new THREE.EdgesGeometry(geometry, 24);
-    const edgesMat = new THREE.LineBasicMaterial({
-      color: '#0b0e14',
-      transparent: true,
-      opacity: 0.24,
-      depthTest: true,
-    });
-    const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat);
-    edgeLines.name = '__selectionEdges';
-    edgeLines.userData.isHelper = true;
-    edgeLines.raycast = () => {};
-    mesh.add(edgeLines);
 
     return mesh;
   }
 
   private updateSelectionHighlight(): void {
     for (const [id, mesh] of this.meshMap.entries()) {
-      const edgeLines = mesh.getObjectByName('__selectionEdges') as
-        | THREE.LineSegments
-        | undefined;
-      if (!edgeLines) continue;
-      const mat = edgeLines.material as THREE.LineBasicMaterial;
-      if (id === this.selectedId) {
-        mat.color.set('#ff9f2e');
-        mat.opacity = 0.95;
+      const mat = this.getBaseMaterial(mesh);
+      // Only use a gentle surface glow when in 'select' mode (where gizmo is hidden)
+      if (id === this.selectedId && this.transformMode === 'select') {
+        mat.emissive.set('#221808');
       } else {
-        mat.color.set('#0b0e14');
-        mat.opacity = 0.24;
+        mat.emissive.set('#000000');
       }
     }
   }
@@ -597,6 +692,8 @@ export class StudioEngine {
     this.transformMode = mode;
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
+    this.updateSelectionHighlight();
+
     if (mode === 'select') {
       this.transformControls.detach();
     } else {
@@ -638,9 +735,6 @@ export class StudioEngine {
     return { ...this.snapSettings };
   }
 
-  /**
-   * Controlled step rotation around X, Y, or Z axis (e.g. -90°, -45°, +15°, +90°)
-   */
   public rotateSelectedBy(axis: 'x' | 'y' | 'z', deltaDeg: number): boolean {
     if (!this.selectedId) return false;
     const mesh = this.meshMap.get(this.selectedId);
@@ -660,27 +754,25 @@ export class StudioEngine {
       mesh.quaternion.premultiply(q).normalize();
     }
 
-    // Keep Euler values tidy (avoid -0 / 89.9998 floating noise)
     mesh.rotation.set(
-      Math.round(mesh.rotation.x * RAD2DEG * 100) / 100 * DEG2RAD,
-      Math.round(mesh.rotation.y * RAD2DEG * 100) / 100 * DEG2RAD,
-      Math.round(mesh.rotation.z * RAD2DEG * 100) / 100 * DEG2RAD
+      (Math.round(mesh.rotation.x * RAD2DEG * 100) / 100) * DEG2RAD,
+      (Math.round(mesh.rotation.y * RAD2DEG * 100) / 100) * DEG2RAD,
+      (Math.round(mesh.rotation.z * RAD2DEG * 100) / 100) * DEG2RAD
     );
 
+    this.updateSeamlessTouchFaces();
     this.pushHistorySnapshot();
     this.emitState();
     return true;
   }
 
-  /**
-   * Resets selected object's rotation cleanly back to upright (0°, 0°, 0°)
-   */
   public resetSelectedRotation(): boolean {
     if (!this.selectedId) return false;
     const mesh = this.meshMap.get(this.selectedId);
     if (!mesh) return false;
 
     mesh.rotation.set(0, 0, 0);
+    this.updateSeamlessTouchFaces();
     this.pushHistorySnapshot();
     this.emitState();
     return true;
@@ -721,6 +813,7 @@ export class StudioEngine {
       );
     }
 
+    this.updateSeamlessTouchFaces();
     if (recordHistory) {
       this.pushHistorySnapshot();
     }
@@ -752,10 +845,6 @@ export class StudioEngine {
     return out;
   }
 
-  /**
-   * Drops selected object onto the highest surface directly beneath it,
-   * or onto the floor (Y=0) if nothing is underneath.
-   */
   public dropSelectedToFloor(): string {
     if (!this.selectedId) return '';
     const mesh = this.meshMap.get(this.selectedId);
@@ -776,7 +865,6 @@ export class StudioEngine {
         Math.min(movBounds.max.z, otherBounds.max.z) -
         Math.max(movBounds.min.z, otherBounds.min.z);
 
-      // Must overlap horizontally and sit below or barely touching moving object's bottom
       if (
         overlapX > 0.04 &&
         overlapZ > 0.04 &&
@@ -790,6 +878,7 @@ export class StudioEngine {
 
     const deltaY = targetSurfaceY - movBounds.min.y;
     mesh.position.y += deltaY;
+    this.updateSeamlessTouchFaces();
     this.pushHistorySnapshot();
     this.emitState();
 
@@ -811,7 +900,7 @@ export class StudioEngine {
   ): void {
     const mesh = this.meshMap.get(id);
     if (!mesh) return;
-    const mat = mesh.material as THREE.MeshStandardMaterial;
+    const mat = this.getBaseMaterial(mesh);
 
     if (patch.name !== undefined) {
       mesh.name = patch.name;
@@ -832,6 +921,7 @@ export class StudioEngine {
       } else if (patch.visible && this.selectedId === id && this.transformMode !== 'select') {
         this.transformControls.attach(mesh);
       }
+      this.updateSeamlessTouchFaces();
     }
 
     if (recordHistory) {
@@ -852,7 +942,7 @@ export class StudioEngine {
       id: newId,
       name: `${current.name} (Salinan)`,
       position: {
-        x: round3(current.position.x + 1.0),
+        x: round3(current.position.x + current.scale.x),
         y: current.position.y,
         z: round3(current.position.z),
       },
@@ -861,6 +951,7 @@ export class StudioEngine {
     const mesh = this.buildMeshFromData(copyData);
     this.objectGroup.add(mesh);
     this.meshMap.set(newId, mesh);
+    this.updateSeamlessTouchFaces();
     this.selectObject(newId, false);
     this.pushHistorySnapshot();
     this.emitState();
@@ -880,6 +971,7 @@ export class StudioEngine {
     this.disposeMesh(mesh);
     this.objectGroup.remove(mesh);
     this.meshMap.delete(id);
+    this.updateSeamlessTouchFaces();
 
     this.pushHistorySnapshot();
     this.emitState();
@@ -962,10 +1054,9 @@ export class StudioEngine {
 
     for (const mesh of this.meshMap.values()) {
       if (!mesh.visible) continue;
-      const cleanMesh = new THREE.Mesh(
-        mesh.geometry.clone(),
-        (mesh.material as THREE.MeshStandardMaterial).clone()
-      );
+      const baseMat = this.getBaseMaterial(mesh).clone();
+      baseMat.emissive.set('#000000');
+      const cleanMesh = new THREE.Mesh(mesh.geometry.clone(), baseMat);
       cleanMesh.name = mesh.name;
       cleanMesh.position.copy(mesh.position);
       cleanMesh.quaternion.copy(mesh.quaternion);
@@ -1007,7 +1098,7 @@ export class StudioEngine {
   private serializeObject(id: string): SceneObjectData | null {
     const mesh = this.meshMap.get(id);
     if (!mesh) return null;
-    const mat = mesh.material as THREE.MeshStandardMaterial;
+    const mat = this.getBaseMaterial(mesh);
 
     return {
       id,
@@ -1105,6 +1196,7 @@ export class StudioEngine {
       this.meshMap.set(cloned.id, mesh);
     }
 
+    this.updateSeamlessTouchFaces();
     this.selectObject(snapshot.selectedId, false);
     this.emitState();
   }
@@ -1152,17 +1244,11 @@ export class StudioEngine {
   }
 
   private disposeMesh(mesh: THREE.Mesh): void {
-    mesh.traverse((child) => {
-      const m = child as THREE.Mesh | THREE.LineSegments;
-      if (m.geometry) m.geometry.dispose();
-      if (m.material) {
-        if (Array.isArray(m.material)) {
-          m.material.forEach((mat) => mat.dispose());
-        } else {
-          m.material.dispose();
-        }
-      }
-    });
+    mesh.geometry.dispose();
+    const baseMat = mesh.userData.baseMaterial as THREE.Material | undefined;
+    if (baseMat) {
+      baseMat.dispose();
+    }
   }
 
   public dispose(): void {
@@ -1179,6 +1265,7 @@ export class StudioEngine {
     this.viewHelper.dispose();
     this.snapVisualizer.dispose();
     this.protractorVisualizer.dispose();
+    this.hiddenFaceMaterial.dispose();
 
     for (const mesh of this.meshMap.values()) {
       this.disposeMesh(mesh);

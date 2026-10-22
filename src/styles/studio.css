@@ -206,12 +206,13 @@ button:disabled {
 
 .chip-btn {
   height: 33px;
-  padding: 0 10px;
+  padding: 0 9px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   font-size: 12.5px;
   font-weight: 500;
+  white-space: nowrap;
   color: var(--text-secondary);
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
@@ -259,21 +260,25 @@ button:disabled {
 
 .snap-badge {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
+  min-width: 17px;
+  text-align: center;
   padding: 1px 5px;
-  border-radius: 4px;
-  background: rgba(59, 130, 246, 0.25);
+  border-radius: 999px;
+  white-space: nowrap;
+  background: rgba(59, 130, 246, 0.3);
   color: #dbeafe;
 }
 
 .primary-btn {
   height: 34px;
-  padding: 0 12px;
+  padding: 0 10px;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   font-size: 12.5px;
   font-weight: 600;
+  white-space: nowrap;
   color: #ffffff;
   background: var(--accent-blue);
   border-radius: var(--radius-sm);

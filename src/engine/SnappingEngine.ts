@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
+  MAGNET_RADIUS_MAP,
   PrimitiveKind,
-  PROXIMITY_RADIUS_MAP,
   SnapSettings,
 } from '../types/studio';
 
@@ -13,7 +13,7 @@ export interface GuideLineSpec {
 
 export interface ContactPatchSpec {
   center: THREE.Vector3;
-  size: [number, number]; // width, height in local plane
+  size: [number, number];
   axis: 'x' | 'y' | 'z';
 }
 
@@ -36,7 +36,6 @@ interface ObjectSnapProfile {
 function getLocalStructuralPoints(kind: PrimitiveKind): THREE.Vector3[] {
   if (kind === 'cube') {
     const pts: THREE.Vector3[] = [];
-    // 8 corners
     for (const sx of [-0.5, 0.5]) {
       for (const sy of [-0.5, 0.5]) {
         for (const sz of [-0.5, 0.5]) {
@@ -44,7 +43,6 @@ function getLocalStructuralPoints(kind: PrimitiveKind): THREE.Vector3[] {
         }
       }
     }
-    // 12 edge midpoints
     for (const sy of [-0.5, 0.5]) {
       for (const sz of [-0.5, 0.5]) pts.push(new THREE.Vector3(0, sy, sz));
     }
@@ -59,14 +57,12 @@ function getLocalStructuralPoints(kind: PrimitiveKind): THREE.Vector3[] {
 
   if (kind === 'triangle') {
     return [
-      // 6 prism corners
       new THREE.Vector3(-0.5, -0.5, 0.5),
       new THREE.Vector3(0.5, -0.5, 0.5),
       new THREE.Vector3(0, 0.5, 0.5),
       new THREE.Vector3(-0.5, -0.5, -0.5),
       new THREE.Vector3(0.5, -0.5, -0.5),
       new THREE.Vector3(0, 0.5, -0.5),
-      // Key edge midpoints (ridge, slopes, base)
       new THREE.Vector3(0, 0.5, 0),
       new THREE.Vector3(-0.5, -0.5, 0),
       new THREE.Vector3(0.5, -0.5, 0),
@@ -79,7 +75,6 @@ function getLocalStructuralPoints(kind: PrimitiveKind): THREE.Vector3[] {
     ];
   }
 
-  // cylinder
   const pts: THREE.Vector3[] = [
     new THREE.Vector3(0, 0.5, 0),
     new THREE.Vector3(0, -0.5, 0),
@@ -174,10 +169,7 @@ export class SnappingEngine {
       z: axisStr.includes('Z'),
     };
 
-    const radius = settings.proximity
-      ? PROXIMITY_RADIUS_MAP[settings.proximityStrength]
-      : 0.18;
-
+    const radius = MAGNET_RADIUS_MAP[settings.magnetStrength];
     const moving = buildProfile(movingMesh, rawPos);
     const targets = otherMeshes
       .filter((m) => m.visible && m !== movingMesh)
@@ -186,16 +178,15 @@ export class SnappingEngine {
     const lockedAxes = { x: false, y: false, z: false };
     const labels: string[] = [];
 
-    // 1. Multi-axis 3D Edge & Vertex Lock (when dragging in a plane or free XYZ)
+    // 1. Unified Magnet Blok: Multi-axis 3D Corner/Edge Lock (on planar or XYZ drag)
     const activeAxisCount = (allow.x ? 1 : 0) + (allow.y ? 1 : 0) + (allow.z ? 1 : 0);
-    if (settings.edge && activeAxisCount >= 2 && targets.length > 0) {
+    if (settings.objectMagnet && activeAxisCount >= 2 && targets.length > 0) {
       let bestDist = radius * 0.92;
       let bestDelta: THREE.Vector3 | null = null;
       let bestTargetPt: THREE.Vector3 | null = null;
       let bestTargetName = '';
 
       for (const tar of targets) {
-        // Quick proximity filter
         const boxGap = Math.hypot(
           axisGap1D(moving.box.min.x, moving.box.max.x, tar.box.min.x, tar.box.max.x),
           axisGap1D(moving.box.min.y, moving.box.max.y, tar.box.min.y, tar.box.max.y),
@@ -209,7 +200,6 @@ export class SnappingEngine {
             const dy = allow.y ? tp.y - mp.y : 0;
             const dz = allow.z ? tp.z - mp.z : 0;
 
-            // Ensure non-dragged axis is also reasonably close so unrelated elevations don't false-lock
             const offAxisDist =
               (!allow.x ? Math.abs(tp.x - mp.x) : 0) +
               (!allow.y ? Math.abs(tp.y - mp.y) : 0) +
@@ -233,14 +223,13 @@ export class SnappingEngine {
         if (allow.y) lockedAxes.y = true;
         if (allow.z) lockedAxes.z = true;
         result.points.push(bestTargetPt);
-        labels.push(`Snap Sudut/Tepi • ${bestTargetName}`);
+        labels.push(`Magnet Sudut • ${bestTargetName}`);
       }
     }
 
-    // Recompute moving profile with any 3D vertex lock applied
     let currentMoving = buildProfile(movingMesh, result.snappedPosition);
 
-    // 2. Per-Axis Smart Snapping: Magnetic Surface -> Edge -> Alignment -> Grid
+    // 2. Per-Axis Evaluation: Magnet Blok (Surface + Edge + Flush Assist) -> Alignment -> Grid
     const axes: Array<'x' | 'y' | 'z'> = ['x', 'y', 'z'];
     const otherAxesMap: Record<'x' | 'y' | 'z', ['x' | 'y' | 'z', 'x' | 'y' | 'z']> = {
       x: ['y', 'z'],
@@ -263,30 +252,32 @@ export class SnappingEngine {
       let chosenGuide: GuideLineSpec | null = null;
       let chosenPoint: THREE.Vector3 | null = null;
       let chosenContact: ContactPatchSpec | null = null;
+      let flushPartner: ObjectSnapProfile | null = null;
 
-      // 2A. Magnetic Floor Snap (Y = 0)
-      if (settings.magnetic && ax === 'y') {
-        const distFloor = Math.abs(currentMoving.box.min.y - 0);
-        if (distFloor <= radius) {
-          const score = distFloor * 0.78;
-          if (score < bestScore) {
-            bestScore = score;
-            chosenDelta = -currentMoving.box.min.y;
-            chosenLabel = 'Magnetik • Lantai (Y=0)';
-            const sizeX = Math.max(0.3, currentMoving.box.max.x - currentMoving.box.min.x);
-            const sizeZ = Math.max(0.3, currentMoving.box.max.z - currentMoving.box.min.z);
-            chosenContact = {
-              center: new THREE.Vector3(currentMoving.center.x, 0.004, currentMoving.center.z),
-              size: [sizeX, sizeZ],
-              axis: 'y',
-            };
+      // 2A. Magnet Blok: Floor Contact + Surface Contact + Edge/Vertex Contact
+      if (settings.objectMagnet) {
+        // Floor magnet (Y = 0)
+        if (ax === 'y') {
+          const distFloor = Math.abs(currentMoving.box.min.y - 0);
+          if (distFloor <= radius) {
+            const score = distFloor * 0.78;
+            if (score < bestScore) {
+              bestScore = score;
+              chosenDelta = -currentMoving.box.min.y;
+              chosenLabel = 'Magnet • Lantai (Y=0)';
+              const sizeX = Math.max(0.3, currentMoving.box.max.x - currentMoving.box.min.x);
+              const sizeZ = Math.max(0.3, currentMoving.box.max.z - currentMoving.box.min.z);
+              chosenContact = {
+                center: new THREE.Vector3(currentMoving.center.x, 0.004, currentMoving.center.z),
+                size: [sizeX, sizeZ],
+                axis: 'y',
+              };
+            }
           }
         }
-      }
 
-      // 2B. Magnetic Object-to-Object Surface Contact
-      if (settings.magnetic) {
-        const maxPerpGap = settings.proximity ? radius * 2.5 : 0.65;
+        // Object-to-object flush surface contact
+        const maxPerpGap = radius * 2.5;
         for (const tar of targets) {
           const gap1 = axisGap1D(
             currentMoving.box.min[perp1],
@@ -301,76 +292,71 @@ export class SnappingEngine {
             tar.box.max[perp2]
           );
 
-          if (gap1 > maxPerpGap || gap2 > maxPerpGap) continue;
-
-          // Candidate 1: moving.min touches target.max
-          const dMinToMax = tar.box.max[ax] - currentMoving.box.min[ax];
-          if (Math.abs(dMinToMax) <= radius) {
-            const score = Math.abs(dMinToMax) * 0.75;
-            if (score < bestScore) {
-              bestScore = score;
-              chosenDelta = dMinToMax;
-              chosenLabel =
-                ax === 'y'
-                  ? `Magnetik • Tumpuk di atas ${tar.name}`
-                  : `Magnetik • Tempel Sisi ${tar.name}`;
-              chosenContact = this.buildContactPatch(
-                ax,
-                tar.box.max[ax],
-                currentMoving.box,
-                tar.box
-              );
-              chosenGuide = null;
-              chosenPoint = null;
-            }
-          }
-
-          // Candidate 2: moving.max touches target.min
-          const dMaxToMin = tar.box.min[ax] - currentMoving.box.max[ax];
-          if (Math.abs(dMaxToMin) <= radius) {
-            const score = Math.abs(dMaxToMin) * 0.75;
-            if (score < bestScore) {
-              bestScore = score;
-              chosenDelta = dMaxToMin;
-              chosenLabel = `Magnetik • Tempel Sisi ${tar.name}`;
-              chosenContact = this.buildContactPatch(
-                ax,
-                tar.box.min[ax],
-                currentMoving.box,
-                tar.box
-              );
-              chosenGuide = null;
-              chosenPoint = null;
-            }
-          }
-        }
-      }
-
-      // 2C. Single-Axis Edge / Structural Point Snap (for nearby objects)
-      if (settings.edge) {
-        const edgeNeighborLimit = settings.proximity ? 2.4 : 4.5;
-        for (const tar of targets) {
-          const centerDist = currentMoving.center.distanceTo(tar.center);
-          if (centerDist > edgeNeighborLimit) continue;
-
-          for (const mp of currentMoving.points) {
-            for (const tp of tar.points) {
-              const delta = tp[ax] - mp[ax];
-              if (Math.abs(delta) <= radius * 0.72) {
-                const perpDist = Math.hypot(
-                  tp[perp1] - mp[perp1],
-                  tp[perp2] - mp[perp2]
+          if (gap1 <= maxPerpGap && gap2 <= maxPerpGap) {
+            const dMinToMax = tar.box.max[ax] - currentMoving.box.min[ax];
+            if (Math.abs(dMinToMax) <= radius) {
+              const score = Math.abs(dMinToMax) * 0.72;
+              if (score < bestScore) {
+                bestScore = score;
+                chosenDelta = dMinToMax;
+                chosenLabel =
+                  ax === 'y'
+                    ? `Magnet • Tumpuk di atas ${tar.name}`
+                    : `Magnet • Menempel ${tar.name}`;
+                chosenContact = this.buildContactPatch(
+                  ax,
+                  tar.box.max[ax],
+                  currentMoving.box,
+                  tar.box
                 );
-                if (perpDist > 1.8) continue;
+                chosenGuide = null;
+                chosenPoint = null;
+                flushPartner = tar;
+              }
+            }
 
-                const score = Math.abs(delta) * 0.92;
-                if (score < bestScore) {
-                  bestScore = score;
-                  chosenDelta = delta;
-                  chosenLabel = `Snap Tepi • ${tar.name}`;
-                  chosenPoint = tp.clone();
-                  chosenContact = null;
-                  chosenGuide = null;
+            const dMaxToMin = tar.box.min[ax] - currentMoving.box.max[ax];
+            if (Math.abs(dMaxToMin) <= radius) {
+              const score = Math.abs(dMaxToMin) * 0.72;
+              if (score < bestScore) {
+                bestScore = score;
+                chosenDelta = dMaxToMin;
+                chosenLabel = `Magnet • Menempel ${tar.name}`;
+                chosenContact = this.buildContactPatch(
+                  ax,
+                  tar.box.min[ax],
+                  currentMoving.box,
+                  tar.box
+                );
+                chosenGuide = null;
+                chosenPoint = null;
+                flushPartner = tar;
+              }
+            }
+          }
+
+          // Nearby Edge & Corner Snap
+          if (currentMoving.center.distanceTo(tar.center) <= 2.5) {
+            for (const mp of currentMoving.points) {
+              for (const tp of tar.points) {
+                const delta = tp[ax] - mp[ax];
+                if (Math.abs(delta) <= radius * 0.74) {
+                  const perpDist = Math.hypot(
+                    tp[perp1] - mp[perp1],
+                    tp[perp2] - mp[perp2]
+                  );
+                  if (perpDist > 1.8) continue;
+
+                  const score = Math.abs(delta) * 0.9;
+                  if (score < bestScore) {
+                    bestScore = score;
+                    chosenDelta = delta;
+                    chosenLabel = `Magnet Tepi • ${tar.name}`;
+                    chosenPoint = tp.clone();
+                    chosenContact = null;
+                    chosenGuide = null;
+                    flushPartner = null;
+                  }
                 }
               }
             }
@@ -378,17 +364,13 @@ export class SnappingEngine {
         }
       }
 
-      // 2D. Alignment Snapping (Center & Flush Bounds across the scene)
+      // 2B. Alignment Snapping (Garis Sejajar Jarak Jauh)
       if (settings.alignment) {
         const alignThreshold = radius * 0.75;
         for (const tar of targets) {
           if (currentMoving.center.distanceTo(tar.center) > 22) continue;
 
-          const checks: Array<{
-            movVal: number;
-            tarVal: number;
-            tag: string;
-          }> = [
+          const checks: Array<{ movVal: number; tarVal: number; tag: string }> = [
             {
               movVal: currentMoving.center[ax],
               tarVal: tar.center[ax],
@@ -416,6 +398,7 @@ export class SnappingEngine {
                 chosenLabel = chk.tag;
                 chosenContact = null;
                 chosenPoint = null;
+                flushPartner = null;
 
                 const fromPt = currentMoving.center.clone();
                 fromPt[ax] = chk.tarVal;
@@ -432,9 +415,27 @@ export class SnappingEngine {
         }
       }
 
-      // Apply winner if found, otherwise fallback to Grid Snap
       if (chosenDelta !== null) {
         result.snappedPosition[ax] += chosenDelta;
+
+        // Micro Auto-Flush Assist: when two blocks touch magnetically, snap tiny micro-offsets
+        // (< 0.08m) on perpendicular axes so touching walls/stacks meet 100% seamlessly
+        if (flushPartner) {
+          for (const pAx of [perp1, perp2]) {
+            const microChecks = [
+              flushPartner.center[pAx] - currentMoving.center[pAx],
+              flushPartner.box.min[pAx] - currentMoving.box.min[pAx],
+              flushPartner.box.max[pAx] - currentMoving.box.max[pAx],
+            ];
+            for (const diff of microChecks) {
+              if (Math.abs(diff) > 0 && Math.abs(diff) <= 0.08) {
+                result.snappedPosition[pAx] += diff;
+                break;
+              }
+            }
+          }
+        }
+
         if (chosenLabel && labels.length < 2) labels.push(chosenLabel);
         if (chosenGuide) result.guides.push(chosenGuide);
         if (chosenPoint) result.points.push(chosenPoint);
@@ -443,7 +444,6 @@ export class SnappingEngine {
       } else if (settings.grid && settings.gridStep > 0) {
         const step = settings.gridStep;
         if (ax === 'y') {
-          // Snap bottom of object to grid elevation so blocks sit cleanly on floor steps
           const snappedMinY = Math.round(currentMoving.box.min.y / step) * step;
           const deltaY = snappedMinY - currentMoving.box.min.y;
           result.snappedPosition.y += deltaY;
@@ -457,6 +457,13 @@ export class SnappingEngine {
         currentMoving = buildProfile(movingMesh, result.snappedPosition);
       }
     }
+
+    // Round tiny floating noise (e.g. 0.999999999 -> 1) so touching blocks share exact coordinates
+    result.snappedPosition.set(
+      Math.round(result.snappedPosition.x * 10000) / 10000,
+      Math.round(result.snappedPosition.y * 10000) / 10000,
+      Math.round(result.snappedPosition.z * 10000) / 10000
+    );
 
     result.snapLabel = labels.length > 0 ? labels.join('  |  ') : null;
     return result;
@@ -496,10 +503,6 @@ export class SnappingEngine {
   }
 }
 
-/**
- * Renders live 3D visual snap indicators (Alignment Guide Lines, Vertex Diamonds,
- * and Magnetic Surface Contact Highlights) in the viewport during transforms.
- */
 export class SnapVisualizer {
   public readonly group = new THREE.Group();
   private pointGeo = new THREE.OctahedronGeometry(0.065, 0);
@@ -535,7 +538,6 @@ export class SnapVisualizer {
   public update(snap: SnapComputeResult): void {
     this.clear();
 
-    // 1. Alignment Guide Lines + Endpoint Dots
     for (const g of snap.guides) {
       const lineGeo = new THREE.BufferGeometry().setFromPoints([g.from, g.to]);
       const lineMat = new THREE.LineBasicMaterial({
@@ -564,7 +566,6 @@ export class SnapVisualizer {
       }
     }
 
-    // 2. Edge / Corner Snap Diamonds
     for (const pt of snap.points) {
       const marker = new THREE.Mesh(this.pointGeo, this.pointMat);
       marker.position.copy(pt);
@@ -572,7 +573,6 @@ export class SnapVisualizer {
       this.group.add(marker);
     }
 
-    // 3. Magnetic Contact Surface Patches
     for (const c of snap.contacts) {
       const planeGeo = new THREE.PlaneGeometry(c.size[0], c.size[1]);
       if (c.axis === 'y') {
