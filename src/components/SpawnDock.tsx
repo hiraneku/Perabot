@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Boxes,
   ChevronUp,
-  FileUp,
   Info,
   Plus,
   Search,
@@ -17,6 +16,10 @@ import {
   PRIMITIVE_META,
   PrimitiveMetaItem,
 } from '../engine/primitives';
+import {
+  getLocalizedShapeMeta,
+  getShapeSubcategoryLabel,
+} from '../i18n/shapeTranslations';
 import { TRANSLATIONS } from '../i18n/translations';
 import {
   AppLanguage,
@@ -27,23 +30,14 @@ import {
 } from '../types/studio';
 import { PrimitiveShapePreview } from './ShapeIcons';
 
-const SHAPE_SUBCATEGORY_LABELS: Record<Exclude<ShapeSubcategory, 'all'>, string> = {
-  blocks: 'Balok, Pelat & Sambungan',
-  'prisms-pyramids': 'Prisma & Limas',
-  wedges: 'Wedge, Tangga & Atap',
-  cylinders: 'Silinder, Pipa & Kubah',
-  curved: 'Lengkung Cekung / Cembung',
-  architecture: 'Arsitektur, Kolom & Kusen',
-};
-
-const SUBCATEGORY_TABS: Array<{ id: ShapeSubcategory; label: string }> = [
-  { id: 'all', label: `Semua (${BASIC_SHAPES_CATALOG.length})` },
-  { id: 'blocks', label: 'Balok & Pelat' },
-  { id: 'prisms-pyramids', label: 'Prisma & Limas' },
-  { id: 'wedges', label: 'Wedge & Tangga' },
-  { id: 'cylinders', label: 'Silinder & Kubah' },
-  { id: 'curved', label: 'Lengkung' },
-  { id: 'architecture', label: 'Arsitektur & Kusen' },
+const SUBCATEGORY_ORDER: ShapeSubcategory[] = [
+  'all',
+  'blocks',
+  'prisms-pyramids',
+  'wedges',
+  'cylinders',
+  'curved',
+  'architecture',
 ];
 
 const LONG_PRESS_MS = 380;
@@ -53,6 +47,7 @@ const LONG_PRESS_MS = 380;
    ========================================================= */
 interface ShapeTileProps {
   meta: PrimitiveMetaItem;
+  language: AppLanguage;
   isRecent: boolean;
   onQuickSpawn: (kind: PrimitiveKind) => void;
   onInspect: (meta: PrimitiveMetaItem) => void;
@@ -60,10 +55,12 @@ interface ShapeTileProps {
 
 const BasicShapeTile: React.FC<ShapeTileProps> = ({
   meta,
+  language,
   isRecent,
   onQuickSpawn,
   onInspect,
 }) => {
+  const localized = getLocalizedShapeMeta(meta, language);
   const [pressing, setPressing] = useState(false);
   const timerRef = useRef<number | null>(null);
   const startPtRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -141,7 +138,7 @@ const BasicShapeTile: React.FC<ShapeTileProps> = ({
       <button
         type="button"
         className="shape-tile-info-dot"
-        title={`Info ${meta.label}`}
+        title={localized.label}
         onPointerDown={(e) => e.stopPropagation()}
         onPointerUp={(e) => e.stopPropagation()}
         onClick={(e) => {
@@ -157,15 +154,15 @@ const BasicShapeTile: React.FC<ShapeTileProps> = ({
       </div>
 
       <div className="basic-shape-meta">
-        <strong>{meta.label}</strong>
-        <small>{meta.subtitle}</small>
+        <strong>{localized.label}</strong>
+        <small>{localized.subtitle}</small>
       </div>
     </div>
   );
 };
 
 /* =========================================================
-   Catalog Drawer (75 Basic Shapes + User Custom Assets + 3D File Import)
+   Catalog Drawer (75 Basic Shapes + User Custom Assets)
    ========================================================= */
 interface CatalogDrawerProps {
   open: boolean;
@@ -176,7 +173,6 @@ interface CatalogDrawerProps {
   onSpawnShape: (kind: PrimitiveKind, keepOpen?: boolean) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
-  onTriggerImport3D: () => void;
 }
 
 const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
@@ -188,7 +184,6 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   onSpawnShape,
   onSpawnCustomAsset,
   onDeleteCustomAsset,
-  onTriggerImport3D,
 }) => {
   const t = TRANSLATIONS[language];
   const [catalogView, setCatalogView] = useState<'shapes' | 'custom'>('shapes');
@@ -209,14 +204,16 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
     return BASIC_SHAPES_CATALOG.filter((item) => {
       if (subcat !== 'all' && item.subcategory !== subcat) return false;
       if (!q) return true;
+      const loc = getLocalizedShapeMeta(item, language);
       return (
+        loc.label.toLowerCase().includes(q) ||
+        loc.subtitle.toLowerCase().includes(q) ||
+        loc.description.toLowerCase().includes(q) ||
         item.label.toLowerCase().includes(q) ||
-        item.subtitle.toLowerCase().includes(q) ||
-        item.description.toLowerCase().includes(q) ||
         item.kind.toLowerCase().includes(q)
       );
     });
-  }, [subcat, query]);
+  }, [subcat, query, language]);
 
   const filteredCustom = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -225,6 +222,10 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   }, [customAssets, query]);
 
   if (!open) return null;
+
+  const inspectedLocalized = inspectedShape
+    ? getLocalizedShapeMeta(inspectedShape, language)
+    : null;
 
   return (
     <div
@@ -240,7 +241,6 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
         role="dialog"
         aria-label={catalogView === 'custom' ? t.catCustom : t.basicShapes}
       >
-        {/* Header with frameless close button + Shapes / Custom Assets / Import 3D */}
         <div className="basic-shapes-header">
           <div className="basic-shapes-title">
             <span className="basic-shapes-badge-icon">
@@ -276,19 +276,6 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
 
             <button
               type="button"
-              className="catalog-import-btn"
-              onClick={() => {
-                onClose();
-                onTriggerImport3D();
-              }}
-              title={t.import3DHint}
-            >
-              <FileUp size={14} />
-              <span>{t.import3DBtn}</span>
-            </button>
-
-            <button
-              type="button"
               className="icon-close-btn"
               onClick={onClose}
               aria-label={t.done}
@@ -306,7 +293,9 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder={t.searchShapes}
+              placeholder={
+                catalogView === 'custom' ? t.searchPresets : t.searchShapes
+              }
             />
             {query && (
               <button
@@ -322,20 +311,26 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
 
           {catalogView === 'shapes' && (
             <div className="basic-shapes-tabs" role="tablist">
-              {SUBCATEGORY_TABS.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={subcat === tab.id}
-                  className={`basic-subcat-tab ${
-                    subcat === tab.id ? 'active' : ''
-                  }`}
-                  onClick={() => setSubcat(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
+              {SUBCATEGORY_ORDER.map((tabId) => {
+                const label =
+                  tabId === 'all'
+                    ? `${getShapeSubcategoryLabel('all', language)} (${BASIC_SHAPES_CATALOG.length})`
+                    : getShapeSubcategoryLabel(tabId, language);
+                return (
+                  <button
+                    key={tabId}
+                    type="button"
+                    role="tab"
+                    aria-selected={subcat === tabId}
+                    className={`basic-subcat-tab ${
+                      subcat === tabId ? 'active' : ''
+                    }`}
+                    onClick={() => setSubcat(tabId)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -344,14 +339,13 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
         <div className="basic-shapes-grid">
           {catalogView === 'shapes' ? (
             filteredShapes.length === 0 ? (
-              <div className="basic-shapes-empty">
-                Tidak ada bentuk yang cocok dengan "{query}".
-              </div>
+              <div className="basic-shapes-empty">{t.noShapeMatch}</div>
             ) : (
               filteredShapes.map((meta) => (
                 <BasicShapeTile
                   key={meta.kind}
                   meta={meta}
+                  language={language}
                   isRecent={meta.kind === recentKind}
                   onQuickSpawn={(k) => onSpawnShape(k, false)}
                   onInspect={(m) => setInspectedShape(m)}
@@ -413,7 +407,7 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
         </div>
 
         {/* Long-Press Basic Shape Explanation Card */}
-        {inspectedShape && (
+        {inspectedShape && inspectedLocalized && (
           <div
             className="shape-explain-overlay"
             onClick={(e) => {
@@ -427,10 +421,15 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                 </div>
                 <div className="shape-explain-heading">
                   <span className="shape-explain-cat">
-                    {SHAPE_SUBCATEGORY_LABELS[inspectedShape.subcategory]}
+                    {getShapeSubcategoryLabel(
+                      inspectedShape.subcategory,
+                      language
+                    )}
                   </span>
-                  <h4>{inspectedShape.label}</h4>
-                  <span className="shape-explain-sub">{inspectedShape.subtitle}</span>
+                  <h4>{inspectedLocalized.label}</h4>
+                  <span className="shape-explain-sub">
+                    {inspectedLocalized.subtitle}
+                  </span>
                 </div>
                 <button
                   type="button"
@@ -442,7 +441,9 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                 </button>
               </div>
 
-              <p className="shape-explain-desc">{inspectedShape.description}</p>
+              <p className="shape-explain-desc">
+                {inspectedLocalized.description}
+              </p>
 
               <div className="shape-explain-actions">
                 <button
@@ -461,7 +462,7 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                   }}
                 >
                   <Plus size={15} />
-                  <span>{inspectedShape.label}</span>
+                  <span>{inspectedLocalized.label}</span>
                 </button>
               </div>
             </div>
@@ -479,7 +480,6 @@ interface SpawnDockProps {
   onSpawn: (kind: PrimitiveKind) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
-  onTriggerImport3D: () => void;
 }
 
 export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
@@ -488,7 +488,6 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
   onSpawn,
   onSpawnCustomAsset,
   onDeleteCustomAsset,
-  onTriggerImport3D,
 }) => {
   const t = TRANSLATIONS[language];
   const [menuOpen, setMenuOpen] = useState(false);
@@ -500,7 +499,7 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
     if (!keepOpen) setMenuOpen(false);
   };
 
-  const recentMeta = PRIMITIVE_META[recentKind];
+  const recentMeta = getLocalizedShapeMeta(PRIMITIVE_META[recentKind], language);
   const totalCount = BASIC_SHAPES_CATALOG.length;
 
   return (
@@ -540,23 +539,6 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
             <small>{t.lastUsed}</small>
           </span>
         </button>
-
-        <div className="spawn-dock-divider" />
-
-        <button
-          type="button"
-          className="spawn-card dock-import-3d-btn"
-          onClick={onTriggerImport3D}
-          title={t.import3DHint}
-        >
-          <span className="spawn-icon-wrap import-icon-accent">
-            <FileUp size={18} />
-          </span>
-          <span className="spawn-card-text">
-            <strong>{t.import3DBtn}</strong>
-            <small>.GLB / .OBJ / .STL</small>
-          </span>
-        </button>
       </div>
 
       <CatalogDrawer
@@ -568,7 +550,6 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
         onSpawnShape={handleSpawnShape}
         onSpawnCustomAsset={onSpawnCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
-        onTriggerImport3D={onTriggerImport3D}
       />
     </>
   );
@@ -586,7 +567,6 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
   onSpawn,
   onSpawnCustomAsset,
   onDeleteCustomAsset,
-  onTriggerImport3D,
   objectCount,
   drawerOpen,
   onToggleDrawer,
@@ -601,7 +581,7 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
     if (!keepOpen) setMenuOpen(false);
   };
 
-  const recentMeta = PRIMITIVE_META[recentKind];
+  const recentMeta = getLocalizedShapeMeta(PRIMITIVE_META[recentKind], language);
   const totalCount = BASIC_SHAPES_CATALOG.length;
 
   return (
@@ -628,16 +608,6 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
           <span className="truncate-mobile-label">+ {recentMeta.label}</span>
         </button>
 
-        <button
-          type="button"
-          className="mobile-import-3d-btn"
-          onClick={onTriggerImport3D}
-          title={t.import3DHint}
-        >
-          <FileUp size={18} />
-          <span>{t.import3DBtn}</span>
-        </button>
-
         <div className="mobile-bar-sep" />
 
         <button
@@ -662,7 +632,6 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
         onSpawnShape={handleSpawnShape}
         onSpawnCustomAsset={onSpawnCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
-        onTriggerImport3D={onTriggerImport3D}
       />
     </>
   );

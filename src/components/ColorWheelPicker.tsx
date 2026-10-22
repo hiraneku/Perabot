@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pipette, PaintBucket, Plus, Sparkles } from 'lucide-react';
-import { MATERIAL_PRESETS, PaintInteractionMode } from '../types/studio';
+import { TRANSLATIONS } from '../i18n/translations';
+import {
+  AppLanguage,
+  MATERIAL_PRESETS,
+  MaterialPreset,
+  PaintInteractionMode,
+} from '../types/studio';
 
 // --- Color space helpers (HEX <-> RGB <-> HSV) ---
 function clamp(v: number, lo: number, hi: number): number {
@@ -98,6 +104,7 @@ export interface AdvancedColorMaterialPatch {
 }
 
 interface ColorWheelPickerProps {
+  language: AppLanguage;
   color: string;
   roughness: number;
   metalness: number;
@@ -108,14 +115,27 @@ interface ColorWheelPickerProps {
   paintMode: PaintInteractionMode;
   hasSelection: boolean;
   compact?: boolean;
-  onUpdateMaterial: (patch: AdvancedColorMaterialPatch, commitHistory: boolean) => void;
+  onUpdateMaterial: (
+    patch: AdvancedColorMaterialPatch,
+    commitHistory: boolean
+  ) => void;
   onChangePaintMode: (mode: PaintInteractionMode) => void;
   onCommitHistory: () => void;
 }
 
 const WHEEL_SIZE = 168;
 
+function getMaterialPresetLabel(
+  preset: MaterialPreset,
+  language: AppLanguage
+): string {
+  if (language === 'en') return preset.labelEn;
+  if (language === 'ja') return preset.labelJa;
+  return preset.label;
+}
+
 export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
+  language,
   color,
   roughness,
   metalness,
@@ -130,6 +150,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
   onChangePaintMode,
   onCommitHistory,
 }) => {
+  const t = TRANSLATIONS[language];
   const wheelCanvasRef = useRef<HTMLCanvasElement>(null);
   const isDraggingWheelRef = useRef(false);
 
@@ -137,6 +158,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
   const [hsv, setHsv] = useState(() => rgbToHsv(rgb.r, rgb.g, rgb.b));
   const [hexDraft, setHexDraft] = useState(color.toUpperCase());
   const [savedSwatches, setSavedSwatches] = useState<string[]>([
+    '#ffffff',
     '#e2e8f0',
     '#d96b43',
     '#b77946',
@@ -147,22 +169,17 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
     '#8b5cf6',
   ]);
 
-  // Keep HSV synced when external object selection or eyedropper updates `color`
   useEffect(() => {
     const c = hexToRgb(color);
     const next = rgbToHsv(c.r, c.g, c.b);
-    setHsv((prev) => {
-      // Preserve hue when saturation is 0 so dragging slider doesn't jump hue to 0
-      return {
-        h: next.s < 0.005 ? prev.h : next.h,
-        s: next.s,
-        v: next.v,
-      };
-    });
+    setHsv((prev) => ({
+      h: next.s < 0.005 ? prev.h : next.h,
+      s: next.s,
+      v: next.v,
+    }));
     setHexDraft(color.toUpperCase());
   }, [color]);
 
-  // Draw crisp HSV Hue-Saturation color wheel once (and tint brightness cleanly)
   useEffect(() => {
     const canvas = wheelCanvasRef.current;
     if (!canvas) return;
@@ -192,7 +209,6 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
         const hue = (angle + 360) % 360;
         const { r, g, b } = hsvToRgb(hue, sat, Math.max(0.18, hsv.v));
 
-        // Smooth antialiased outer rim
         const alpha = dist > radius - 0.8 ? clamp(radius + 0.8 - dist, 0, 1) : 1;
         data[idx] = r;
         data[idx + 1] = g;
@@ -235,7 +251,6 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
     [applyHsvChange, hsv.v]
   );
 
-  // Indicator position on wheel
   const wheelKnobPos = useMemo(() => {
     const half = WHEEL_SIZE / 2;
     const radius = half - 3;
@@ -246,20 +261,19 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
     };
   }, [hsv.h, hsv.s]);
 
-  // Live Color Harmonies (Complementary, Analogous, Triadic)
   const harmonies = useMemo(() => {
     const s = Math.max(0.35, hsv.s);
     const v = Math.max(0.45, hsv.v);
-    const make = (dh: number, label: string) => {
+    const make = (dh: number, key: string) => {
       const c = hsvToRgb(hsv.h + dh, s, v);
-      return { hex: rgbToHex(c.r, c.g, c.b), label };
+      return { hex: rgbToHex(c.r, c.g, c.b), key };
     };
     return [
-      make(180, 'Komplemen'),
-      make(-32, 'Analog 1'),
-      make(32, 'Analog 2'),
-      make(120, 'Triadik 1'),
-      make(240, 'Triadik 2'),
+      make(180, 'comp'),
+      make(-32, 'ana1'),
+      make(32, 'ana2'),
+      make(120, 'tri1'),
+      make(240, 'tri2'),
     ];
   }, [hsv.h, hsv.s, hsv.v]);
 
@@ -278,10 +292,12 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
           onClick={() =>
             onChangePaintMode(paintMode === 'bucket' ? 'none' : 'bucket')
           }
-          title="Mode Kuas Cat: Klik bentuk mana pun di kanvas 3D untuk langsung mewarnainya!"
+          title={t.paintClickBtn}
         >
           <PaintBucket size={14} />
-          <span>{paintMode === 'bucket' ? 'Cat Klik: ON' : 'Cat Klik Objek'}</span>
+          <span>
+            {paintMode === 'bucket' ? t.paintClickActive : t.paintClickBtn}
+          </span>
         </button>
 
         <button
@@ -294,17 +310,17 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
               paintMode === 'eyedropper' ? 'none' : 'eyedropper'
             )
           }
-          title="Pipet Warna: Klik objek di kanvas 3D untuk mengambil warna & materialnya"
+          title={t.eyedropperBtn}
         >
           <Pipette size={14} />
-          <span>{paintMode === 'eyedropper' ? 'Pilih Objek...' : 'Pipet'}</span>
+          <span>
+            {paintMode === 'eyedropper' ? t.eyedropperActive : t.eyedropperBtn}
+          </span>
         </button>
       </div>
 
       {!hasSelection && paintMode === 'none' && (
-        <div className="paint-hint-banner">
-          Pilih objek terlebih dahulu atau aktifkan <b>Cat Klik Objek</b> untuk mewarnai langsung di kanvas.
-        </div>
+        <div className="paint-hint-banner">{t.paintNoSelectionHint}</div>
       )}
 
       {/* RGB Color Wheel + Current Color Preview */}
@@ -344,7 +360,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
           />
         </div>
 
-        {/* Brightness / Value Bar + Active Swatch + HEX */}
+        {/* Active Swatch + HEX */}
         <div className="wheel-side-readout">
           <div
             className="active-color-Orb"
@@ -355,7 +371,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
                   ? `0 0 16px ${emissive}`
                   : 'inset 0 0 0 1px rgba(255,255,255,0.28)',
             }}
-            title={`Warna Aktif: ${color.toUpperCase()}`}
+            title={color.toUpperCase()}
           />
 
           <label className="hex-box-label">
@@ -384,10 +400,9 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
                 prev.includes(lower) ? prev : [lower, ...prev.slice(0, 11)]
               );
             }}
-            title="Simpan warna ini ke palet favorit"
           >
             <Plus size={12} />
-            <span>Simpan</span>
+            <span>{t.saveSwatchBtn}</span>
           </button>
         </div>
       </div>
@@ -395,7 +410,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
       {/* Brightness / Value Slider */}
       <div className="rgb-channel-block">
         <div className="slider-head">
-          <span>Kecerahan (Value)</span>
+          <span>{t.brightnessLabel}</span>
           <span>{Math.round(hsv.v * 100)}%</span>
         </div>
         <input
@@ -451,16 +466,16 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
       <div className="harmonies-block">
         <div className="harmonies-title">
           <Sparkles size={12} />
-          <span>Harmoni Warna Otomatis</span>
+          <span>{t.autoHarmoniesTitle}</span>
         </div>
         <div className="swatch-strip">
           {harmonies.map((h) => (
             <button
-              key={h.label}
+              key={h.key}
               type="button"
               className="mini-swatch"
               style={{ backgroundColor: h.hex }}
-              title={`${h.label} (${h.hex.toUpperCase()})`}
+              title={h.hex.toUpperCase()}
               onClick={() => onUpdateMaterial({ color: h.hex }, true)}
             />
           ))}
@@ -470,7 +485,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
       {/* Saved Custom Palette */}
       <div className="harmonies-block">
         <div className="harmonies-title">
-          <span>Palet Tersimpan</span>
+          <span>{t.savedPaletteTitle}</span>
         </div>
         <div className="swatch-strip wrap">
           {savedSwatches.map((sw) => (
@@ -491,7 +506,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
       {/* Architectural PBR Material Presets */}
       <div className="harmonies-block">
         <div className="harmonies-title">
-          <span>Preset Material Arsitektur</span>
+          <span>{t.archMaterialPresetsTitle}</span>
         </div>
         <div className="preset-grid">
           {MATERIAL_PRESETS.map((preset) => (
@@ -524,7 +539,9 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
                   opacity: preset.opacity ?? 1,
                 }}
               />
-              <span className="preset-name">{preset.label}</span>
+              <span className="preset-name">
+                {getMaterialPresetLabel(preset, language)}
+              </span>
             </button>
           ))}
         </div>
@@ -533,12 +550,12 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
       {/* Advanced PBR Surface Controls */}
       <div className="advanced-pbr-box">
         <div className="harmonies-title">
-          <span>Pengaturan Permukaan Lanjutan (PBR)</span>
+          <span>{t.advancedPbrTitle}</span>
         </div>
 
         <div className="slider-row">
           <div className="slider-head">
-            <span>Opasitas / Transparansi (Kaca)</span>
+            <span>{t.opacityGlassLabel}</span>
             <span>{Math.round(opacity * 100)}%</span>
           </div>
           <input
@@ -556,7 +573,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
 
         <div className="slider-row">
           <div className="slider-head">
-            <span>Kekasaran (Mengilap ↔ Doff)</span>
+            <span>{t.roughnessLabel}</span>
             <span>{Math.round(roughness * 100)}%</span>
           </div>
           <input
@@ -574,7 +591,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
 
         <div className="slider-row">
           <div className="slider-head">
-            <span>Kesan Logam (Metalness)</span>
+            <span>{t.metalnessLabel}</span>
             <span>{Math.round(metalness * 100)}%</span>
           </div>
           <input
@@ -592,7 +609,7 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
 
         <div className="slider-row">
           <div className="slider-head">
-            <span>Cahaya Pendar (Emissive Lampu)</span>
+            <span>{t.emissiveLampLabel}</span>
             <span>{emissiveIntensity.toFixed(2)}×</span>
           </div>
           <div className="emissive-inline-row">
@@ -605,7 +622,6 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
                     ? emissive
                     : color,
               }}
-              title="Samakan warna pendar dengan warna utama"
               onClick={() =>
                 onUpdateMaterial(
                   {
@@ -640,21 +656,21 @@ export const ColorWheelPicker: React.FC<ColorWheelPickerProps> = ({
         </div>
 
         <div className="shading-toggle-row">
-          <span>Gaya Faset Shading</span>
+          <span>{t.shadingStyleLabel}</span>
           <div className="segmented-pills">
             <button
               type="button"
               className={`seg-pill ${!flatShading ? 'active' : ''}`}
               onClick={() => onUpdateMaterial({ flatShading: false }, true)}
             >
-              Smooth Halus
+              {t.shadingSmooth}
             </button>
             <button
               type="button"
               className={`seg-pill ${flatShading ? 'active' : ''}`}
               onClick={() => onUpdateMaterial({ flatShading: true }, true)}
             >
-              Flat Tegas
+              {t.shadingFlat}
             </button>
           </div>
         </div>

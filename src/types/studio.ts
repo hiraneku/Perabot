@@ -153,17 +153,25 @@ export interface SurfaceSettings {
   offset: number;
 }
 
-export type SubdivisionMode = 'smooth' | 'simple';
-
 export interface ObjectSubdivisionSettings {
-  level: 0 | 1 | 2 | 3;
-  mode: SubdivisionMode;
-  crease: number;
-  lockBase: boolean;
-  wireframe: boolean;
+  cutsX: number; // 1..10 divisions along X
+  cutsY: number; // 1..10 divisions along Y
+  cutsZ: number; // 1..10 divisions along Z
+  showGridLines: boolean; // Crisp quad partition lines on surface
+  panelGroove: number; // 0..0.08 physical bevel/groove depth per divided cell
+  // Legacy optional fields kept for seamless migration of saved v1 projects
+  level?: number;
+  mode?: string;
+  crease?: number;
+  lockBase?: boolean;
+  wireframe?: boolean;
 }
 
 export interface SubdivisionStats {
+  cellsTotal: number;
+  cutsX: number;
+  cutsY: number;
+  cutsZ: number;
   baseTriangles: number;
   subdivTriangles: number;
   vertexCount: number;
@@ -173,6 +181,8 @@ export interface SubdivisionStats {
 export type GridStyle = 'wire' | 'tile' | 'blueprint' | 'terrain';
 
 export type TerrainPreset = 'hills' | 'valley' | 'terraced' | 'flat';
+
+export type GridVerticalMode = 'none' | 'back' | 'corner';
 
 export interface GridSettings {
   visible: boolean;
@@ -184,6 +194,12 @@ export interface GridSettings {
   opacity: number;
   showAxes: boolean;
   syncSnap: boolean;
+  showRuler: boolean;
+  showSelectionFootprint: boolean;
+  verticalGrid: GridVerticalMode;
+  showPlotBoundary: boolean;
+  plotWidth: number;
+  plotDepth: number;
   terrainPreset: TerrainPreset;
   terrainAmplitude: number;
 }
@@ -207,6 +223,8 @@ export interface Vec3 {
 export interface MaterialPreset {
   id: string;
   label: string;
+  labelEn: string;
+  labelJa: string;
   color: string;
   roughness: number;
   metalness: number;
@@ -420,12 +438,46 @@ export const STUDIO_THEMES: Array<{
 ];
 
 export const DEFAULT_SUBDIVISION_SETTINGS: ObjectSubdivisionSettings = {
-  level: 0,
-  mode: 'smooth',
-  crease: 0.35,
-  lockBase: false,
-  wireframe: false,
+  cutsX: 1,
+  cutsY: 1,
+  cutsZ: 1,
+  showGridLines: true,
+  panelGroove: 0,
 };
+
+export function normalizeSubdivisionSettings(
+  raw?: Partial<ObjectSubdivisionSettings> | null
+): ObjectSubdivisionSettings {
+  if (!raw) return { ...DEFAULT_SUBDIVISION_SETTINGS };
+  if (
+    typeof raw.cutsX === 'number' &&
+    typeof raw.cutsY === 'number' &&
+    typeof raw.cutsZ === 'number'
+  ) {
+    return {
+      cutsX: Math.max(1, Math.min(10, Math.round(raw.cutsX))),
+      cutsY: Math.max(1, Math.min(10, Math.round(raw.cutsY))),
+      cutsZ: Math.max(1, Math.min(10, Math.round(raw.cutsZ))),
+      showGridLines: raw.showGridLines !== false,
+      panelGroove: Math.max(0, Math.min(0.08, Number(raw.panelGroove ?? 0))),
+    };
+  }
+  // Migrate legacy v1 `level` (0..3 -> 1, 2, 4, 8 divisions)
+  const lv = typeof raw.level === 'number' ? raw.level : 0;
+  const legacyCuts = lv > 0 ? Math.min(8, Math.pow(2, lv)) : 1;
+  return {
+    cutsX: legacyCuts,
+    cutsY: legacyCuts,
+    cutsZ: legacyCuts,
+    showGridLines: true,
+    panelGroove: 0,
+  };
+}
+
+export function isSubdivisionActive(s?: ObjectSubdivisionSettings | null): boolean {
+  if (!s) return false;
+  return (s.cutsX ?? 1) > 1 || (s.cutsY ?? 1) > 1 || (s.cutsZ ?? 1) > 1;
+}
 
 export const DEFAULT_SURFACE_SETTINGS: SurfaceSettings = {
   enabled: false,
@@ -441,12 +493,18 @@ export const DEFAULT_GRID_SETTINGS: GridSettings = {
   visible: true,
   style: 'wire',
   spacing: 1.0,
-  subdivisions: 2,
+  subdivisions: 4,
   worldSize: 40,
   elevationY: 0,
-  opacity: 0.85,
+  opacity: 0.88,
   showAxes: true,
-  syncSnap: false,
+  syncSnap: true,
+  showRuler: true,
+  showSelectionFootprint: true,
+  verticalGrid: 'none',
+  showPlotBoundary: false,
+  plotWidth: 8,
+  plotDepth: 12,
   terrainPreset: 'hills',
   terrainAmplitude: 1.4,
 };
@@ -468,16 +526,16 @@ export const MAGNET_RADIUS_MAP: Record<MagnetStrength, number> = {
 };
 
 export const MATERIAL_PRESETS: MaterialPreset[] = [
-  { id: 'plaster', label: 'Dinding Putih', color: '#e5e7eb', roughness: 0.78, metalness: 0.04 },
-  { id: 'concrete', label: 'Beton Ekspos', color: '#94a3b8', roughness: 0.85, metalness: 0.06 },
-  { id: 'terracotta', label: 'Atap Terakota', color: '#d96b43', roughness: 0.68, metalness: 0.05 },
-  { id: 'wood-oak', label: 'Kayu Jati', color: '#b77946', roughness: 0.58, metalness: 0.06 },
-  { id: 'marble', label: 'Marmer Krem', color: '#f3efe6', roughness: 0.22, metalness: 0.08 },
-  { id: 'slate', label: 'Batu Alam', color: '#475569', roughness: 0.72, metalness: 0.12 },
-  { id: 'steel', label: 'Baja / Krom', color: '#cbd5e1', roughness: 0.2, metalness: 0.88 },
-  { id: 'gold', label: 'Kuningan / Emas', color: '#eab308', roughness: 0.25, metalness: 0.85 },
-  { id: 'glass-tint', label: 'Kaca Jendela', color: '#7dd3fc', roughness: 0.08, metalness: 0.15, opacity: 0.42 },
-  { id: 'frosted-glass', label: 'Kaca Buram', color: '#e0f2fe', roughness: 0.45, metalness: 0.05, opacity: 0.62 },
-  { id: 'warm-lamp', label: 'Lampu Hangat', color: '#fef08a', roughness: 0.3, metalness: 0.0, emissive: '#f59e0b', emissiveIntensity: 0.95 },
-  { id: 'foliage', label: 'Hijau Taman', color: '#4ade80', roughness: 0.75, metalness: 0.04 },
+  { id: 'plaster', label: 'Dinding Putih', labelEn: 'White Wall', labelJa: 'ホワイト壁', color: '#e5e7eb', roughness: 0.78, metalness: 0.04 },
+  { id: 'concrete', label: 'Beton Ekspos', labelEn: 'Raw Concrete', labelJa: 'コンクリート', color: '#94a3b8', roughness: 0.85, metalness: 0.06 },
+  { id: 'terracotta', label: 'Atap Terakota', labelEn: 'Terracotta Roof', labelJa: 'テラコッタ屋根', color: '#d96b43', roughness: 0.68, metalness: 0.05 },
+  { id: 'wood-oak', label: 'Kayu Jati', labelEn: 'Warm Teak Wood', labelJa: 'チーク木材', color: '#b77946', roughness: 0.58, metalness: 0.06 },
+  { id: 'marble', label: 'Marmer Krem', labelEn: 'Cream Marble', labelJa: 'クリーム大理石', color: '#f3efe6', roughness: 0.22, metalness: 0.08 },
+  { id: 'slate', label: 'Batu Alam', labelEn: 'Dark Slate', labelJa: '天然スレート石', color: '#475569', roughness: 0.72, metalness: 0.12 },
+  { id: 'steel', label: 'Baja / Krom', labelEn: 'Brushed Steel', labelJa: 'スチール金属', color: '#cbd5e1', roughness: 0.2, metalness: 0.88 },
+  { id: 'gold', label: 'Kuningan / Emas', labelEn: 'Warm Brass', labelJa: '真鍮・ゴールド', color: '#eab308', roughness: 0.25, metalness: 0.85 },
+  { id: 'glass-tint', label: 'Kaca Jendela', labelEn: 'Clear Glass', labelJa: '窓ガラス', color: '#7dd3fc', roughness: 0.08, metalness: 0.15, opacity: 0.42 },
+  { id: 'frosted-glass', label: 'Kaca Buram', labelEn: 'Frosted Glass', labelJa: 'すりガラス', color: '#e0f2fe', roughness: 0.45, metalness: 0.05, opacity: 0.62 },
+  { id: 'warm-lamp', label: 'Lampu Hangat', labelEn: 'Warm Lamp', labelJa: '暖色ライト', color: '#fef08a', roughness: 0.3, metalness: 0.0, emissive: '#f59e0b', emissiveIntensity: 0.95 },
+  { id: 'foliage', label: 'Hijau Taman', labelEn: 'Garden Green', labelJa: 'ガーデングリーン', color: '#4ade80', roughness: 0.75, metalness: 0.04 },
 ];

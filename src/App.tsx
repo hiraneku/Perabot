@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, Magnet, PaintBucket, Pipette } from 'lucide-react';
 import { PaintBrushPayload, StudioEngine } from './engine/StudioEngine';
 import { CameraPresetType } from './engine/viewportHelpers';
@@ -10,6 +10,7 @@ import {
   importExternal3DFile,
   LoadedImportedModelAsset,
 } from './engine/modelImporter';
+import { getLocalizedShapeMeta } from './i18n/shapeTranslations';
 import { TRANSLATIONS } from './i18n/translations';
 import {
   deleteCustomAssetRecord,
@@ -52,7 +53,7 @@ import {
 } from './types/studio';
 import { MainMenu } from './components/MainMenu';
 import { GlobalSettingsModal } from './components/GlobalSettingsModal';
-import { TopBar } from './components/TopBar';
+import { SaveIndicatorState, TopBar } from './components/TopBar';
 import { TransformToolbar } from './components/TransformToolbar';
 import { DesktopSpawnDock, MobileBottomBar } from './components/SpawnDock';
 import { InspectorPanel, InspectorSubTab } from './components/InspectorPanel';
@@ -60,6 +61,99 @@ import { HelpModal } from './components/HelpModal';
 import { RotationControlBar } from './components/RotationControlBar';
 import { WalkthroughOverlay } from './components/WalkthroughOverlay';
 import { AdvancedColorMaterialPatch } from './components/ColorWheelPicker';
+
+const SMART_AUTOSAVE_IDLE_MS = 5000;
+const SMART_AUTOSAVE_MAX_WAIT_MS = 15000;
+
+/**
+ * Computes a deterministic content-only signature of the scene & project settings.
+ * Pure viewport interactions (orbiting camera, selecting objects, toggling panels)
+ * or timestamp updates NEVER alter this signature, preventing redundant auto-saves.
+ */
+function computeProjectContentSignature(
+  projectName: string,
+  objects: SceneObjectData[],
+  grid: GridSettings,
+  snap: SnapSettings,
+  surface: SurfaceSettings,
+  mood: LightingMood
+): string {
+  const objSig = objects
+    .map((o) => {
+      const sub = o.subdivision
+        ? `${o.subdivision.cutsX},${o.subdivision.cutsY},${o.subdivision.cutsZ},${
+            o.subdivision.showGridLines ? 1 : 0
+          },${o.subdivision.panelGroove.toFixed(2)}`
+        : '1,1,1,1,0';
+      return [
+        o.id,
+        o.kind,
+        o.name,
+        o.visible ? 1 : 0,
+        o.groupId || '',
+        o.modelAssetId || '',
+        o.useCustomMaterial ? 1 : 0,
+        o.position.x.toFixed(3),
+        o.position.y.toFixed(3),
+        o.position.z.toFixed(3),
+        o.rotation.x.toFixed(2),
+        o.rotation.y.toFixed(2),
+        o.rotation.z.toFixed(2),
+        o.scale.x.toFixed(3),
+        o.scale.y.toFixed(3),
+        o.scale.z.toFixed(3),
+        o.color,
+        o.roughness.toFixed(2),
+        o.metalness.toFixed(2),
+        (o.opacity ?? 1).toFixed(2),
+        o.emissive ?? '',
+        (o.emissiveIntensity ?? 0).toFixed(2),
+        o.flatShading ? 1 : 0,
+        sub,
+      ].join(':');
+    })
+    .join('|');
+
+  const gridSig = [
+    grid.visible ? 1 : 0,
+    grid.style,
+    grid.spacing,
+    grid.worldSize,
+    grid.elevationY.toFixed(2),
+    grid.showAxes ? 1 : 0,
+    grid.opacity.toFixed(2),
+    grid.showRuler ? 1 : 0,
+    grid.showSelectionFootprint ? 1 : 0,
+    grid.verticalGrid,
+    grid.showPlotBoundary ? 1 : 0,
+    grid.plotWidth,
+    grid.plotDepth,
+    grid.terrainPreset,
+    grid.terrainAmplitude.toFixed(2),
+  ].join(',');
+
+  const snapSig = [
+    snap.enabled ? 1 : 0,
+    snap.objectMagnet ? 1 : 0,
+    snap.magnetStrength,
+    snap.alignment ? 1 : 0,
+    snap.grid ? 1 : 0,
+    snap.gridStep,
+    snap.rotationSnapDeg,
+  ].join(',');
+
+  const surfSig = [
+    surface.enabled ? 1 : 0,
+    surface.conformMode,
+    surface.attachAxis,
+    surface.autoOnMove ? 1 : 0,
+    surface.clickToPlace ? 1 : 0,
+    surface.spinDeg,
+    surface.offset.toFixed(2),
+  ].join(',');
+
+  return `${projectName}##${mood}##${gridSig}##${snapSig}##${surfSig}##${objSig}`;
+}
 
 function buildEmptyProjectRecord(
   mode: StudioMode,
@@ -75,6 +169,9 @@ function buildEmptyProjectRecord(
           style: 'tile',
           spacing: 0.5,
           worldSize: 32,
+          showPlotBoundary: true,
+          plotWidth: 10,
+          plotDepth: 12,
         }
       : { ...DEFAULT_GRID_SETTINGS };
 
@@ -122,7 +219,13 @@ export const App: React.FC = () => {
   const [activeProject, setActiveProject] = useState<SavedProjectRecord | null>(
     null
   );
-  const [isSavingProject, setIsSavingProject] = useState(false);
+  const activeProjectRef = useRef<SavedProjectRecord | null>(null);
+  activeProjectRef.current = activeProject;
+
+  const [saveState, setSaveState] = useState<SaveIndicatorState>('saved');
+  const lastSavedSigRef = useRef<string>('');
+  const dirtySinceRef = useRef<number | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
 
   // Studio Scene State
   const [objects, setObjects] = useState<SceneObjectData[]>([]);
@@ -186,7 +289,6 @@ export const App: React.FC = () => {
 
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
-  const autoSaveTimerRef = useRef<number | null>(null);
 
   const t = TRANSLATIONS[globalSettings.language];
 
@@ -303,42 +405,73 @@ export const App: React.FC = () => {
     }
   }, [isFullscreen]);
 
-  // Flush current studio state to IndexedDB
+  // Smart Auto-Save: Persist current project only when genuinely dirty (or forced)
   const persistCurrentProjectNow = useCallback(
-    async (overrideName?: string) => {
-      if (!activeProject || !engineRef.current) return;
-      setIsSavingProject(true);
-      const currentObjects = engineRef.current.getSerializedObjects();
+    async (options?: { overrideName?: string; force?: boolean }) => {
+      const proj = activeProjectRef.current;
+      const engine = engineRef.current;
+      if (!proj || !engine) return;
+
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+
+      const currentObjects = engine.getSerializedObjects();
+      const curGrid = engine.getGridSettings();
+      const curSnap = engine.getSnapSettings();
+      const curSurf = engine.getSurfaceSettings();
+      const curMood = engine.getLightingMood();
+      const nextName = options?.overrideName ?? proj.name;
+
+      const nextSig = computeProjectContentSignature(
+        nextName,
+        currentObjects,
+        curGrid,
+        curSnap,
+        curSurf,
+        curMood
+      );
+
+      if (!options?.force && nextSig === lastSavedSigRef.current) {
+        dirtySinceRef.current = null;
+        setSaveState('saved');
+        return;
+      }
+
+      // Mark signature BEFORE updating state so state updates never trigger a re-save loop
+      lastSavedSigRef.current = nextSig;
+      dirtySinceRef.current = null;
+      setSaveState('saving');
+
       const thumb =
-        currentObjects.length > 0
-          ? engineRef.current.captureThumbnailDataUrl()
-          : '';
+        currentObjects.length > 0 ? engine.captureThumbnailDataUrl() : '';
       const now = Date.now();
-      const nextName = overrideName ?? activeProject.name;
 
       const updated: SavedProjectRecord = {
-        ...activeProject,
+        ...proj,
         name: nextName,
         updatedAt: now,
         objectCount: currentObjects.length,
         thumbnailDataUrl: thumb,
         scene: {
-          ...activeProject.scene,
+          ...proj.scene,
           name: nextName,
           updatedAt: now,
           objects: currentObjects,
-          gridSettings: engineRef.current.getGridSettings(),
-          snapSettings: engineRef.current.getSnapSettings(),
-          surfaceSettings: engineRef.current.getSurfaceSettings(),
-          lightingMood: engineRef.current.getLightingMood(),
+          gridSettings: curGrid,
+          snapSettings: curSnap,
+          surfaceSettings: curSurf,
+          lightingMood: curMood,
         },
       };
 
+      activeProjectRef.current = updated;
       await saveProjectRecord(updated);
       setActiveProject(updated);
-      setIsSavingProject(false);
+      setSaveState('saved');
     },
-    [activeProject]
+    []
   );
 
   // Mount StudioEngine when entering the 'editor' screen
@@ -392,6 +525,19 @@ export const App: React.FC = () => {
     const restoredSurf = engine.updateSurfaceSettings(
       activeProject.scene.surfaceSettings ?? DEFAULT_SURFACE_SETTINGS
     );
+
+    // Record baseline content signature on open so opening a project triggers 0 redundant saves
+    lastSavedSigRef.current = computeProjectContentSignature(
+      activeProject.name,
+      engine.getSerializedObjects(),
+      restoredGrid,
+      restoredSnap,
+      restoredSurf,
+      projMood
+    );
+    dirtySinceRef.current = null;
+    setSaveState('saved');
+
     setGridSettings(restoredGrid);
     setSnapSettings(restoredSnap);
     setSurfaceSettings(restoredSurf);
@@ -413,6 +559,16 @@ export const App: React.FC = () => {
       ).then(() => {
         if (!cancelled && engineRef.current === engine) {
           engine.loadSceneObjects(savedObjs, true);
+          lastSavedSigRef.current = computeProjectContentSignature(
+            activeProjectRef.current?.name ?? activeProject.name,
+            engine.getSerializedObjects(),
+            engine.getGridSettings(),
+            engine.getSnapSettings(),
+            engine.getSurfaceSettings(),
+            engine.getLightingMood()
+          );
+          dirtySinceRef.current = null;
+          setSaveState('saved');
         }
       });
     }
@@ -421,6 +577,7 @@ export const App: React.FC = () => {
       cancelled = true;
       if (autoSaveTimerRef.current) {
         window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
       }
       engine.dispose();
       engineRef.current = null;
@@ -428,33 +585,111 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeScreen, activeProject?.id]);
 
-  // Debounced auto-save whenever studio objects or settings change
-  useEffect(() => {
-    if (activeScreen !== 'editor' || !activeProject || !engineRef.current) return;
-
-    if (autoSaveTimerRef.current) {
-      window.clearTimeout(autoSaveTimerRef.current);
-    }
-    setIsSavingProject(true);
-    autoSaveTimerRef.current = window.setTimeout(() => {
-      void persistCurrentProjectNow();
-    }, 1050);
-
-    return () => {
-      if (autoSaveTimerRef.current) {
-        window.clearTimeout(autoSaveTimerRef.current);
-      }
-    };
+  // Compute current content signature in editor
+  const currentSceneSignature = useMemo(() => {
+    if (activeScreen !== 'editor' || !activeProject) return '';
+    return computeProjectContentSignature(
+      activeProject.name,
+      objects,
+      gridSettings,
+      snapSettings,
+      surfaceSettings,
+      lightingMood
+    );
   }, [
     activeScreen,
+    activeProject?.name,
     objects,
     gridSettings,
     snapSettings,
     surfaceSettings,
     lightingMood,
-    persistCurrentProjectNow,
-    activeProject,
   ]);
+
+  // Smart Auto-Save scheduler:
+  // - Never runs when nothing changed (`currentSceneSignature === lastSavedSigRef.current`)
+  // - Never interrupts an active 3D drag (`dragFeedback.active === true`)
+  // - Waits 5,000 ms after the last real edit (with a 15,000 ms ceiling for continuous rapid edits)
+  useEffect(() => {
+    if (activeScreen !== 'editor' || !engineRef.current || !currentSceneSignature) {
+      return;
+    }
+
+    if (currentSceneSignature === lastSavedSigRef.current) {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      dirtySinceRef.current = null;
+      setSaveState((prev) => (prev === 'saving' ? prev : 'saved'));
+      return;
+    }
+
+    if (dirtySinceRef.current === null) {
+      dirtySinceRef.current = Date.now();
+    }
+    setSaveState('dirty');
+
+    // Pause timer while user is actively dragging a 3D gizmo/handle
+    if (dragFeedback.active) {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      return;
+    }
+
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+
+    const elapsedDirty = Date.now() - dirtySinceRef.current;
+    const waitMs =
+      elapsedDirty >= SMART_AUTOSAVE_MAX_WAIT_MS
+        ? 400
+        : Math.min(
+            SMART_AUTOSAVE_IDLE_MS,
+            Math.max(800, SMART_AUTOSAVE_MAX_WAIT_MS - elapsedDirty)
+          );
+
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      void persistCurrentProjectNow();
+    }, waitMs);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+    };
+  }, [
+    activeScreen,
+    currentSceneSignature,
+    dragFeedback.active,
+    persistCurrentProjectNow,
+  ]);
+
+  // Flush unsaved edits safely if user switches browser tab or closes page
+  useEffect(() => {
+    if (activeScreen !== 'editor') return;
+    const flushIfDirty = () => {
+      if (dirtySinceRef.current !== null) {
+        void persistCurrentProjectNow();
+      }
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushIfDirty();
+      }
+    };
+    window.addEventListener('pagehide', flushIfDirty);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('pagehide', flushIfDirty);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [activeScreen, persistCurrentProjectNow]);
 
   /* =========================================================
      Main Menu Handlers (Empty-Canvas Launch, Open, Manage)
@@ -497,6 +732,7 @@ export const App: React.FC = () => {
   const handleGoHome = useCallback(async () => {
     if (autoSaveTimerRef.current) {
       window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
     }
     await persistCurrentProjectNow();
     await refreshLibraries();
@@ -504,6 +740,11 @@ export const App: React.FC = () => {
     setInteriorPeek(false);
     setActiveScreen('home');
   }, [persistCurrentProjectNow, refreshLibraries]);
+
+  const handleSaveProjectManual = useCallback(async () => {
+    await persistCurrentProjectNow({ force: true });
+    showToast(t.savedAuto);
+  }, [persistCurrentProjectNow, showToast, t.savedAuto]);
 
   const handleRenameProjectInMenu = useCallback(
     async (proj: SavedProjectRecord, newName: string) => {
@@ -515,7 +756,7 @@ export const App: React.FC = () => {
 
   const handleRenameActiveProject = useCallback(
     async (newName: string) => {
-      if (!activeProject) return;
+      if (!activeProjectRef.current) return;
       setActiveProject((prev) =>
         prev
           ? {
@@ -525,9 +766,9 @@ export const App: React.FC = () => {
             }
           : prev
       );
-      await persistCurrentProjectNow(newName);
+      await persistCurrentProjectNow({ overrideName: newName, force: true });
     },
-    [activeProject, persistCurrentProjectNow]
+    [persistCurrentProjectNow]
   );
 
   const handleDuplicateProject = useCallback(
@@ -562,10 +803,10 @@ export const App: React.FC = () => {
         setActiveProject(imported);
         setActiveScreen('editor');
       } catch {
-        showToast('Invalid .perabot file');
+        showToast(t.import3DFailedToast);
       }
     },
-    [refreshLibraries, showToast]
+    [refreshLibraries, showToast, t.import3DFailedToast]
   );
 
   const handleDeleteCustomAsset = useCallback(
@@ -586,9 +827,13 @@ export const App: React.FC = () => {
       if (!engine) return;
       engine.spawnPrimitive(kind);
       setTransformMode(engine.getTransformMode());
-      showToast(`+ ${PRIMITIVE_META[kind].label}`);
+      const loc = getLocalizedShapeMeta(
+        PRIMITIVE_META[kind],
+        globalSettings.language
+      );
+      showToast(`+ ${loc.label}`);
     },
-    [showToast]
+    [globalSettings.language, showToast]
   );
 
   const handleTriggerImport3D = useCallback(() => {
@@ -626,19 +871,13 @@ export const App: React.FC = () => {
           const one = loadedAssets[0];
           showToast(`+ ${one.name} (.${one.format})`);
         } else {
-          showToast(`+ ${loadedAssets.length} Model 3D`);
+          showToast(`+ ${loadedAssets.length} 3D`);
         }
       } else if (failedCount > 0) {
-        showToast(
-          globalSettings.language === 'en'
-            ? 'Failed to import 3D file (.glb/.obj/.stl/.ply/.fbx)'
-            : globalSettings.language === 'ja'
-            ? '3Dファイルの読み込みに失敗しました'
-            : 'Gagal memuat file 3D (gunakan .glb, .gltf, .obj, .stl, .ply, .fbx)'
-        );
+        showToast(t.import3DFailedToast);
       }
     },
-    [globalSettings.language, showToast, t.importing3DToast]
+    [showToast, t.importing3DToast, t.import3DFailedToast]
   );
 
   const handleResetImportedMaterial = useCallback(
@@ -692,13 +931,13 @@ export const App: React.FC = () => {
 
   const handleGroupSceneObjects = useCallback(() => {
     const gid = engineRef.current?.groupAllSceneObjects(
-      activeProject?.name || 'Grup Rakitan'
+      activeProject?.name || t.untitledProject
     );
     if (gid) {
       setEditSinglePartMode(false);
       showToast(t.groupedToast);
     }
-  }, [activeProject?.name, showToast, t.groupedToast]);
+  }, [activeProject?.name, showToast, t.groupedToast, t.untitledProject]);
 
   const handleUngroupSelected = useCallback(() => {
     const ok = engineRef.current?.ungroupSelected();
@@ -726,10 +965,12 @@ export const App: React.FC = () => {
     setInteriorPeek((prev) => {
       const next = !prev;
       engineRef.current?.setInteriorPeek(next);
-      showToast(next ? `${t.peekInterior}: ON` : `${t.peekInterior}: OFF`);
+      showToast(
+        `${t.peekInterior}: ${next ? t.activeState : t.inactiveState}`
+      );
       return next;
     });
-  }, [showToast, t.peekInterior]);
+  }, [showToast, t.peekInterior, t.activeState, t.inactiveState]);
 
   const handleToggleWalkthrough = useCallback(() => {
     setWalkthroughActive((prev) => {
@@ -801,6 +1042,16 @@ export const App: React.FC = () => {
     setGridSettings(nextGrid);
     setSnapSettings(engine.getSnapSettings());
   }, []);
+
+  const handleAlignGridToSelection = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const nextGrid = engine.alignGridToSelectedBase();
+    if (nextGrid) {
+      setGridSettings(nextGrid);
+      showToast(`${t.gridElevationLabel}: ${nextGrid.elevationY.toFixed(2)}m`);
+    }
+  }, [showToast, t.gridElevationLabel]);
 
   const handleChangeRotationSnap = useCallback(
     (step: RotationSnapStep) => {
@@ -913,6 +1164,14 @@ export const App: React.FC = () => {
     []
   );
 
+  const handleSplitSubBlocks = useCallback(() => {
+    const count = engineRef.current?.splitSelectedIntoSubBlocks() ?? 0;
+    if (count > 0) {
+      setEditSinglePartMode(true);
+      showToast(`${t.subdivSplitToast} (${count})`);
+    }
+  }, [showToast, t.subdivSplitToast]);
+
   const handleCommitHistory = useCallback(() => {
     engineRef.current?.pushHistoryFromUI();
   }, []);
@@ -963,6 +1222,12 @@ export const App: React.FC = () => {
       }
 
       const key = e.key.toLowerCase();
+
+      if ((e.ctrlKey || e.metaKey) && key === 's') {
+        e.preventDefault();
+        void handleSaveProjectManual();
+        return;
+      }
 
       if ((e.ctrlKey || e.metaKey) && key === 'z') {
         e.preventDefault();
@@ -1044,6 +1309,7 @@ export const App: React.FC = () => {
     selectedId,
     paintMode,
     surfaceSettings.enabled,
+    handleSaveProjectManual,
     handleChangeMode,
     handleUpdateSurface,
     handleOpenColorStudio,
@@ -1054,17 +1320,15 @@ export const App: React.FC = () => {
   ]);
 
   const formatDragAxis = (axis: string | null, mode: string) => {
-    if (mode === 'surface') return 'Surface Align';
+    if (mode === 'surface') return t.hudSurfaceAlign;
     if (!axis) return '';
     if (mode === 'rotate') {
-      if (axis === 'X') return 'Rotate X';
-      if (axis === 'Y') return 'Rotate Y';
-      if (axis === 'Z') return 'Rotate Z';
+      return `${t.hudRotate} ${axis}`;
     }
-    if (axis === 'X') return 'X';
-    if (axis === 'Y') return 'Y';
-    if (axis === 'Z') return 'Z';
-    return axis;
+    if (mode === 'scale') {
+      return `${t.hudScale} ${axis}`;
+    }
+    return `${t.hudMove} ${axis}`;
   };
 
   /* =========================================================
@@ -1138,7 +1402,7 @@ export const App: React.FC = () => {
         language={globalSettings.language}
         studioMode={activeProject.mode}
         projectName={activeProject.name}
-        isSavingProject={isSavingProject}
+        saveState={saveState}
         isImporting3D={isImporting3D}
         lightingMood={lightingMood}
         interiorPeek={interiorPeek}
@@ -1153,6 +1417,7 @@ export const App: React.FC = () => {
         hasSelection={Boolean(selectedId)}
         objectCount={objects.length}
         onGoHome={() => void handleGoHome()}
+        onSaveNow={() => void handleSaveProjectManual()}
         onRenameProject={(name) => void handleRenameActiveProject(name)}
         onTriggerImport3D={handleTriggerImport3D}
         onCycleLightingMood={handleCycleLightingMood}
@@ -1165,6 +1430,7 @@ export const App: React.FC = () => {
         onUpdateSurface={handleUpdateSurface}
         onConformNow={handleDropToFloor}
         onUpdateGrid={handleUpdateGrid}
+        onAlignGridToSelection={handleAlignGridToSelection}
         onFocusCamera={handleFocusCamera}
         onCameraPreset={handleCameraPreset}
         onExport={handleExport}
@@ -1202,6 +1468,7 @@ export const App: React.FC = () => {
 
           {!walkthroughActive && (
             <TransformToolbar
+              language={globalSettings.language}
               mode={transformMode}
               space={transformSpace}
               hasSelection={Boolean(selectedId)}
@@ -1264,7 +1531,7 @@ export const App: React.FC = () => {
                   <>
                     <span className="banner-icon-label">
                       <Pipette size={13} />
-                      <span>Eyedropper</span>
+                      <span>{t.eyedropperBtn}</span>
                     </span>
                     <button
                       type="button"
@@ -1347,6 +1614,7 @@ export const App: React.FC = () => {
           {/* Controlled Rotation Quick Bar */}
           {!walkthroughActive && transformMode === 'rotate' && selectedId && (
             <RotationControlBar
+              language={globalSettings.language}
               rotationSnapDeg={snapSettings.rotationSnapDeg}
               onChangeRotationSnap={handleChangeRotationSnap}
               onRotateStep={handleRotateStep}
@@ -1362,7 +1630,6 @@ export const App: React.FC = () => {
               onSpawn={handleSpawn}
               onSpawnCustomAsset={handleSpawnCustomAsset}
               onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
-              onTriggerImport3D={handleTriggerImport3D}
             />
           )}
 
@@ -1378,7 +1645,7 @@ export const App: React.FC = () => {
                 ? `${t.rotate} (${
                     snapSettings.rotationSnapDeg > 0
                       ? `${snapSettings.rotationSnapDeg}°`
-                      : 'Free'
+                      : t.rotSnapFree
                   })`
                 : transformMode === 'scale'
                 ? t.scale
@@ -1393,7 +1660,9 @@ export const App: React.FC = () => {
             {surfaceSettings.enabled && (
               <>
                 <span className="dot-sep">•</span>
-                <span className="status-emerald">Surface ON</span>
+                <span className="status-emerald">
+                  {t.surface}: {t.activeState}
+                </span>
               </>
             )}
           </div>
@@ -1419,6 +1688,7 @@ export const App: React.FC = () => {
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
+            onSplitSubBlocks={handleSplitSubBlocks}
             onChangePaintMode={handleChangePaintMode}
             onCommitHistory={handleCommitHistory}
             onDeleteObject={(id) => handleDeleteObject(id)}
@@ -1449,6 +1719,7 @@ export const App: React.FC = () => {
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
+            onSplitSubBlocks={handleSplitSubBlocks}
             onChangePaintMode={handleChangePaintMode}
             onCommitHistory={handleCommitHistory}
             onDeleteObject={(id) => handleDeleteObject(id)}
@@ -1467,7 +1738,6 @@ export const App: React.FC = () => {
           onSpawn={handleSpawn}
           onSpawnCustomAsset={handleSpawnCustomAsset}
           onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
-          onTriggerImport3D={handleTriggerImport3D}
           objectCount={objects.length}
           drawerOpen={mobileDrawerOpen}
           onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}
@@ -1481,7 +1751,11 @@ export const App: React.FC = () => {
         onClose={() => setSettingsOpen(false)}
       />
 
-      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <HelpModal
+        language={globalSettings.language}
+        open={helpOpen}
+        onClose={() => setHelpOpen(false)}
+      />
     </div>
   );
 };

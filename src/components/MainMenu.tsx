@@ -397,7 +397,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             type="button"
             className={`mm-icon-btn ${isFullscreen ? 'active' : ''}`}
             onClick={onToggleFullscreen}
-            title="Fullscreen"
+            title={t.fullscreen}
           >
             {isFullscreen ? (
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -485,7 +485,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       <path d="M12 22V12M12 12L21 7M12 12L3 7" />
                     </svg>
                   </span>
-                  <span className="mm-mode-pill">75 Shapes</span>
+                  <span className="mm-mode-pill">
+                    {settings.language === 'ja'
+                      ? '75シェイプ'
+                      : settings.language === 'en'
+                      ? '75 Shapes'
+                      : '75 Bentuk'}
+                  </span>
                 </div>
                 <h2>{t.modeModelingTitle}</h2>
                 <p>{t.modeModelingDesc}</p>
@@ -510,7 +516,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       <path d="M9.5 20v-6h5v6" />
                     </svg>
                   </span>
-                  <span className="mm-mode-pill accent">24+ Presets</span>
+                  <span className="mm-mode-pill accent">
+                    {settings.language === 'ja'
+                      ? '3D読込＆空間'
+                      : settings.language === 'en'
+                      ? '3D Import & Walk'
+                      : 'Impor 3D & Ruang'}
+                  </span>
                 </div>
                 <h2>{t.modeHouseTitle}</h2>
                 <p>{t.modeHouseDesc}</p>
@@ -731,8 +743,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                               <button
                                 type="button"
                                 className="mm-card-act"
-                                title="Batal"
-                                aria-label="Batal"
+                                title={t.cancel}
+                                aria-label={t.cancel}
                                 onClick={() => setConfirmDeleteId(null)}
                               >
                                 <X size={12} strokeWidth={2.3} />

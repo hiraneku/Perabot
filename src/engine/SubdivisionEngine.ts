@@ -1,554 +1,552 @@
 import * as THREE from 'three';
 import {
+  isSubdivisionActive,
+  normalizeSubdivisionSettings,
   ObjectSubdivisionSettings,
   SubdivisionStats,
 } from '../types/studio';
 
-const MAX_SUBDIV_TRIANGLES = 42000;
+const MAX_SLICED_POLYGONS = 28000;
+const EPS = 1e-5;
 
-interface IndexedMesh {
-  positions: Float32Array; // length = numVerts * 3
-  indices: Uint32Array; // length = numTris * 3
-  minY: number;
+interface Pt3 {
+  x: number;
+  y: number;
+  z: number;
 }
 
-/**
- * Welds coincident vertices by spatial quantization into a watertight indexed mesh.
- */
-function weldToIndexedMesh(geo: THREE.BufferGeometry): IndexedMesh {
-  const posAttr = geo.getAttribute('position');
-  const idxAttr = geo.getIndex();
-
-  const vertMap = new Map<string, number>();
-  const weldedPos: number[] = [];
-  const rawVertexCount = idxAttr ? idxAttr.count : posAttr.count;
-  const outIndices = new Uint32Array(rawVertexCount);
-  let minY = Infinity;
-
-  const getOrCreateVert = (rawIdx: number): number => {
-    const x = posAttr.getX(rawIdx);
-    const y = posAttr.getY(rawIdx);
-    const z = posAttr.getZ(rawIdx);
-    if (y < minY) minY = y;
-    const key = `${Math.round(x * 100000)},${Math.round(y * 100000)},${Math.round(
-      z * 100000
-    )}`;
-    const existing = vertMap.get(key);
-    if (existing !== undefined) return existing;
-    const nextId = weldedPos.length / 3;
-    weldedPos.push(x, y, z);
-    vertMap.set(key, nextId);
-    return nextId;
-  };
-
-  let writePtr = 0;
-  for (let i = 0; i < rawVertexCount; i += 3) {
-    const i0 = getOrCreateVert(idxAttr ? idxAttr.getX(i) : i);
-    const i1 = getOrCreateVert(idxAttr ? idxAttr.getX(i + 1) : i + 1);
-    const i2 = getOrCreateVert(idxAttr ? idxAttr.getX(i + 2) : i + 2);
-    if (i0 === i1 || i1 === i2 || i2 === i0) continue;
-    outIndices[writePtr++] = i0;
-    outIndices[writePtr++] = i1;
-    outIndices[writePtr++] = i2;
-  }
-
+function lerpPt(a: Pt3, b: Pt3, t: number): Pt3 {
   return {
-    positions: new Float32Array(weldedPos),
-    indices: outIndices.slice(0, writePtr),
-    minY: Number.isFinite(minY) ? minY : -0.5,
-  };
-}
-
-function edgeKey(a: number, b: number): string {
-  return a < b ? `${a}_${b}` : `${b}_${a}`;
-}
-
-interface EdgeInfo {
-  u: number;
-  v: number;
-  faces: number[];
-  opposites: number[];
-  isSharp: boolean;
-}
-
-/**
- * Performs 1 step of 1-to-4 subdivision (either Simple linear midpoint or
- * Crease-Aware Charles Loop Smooth Subdivision).
- */
-function subdivideStep(
-  mesh: IndexedMesh,
-  smooth: boolean,
-  crease: number,
-  lockBase: boolean
-): IndexedMesh {
-  const { positions, indices, minY } = mesh;
-  const numVerts = positions.length / 3;
-  const numTris = indices.length / 3;
-
-  // Compute face normals for dihedral crease detection
-  const faceNormals = new Float32Array(numTris * 3);
-  for (let f = 0; f < numTris; f++) {
-    const i0 = indices[f * 3] * 3;
-    const i1 = indices[f * 3 + 1] * 3;
-    const i2 = indices[f * 3 + 2] * 3;
-
-    const abx = positions[i1] - positions[i0];
-    const aby = positions[i1 + 1] - positions[i0 + 1];
-    const abz = positions[i1 + 2] - positions[i0 + 2];
-
-    const acx = positions[i2] - positions[i0];
-    const acy = positions[i2 + 1] - positions[i0 + 1];
-    const acz = positions[i2 + 2] - positions[i0 + 2];
-
-    const nx = aby * acz - abz * acy;
-    const ny = abz * acx - abx * acz;
-    const nz = abx * acy - aby * acx;
-    const len = Math.hypot(nx, ny, nz) || 1;
-    faceNormals[f * 3] = nx / len;
-    faceNormals[f * 3 + 1] = ny / len;
-    faceNormals[f * 3 + 2] = nz / len;
-  }
-
-  // Build unique edge table + vertex adjacency
-  const edgeMap = new Map<string, EdgeInfo>();
-  const neighbors: Array<Set<number>> = Array.from(
-    { length: numVerts },
-    () => new Set<number>()
-  );
-
-  for (let f = 0; f < numTris; f++) {
-    const v0 = indices[f * 3];
-    const v1 = indices[f * 3 + 1];
-    const v2 = indices[f * 3 + 2];
-
-    neighbors[v0].add(v1);
-    neighbors[v0].add(v2);
-    neighbors[v1].add(v0);
-    neighbors[v1].add(v2);
-    neighbors[v2].add(v0);
-    neighbors[v2].add(v1);
-
-    const triEdges: Array<[number, number, number]> = [
-      [v0, v1, v2],
-      [v1, v2, v0],
-      [v2, v0, v1],
-    ];
-
-    for (const [a, b, opp] of triEdges) {
-      const k = edgeKey(a, b);
-      let info = edgeMap.get(k);
-      if (!info) {
-        info = {
-          u: Math.min(a, b),
-          v: Math.max(a, b),
-          faces: [f],
-          opposites: [opp],
-          isSharp: false,
-        };
-        edgeMap.set(k, info);
-      } else {
-        info.faces.push(f);
-        info.opposites.push(opp);
-      }
-    }
-  }
-
-  // Determine sharp crease edges based on dihedral angle & crease slider
-  // crease = 0 -> no dihedral creases (pure organic smooth);
-  // crease >= 0.55 -> 90-degree edges lock crisp; crease = 1.0 -> >= 18-degree edges lock crisp
-  const enableHardCrease = smooth && crease >= 0.55;
-  const maxSharpAngleDeg = 165 - crease * 147; // at 0.55 -> ~84 deg (locks 90 deg!), at 1.0 -> 18 deg
-  const cosThreshold = Math.cos((maxSharpAngleDeg * Math.PI) / 180);
-
-  // Continuous semi-sharp blend factor (0 = full Loop smooth, 1 = linear sharp)
-  const semiSharpBlend = smooth ? Math.pow(Math.max(0, Math.min(1, crease)), 1.6) * 0.72 : 1;
-
-  const sharpNeighbors: Array<number[]> = Array.from({ length: numVerts }, () => []);
-
-  for (const info of edgeMap.values()) {
-    if (info.faces.length !== 2) {
-      // Open boundary edge is always treated as a crease
-      info.isSharp = true;
-    } else if (enableHardCrease) {
-      const fA = info.faces[0] * 3;
-      const fB = info.faces[1] * 3;
-      const dot =
-        faceNormals[fA] * faceNormals[fB] +
-        faceNormals[fA + 1] * faceNormals[fB + 1] +
-        faceNormals[fA + 2] * faceNormals[fB + 2];
-      if (dot < cosThreshold) {
-        info.isSharp = true;
-      }
-    }
-
-    // Lock base perimeter as sharp when lockBase is active
-    if (
-      lockBase &&
-      Math.abs(positions[info.u * 3 + 1] - minY) < 0.008 &&
-      Math.abs(positions[info.v * 3 + 1] - minY) < 0.008 &&
-      info.faces.length === 2
-    ) {
-      const fA = info.faces[0] * 3;
-      const fB = info.faces[1] * 3;
-      const dot =
-        faceNormals[fA] * faceNormals[fB] +
-        faceNormals[fA + 1] * faceNormals[fB + 1] +
-        faceNormals[fA + 2] * faceNormals[fB + 2];
-      if (dot < 0.65) {
-        info.isSharp = true;
-      }
-    }
-
-    if (info.isSharp) {
-      sharpNeighbors[info.u].push(info.v);
-      sharpNeighbors[info.v].push(info.u);
-    }
-  }
-
-  const totalOutVerts = numVerts + edgeMap.size;
-  const nextPositions = new Float32Array(totalOutVerts * 3);
-
-  // 1. Update EVEN (existing) vertices
-  for (let v = 0; v < numVerts; v++) {
-    const px = positions[v * 3];
-    const py = positions[v * 3 + 1];
-    const pz = positions[v * 3 + 2];
-
-    if (!smooth) {
-      nextPositions[v * 3] = px;
-      nextPositions[v * 3 + 1] = py;
-      nextPositions[v * 3 + 2] = pz;
-      continue;
-    }
-
-    const sNbrs = sharpNeighbors[v];
-    let sx = px;
-    let sy = py;
-    let sz = pz;
-
-    if (sNbrs.length >= 3) {
-      // Corner vertex where >= 3 sharp creases meet -> pinned
-      sx = px;
-      sy = py;
-      sz = pz;
-    } else if (sNbrs.length === 2) {
-      // Crease rib rule: 3/4 * v + 1/8 * (c0 + c1)
-      const c0 = sNbrs[0] * 3;
-      const c1 = sNbrs[1] * 3;
-      sx = 0.75 * px + 0.125 * (positions[c0] + positions[c1]);
-      sy = 0.75 * py + 0.125 * (positions[c0 + 1] + positions[c1 + 1]);
-      sz = 0.75 * pz + 0.125 * (positions[c0 + 2] + positions[c1 + 2]);
-    } else {
-      const nbrSet = neighbors[v];
-      const k = nbrSet.size;
-      if (k > 0) {
-        const beta = k === 3 ? 3 / 16 : 3 / (8 * k);
-        let sumX = 0;
-        let sumY = 0;
-        let sumZ = 0;
-        for (const nb of nbrSet) {
-          sumX += positions[nb * 3];
-          sumY += positions[nb * 3 + 1];
-          sumZ += positions[nb * 3 + 2];
-        }
-        const loopX = (1 - k * beta) * px + beta * sumX;
-        const loopY = (1 - k * beta) * py + beta * sumY;
-        const loopZ = (1 - k * beta) * pz + beta * sumZ;
-
-        sx = loopX + (px - loopX) * semiSharpBlend;
-        sy = loopY + (py - loopY) * semiSharpBlend;
-        sz = loopZ + (pz - loopZ) * semiSharpBlend;
-      }
-    }
-
-    if (lockBase && Math.abs(py - minY) < 0.008) {
-      sy = minY;
-    }
-
-    nextPositions[v * 3] = sx;
-    nextPositions[v * 3 + 1] = sy;
-    nextPositions[v * 3 + 2] = sz;
-  }
-
-  // 2. Compute ODD (edge midpoint) vertices
-  const edgeMidIndex = new Map<string, number>();
-  let nextVertCursor = numVerts;
-
-  for (const [k, info] of edgeMap.entries()) {
-    const midIdx = nextVertCursor++;
-    edgeMidIndex.set(k, midIdx);
-
-    const u3 = info.u * 3;
-    const v3 = info.v * 3;
-    const linX = 0.5 * (positions[u3] + positions[v3]);
-    const linY = 0.5 * (positions[u3 + 1] + positions[v3 + 1]);
-    const linZ = 0.5 * (positions[u3 + 2] + positions[v3 + 2]);
-
-    let mx = linX;
-    let my = linY;
-    let mz = linZ;
-
-    if (smooth && !info.isSharp && info.opposites.length === 2) {
-      const o0 = info.opposites[0] * 3;
-      const o1 = info.opposites[1] * 3;
-      const loopX =
-        0.375 * (positions[u3] + positions[v3]) +
-        0.125 * (positions[o0] + positions[o1]);
-      const loopY =
-        0.375 * (positions[u3 + 1] + positions[v3 + 1]) +
-        0.125 * (positions[o0 + 1] + positions[o1 + 1]);
-      const loopZ =
-        0.375 * (positions[u3 + 2] + positions[v3 + 2]) +
-        0.125 * (positions[o0 + 2] + positions[o1 + 2]);
-
-      mx = loopX + (linX - loopX) * semiSharpBlend;
-      my = loopY + (linY - loopY) * semiSharpBlend;
-      mz = loopZ + (linZ - loopZ) * semiSharpBlend;
-    }
-
-    if (
-      lockBase &&
-      Math.abs(positions[u3 + 1] - minY) < 0.008 &&
-      Math.abs(positions[v3 + 1] - minY) < 0.008
-    ) {
-      my = minY;
-    }
-
-    nextPositions[midIdx * 3] = mx;
-    nextPositions[midIdx * 3 + 1] = my;
-    nextPositions[midIdx * 3 + 2] = mz;
-  }
-
-  // 3. Emit 4 sub-triangles per input triangle preserving winding!
-  const nextIndices = new Uint32Array(numTris * 12);
-  for (let f = 0; f < numTris; f++) {
-    const v0 = indices[f * 3];
-    const v1 = indices[f * 3 + 1];
-    const v2 = indices[f * 3 + 2];
-
-    const m01 = edgeMidIndex.get(edgeKey(v0, v1))!;
-    const m12 = edgeMidIndex.get(edgeKey(v1, v2))!;
-    const m20 = edgeMidIndex.get(edgeKey(v2, v0))!;
-
-    const base = f * 12;
-    nextIndices[base] = v0;
-    nextIndices[base + 1] = m01;
-    nextIndices[base + 2] = m20;
-
-    nextIndices[base + 3] = v1;
-    nextIndices[base + 4] = m12;
-    nextIndices[base + 5] = m01;
-
-    nextIndices[base + 6] = v2;
-    nextIndices[base + 7] = m20;
-    nextIndices[base + 8] = m12;
-
-    nextIndices[base + 9] = m01;
-    nextIndices[base + 10] = m12;
-    nextIndices[base + 11] = m20;
-  }
-
-  return {
-    positions: nextPositions,
-    indices: nextIndices,
-    minY,
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t,
   };
 }
 
 /**
- * Converts an IndexedMesh back into a Three.js BufferGeometry with crease-aware normals!
+ * Splits a convex 3D polygon into two convex polygons along an axis-aligned plane `coord = cutVal`.
  */
-function indexedMeshToBufferGeometry(
-  mesh: IndexedMesh,
-  smoothNormals: boolean,
-  crease: number
-): THREE.BufferGeometry {
-  const { positions, indices } = mesh;
-  const numTris = indices.length / 3;
+function splitPolygonByAxisPlane(
+  poly: Pt3[],
+  axis: 'x' | 'y' | 'z',
+  cutVal: number
+): [Pt3[], Pt3[]] {
+  const neg: Pt3[] = [];
+  const pos: Pt3[] = [];
+  const n = poly.length;
+  if (n < 3) return [neg, pos];
 
-  if (!smoothNormals) {
-    // Crisp flat-shaded normals per triangle
-    const outPos = new Float32Array(numTris * 9);
-    const outUv = new Float32Array(numTris * 6);
-    for (let f = 0; f < numTris; f++) {
-      for (let k = 0; k < 3; k++) {
-        const vi = indices[f * 3 + k] * 3;
-        const dst = f * 9 + k * 3;
-        outPos[dst] = positions[vi];
-        outPos[dst + 1] = positions[vi + 1];
-        outPos[dst + 2] = positions[vi + 2];
-        outUv[f * 6 + k * 2] = positions[vi] + 0.5;
-        outUv[f * 6 + k * 2 + 1] = positions[vi + 1] + 0.5;
+  for (let i = 0; i < n; i++) {
+    const cur = poly[i];
+    const nxt = poly[(i + 1) % n];
+    const dCur = cur[axis] - cutVal;
+    const dNxt = nxt[axis] - cutVal;
+
+    if (dCur <= EPS) neg.push(cur);
+    if (dCur >= -EPS) pos.push(cur);
+
+    if ((dCur < -EPS && dNxt > EPS) || (dCur > EPS && dNxt < -EPS)) {
+      const t = dCur / (dCur - dNxt);
+      const inter = lerpPt(cur, nxt, t);
+      inter[axis] = cutVal;
+      neg.push(inter);
+      pos.push(inter);
+    }
+  }
+
+  return [
+    neg.length >= 3 ? neg : [],
+    pos.length >= 3 ? pos : [],
+  ];
+}
+
+function slicePolygonsAlongAxis(
+  polygons: Pt3[][],
+  axis: 'x' | 'y' | 'z',
+  minVal: number,
+  maxVal: number,
+  cuts: number
+): { polygons: Pt3[][]; cutValues: number[]; capped: boolean } {
+  const cutValues: number[] = [];
+  const span = maxVal - minVal;
+  if (cuts <= 1 || span < 1e-4) {
+    return { polygons, cutValues, capped: false };
+  }
+
+  for (let k = 1; k < cuts; k++) {
+    cutValues.push(minVal + (span * k) / cuts);
+  }
+
+  let current = polygons;
+  let capped = false;
+
+  for (const cutVal of cutValues) {
+    if (current.length >= MAX_SLICED_POLYGONS) {
+      capped = true;
+      break;
+    }
+    const nextList: Pt3[][] = [];
+    for (const poly of current) {
+      let pMin = Infinity;
+      let pMax = -Infinity;
+      for (const v of poly) {
+        const val = v[axis];
+        if (val < pMin) pMin = val;
+        if (val > pMax) pMax = val;
       }
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(outPos, 3));
-    geo.setAttribute('uv', new THREE.BufferAttribute(outUv, 2));
-    geo.computeVertexNormals();
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-    return geo;
-  }
-
-  // Smooth normals with optional crease-angle splitting when crease >= 0.55
-  if (crease < 0.55) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setIndex(new THREE.BufferAttribute(indices, 1));
-    const uvs = new Float32Array((positions.length / 3) * 2);
-    for (let i = 0; i < positions.length / 3; i++) {
-      uvs[i * 2] = positions[i * 3] + 0.5;
-      uvs[i * 2 + 1] = positions[i * 3 + 1] + 0.5;
-    }
-    geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-    geo.computeVertexNormals();
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-    return geo;
-  }
-
-  // Crease-angle aware normal computation: average adjacent face normals within crease angle
-  const maxSmoothAngleDeg = 165 - crease * 130; // at 0.55 -> 93 deg, at 1.0 -> 35 deg
-  const cosSplit = Math.cos((maxSmoothAngleDeg * Math.PI) / 180);
-
-  const faceNormals = new Float32Array(numTris * 3);
-  const vertFaces: Array<number[]> = Array.from(
-    { length: positions.length / 3 },
-    () => []
-  );
-
-  for (let f = 0; f < numTris; f++) {
-    const v0 = indices[f * 3];
-    const v1 = indices[f * 3 + 1];
-    const v2 = indices[f * 3 + 2];
-    vertFaces[v0].push(f);
-    vertFaces[v1].push(f);
-    vertFaces[v2].push(f);
-
-    const i0 = v0 * 3;
-    const i1 = v1 * 3;
-    const i2 = v2 * 3;
-    const abx = positions[i1] - positions[i0];
-    const aby = positions[i1 + 1] - positions[i0 + 1];
-    const abz = positions[i1 + 2] - positions[i0 + 2];
-    const acx = positions[i2] - positions[i0];
-    const acy = positions[i2 + 1] - positions[i0 + 1];
-    const acz = positions[i2 + 2] - positions[i0 + 2];
-    const nx = aby * acz - abz * acy;
-    const ny = abz * acx - abx * acz;
-    const nz = abx * acy - aby * acx;
-    const len = Math.hypot(nx, ny, nz) || 1;
-    faceNormals[f * 3] = nx / len;
-    faceNormals[f * 3 + 1] = ny / len;
-    faceNormals[f * 3 + 2] = nz / len;
-  }
-
-  const outPos = new Float32Array(numTris * 9);
-  const outNorm = new Float32Array(numTris * 9);
-  const outUv = new Float32Array(numTris * 6);
-
-  for (let f = 0; f < numTris; f++) {
-    const fnx = faceNormals[f * 3];
-    const fny = faceNormals[f * 3 + 1];
-    const fnz = faceNormals[f * 3 + 2];
-
-    for (let k = 0; k < 3; k++) {
-      const vIdx = indices[f * 3 + k];
-      const vi = vIdx * 3;
-      const dst = f * 9 + k * 3;
-      outPos[dst] = positions[vi];
-      outPos[dst + 1] = positions[vi + 1];
-      outPos[dst + 2] = positions[vi + 2];
-      outUv[f * 6 + k * 2] = positions[vi] + 0.5;
-      outUv[f * 6 + k * 2 + 1] = positions[vi + 1] + 0.5;
-
-      let sx = 0;
-      let sy = 0;
-      let sz = 0;
-      for (const adjF of vertFaces[vIdx]) {
-        const anx = faceNormals[adjF * 3];
-        const any = faceNormals[adjF * 3 + 1];
-        const anz = faceNormals[adjF * 3 + 2];
-        if (fnx * anx + fny * any + fnz * anz >= cosSplit) {
-          sx += anx;
-          sy += any;
-          sz += anz;
-        }
+      if (cutVal <= pMin + EPS || cutVal >= pMax - EPS) {
+        nextList.push(poly);
+        continue;
       }
-      const slen = Math.hypot(sx, sy, sz) || 1;
-      outNorm[dst] = sx / slen;
-      outNorm[dst + 1] = sy / slen;
-      outNorm[dst + 2] = sz / slen;
+      const [leftPoly, rightPoly] = splitPolygonByAxisPlane(poly, axis, cutVal);
+      if (leftPoly.length >= 3) nextList.push(leftPoly);
+      if (rightPoly.length >= 3) nextList.push(rightPoly);
     }
+    current = nextList;
   }
 
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(outPos, 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(outNorm, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(outUv, 2));
-  geo.computeBoundingBox();
-  geo.computeBoundingSphere();
-  return geo;
+  return { polygons: current, cutValues, capped };
+}
+
+function segmentDedupKey(a: Pt3, b: Pt3): string {
+  const ax = Math.round(a.x * 2000);
+  const ay = Math.round(a.y * 2000);
+  const az = Math.round(a.z * 2000);
+  const bx = Math.round(b.x * 2000);
+  const by = Math.round(b.y * 2000);
+  const bz = Math.round(b.z * 2000);
+  const k1 = `${ax},${ay},${az}`;
+  const k2 = `${bx},${by},${bz}`;
+  return k1 < k2 ? `${k1}|${k2}` : `${k2}|${k1}`;
 }
 
 export function computeGeometryStats(
   baseGeo: THREE.BufferGeometry,
   currentGeo: THREE.BufferGeometry,
+  rawSettings?: Partial<ObjectSubdivisionSettings> | null,
   capped = false
 ): SubdivisionStats {
-  const baseIdx = baseGeo.getIndex();
+  const s = normalizeSubdivisionSettings(rawSettings);
   const basePos = baseGeo.getAttribute('position');
+  const baseIdx = baseGeo.getIndex();
   const baseTriangles = Math.round(
-    (baseIdx ? baseIdx.count : basePos.count) / 3
+    (baseIdx ? baseIdx.count : basePos ? basePos.count : 0) / 3
   );
 
-  const curIdx = currentGeo.getIndex();
   const curPos = currentGeo.getAttribute('position');
+  const curIdx = currentGeo.getIndex();
   const subdivTriangles = Math.round(
-    (curIdx ? curIdx.count : curPos.count) / 3
+    (curIdx ? curIdx.count : curPos ? curPos.count : 0) / 3
   );
 
   return {
+    cellsTotal: s.cutsX * s.cutsY * s.cutsZ,
+    cutsX: s.cutsX,
+    cutsY: s.cutsY,
+    cutsZ: s.cutsZ,
     baseTriangles,
     subdivTriangles,
-    vertexCount: curPos.count,
+    vertexCount: curPos ? curPos.count : 0,
     capped,
   };
 }
 
 /**
- * Applies non-destructive Subdivision Surface Modifier to a base geometry.
+ * Slices a 3D mesh surface into smaller rectangular/planar sub-faces (`cutsX * cutsY * cutsZ`),
+ * generating both the physically partitioned BufferGeometry AND clean quad grid lines
+ * (free of diagonal triangle clutter) plus optional physical panel grooves!
  */
 export function buildSubdividedGeometry(
   baseGeo: THREE.BufferGeometry,
-  settings: ObjectSubdivisionSettings
-): { geometry: THREE.BufferGeometry; stats: SubdivisionStats } {
-  if (settings.level <= 0) {
-    const cloned = baseGeo.clone();
-    cloned.computeBoundingBox();
-    cloned.computeBoundingSphere();
+  rawSettings?: Partial<ObjectSubdivisionSettings> | null
+): {
+  geometry: THREE.BufferGeometry;
+  gridLinesGeometry: THREE.BufferGeometry | null;
+  stats: SubdivisionStats;
+} {
+  const settings = normalizeSubdivisionSettings(rawSettings);
+
+  if (!isSubdivisionActive(settings)) {
+    const clean = baseGeo.clone();
+    clean.computeBoundingBox();
+    clean.computeBoundingSphere();
     return {
-      geometry: cloned,
-      stats: computeGeometryStats(baseGeo, cloned, false),
+      geometry: clean,
+      gridLinesGeometry: null,
+      stats: computeGeometryStats(baseGeo, clean, settings, false),
     };
   }
 
-  let current = weldToIndexedMesh(baseGeo);
-  const smooth = settings.mode === 'smooth';
-  let capped = false;
+  baseGeo.computeBoundingBox();
+  const bb =
+    baseGeo.boundingBox ??
+    new THREE.Box3(
+      new THREE.Vector3(-0.5, -0.5, -0.5),
+      new THREE.Vector3(0.5, 0.5, 0.5)
+    );
 
-  for (let step = 0; step < settings.level; step++) {
-    const currentTris = current.indices.length / 3;
-    if (currentTris * 4 > MAX_SUBDIV_TRIANGLES) {
-      capped = true;
-      break;
-    }
-    current = subdivideStep(current, smooth, settings.crease, settings.lockBase);
+  const posAttr = baseGeo.getAttribute('position');
+  const normAttr = baseGeo.getAttribute('normal');
+  const idxAttr = baseGeo.getIndex();
+  const rawCount = idxAttr ? idxAttr.count : posAttr ? posAttr.count : 0;
+
+  if (!posAttr || rawCount < 3) {
+    const clean = baseGeo.clone();
+    return {
+      geometry: clean,
+      gridLinesGeometry: null,
+      stats: computeGeometryStats(baseGeo, clean, settings, false),
+    };
   }
 
-  const outGeo = indexedMeshToBufferGeometry(current, smooth, settings.crease);
+  // Extract base triangles with their original outward normals
+  interface PolyItem {
+    pts: Pt3[];
+    nx: number;
+    ny: number;
+    nz: number;
+  }
+
+  const initialPolys: PolyItem[] = [];
+  for (let i = 0; i < rawCount; i += 3) {
+    const i0 = idxAttr ? idxAttr.getX(i) : i;
+    const i1 = idxAttr ? idxAttr.getX(i + 1) : i + 1;
+    const i2 = idxAttr ? idxAttr.getX(i + 2) : i + 2;
+
+    const p0: Pt3 = {
+      x: posAttr.getX(i0),
+      y: posAttr.getY(i0),
+      z: posAttr.getZ(i0),
+    };
+    const p1: Pt3 = {
+      x: posAttr.getX(i1),
+      y: posAttr.getY(i1),
+      z: posAttr.getZ(i1),
+    };
+    const p2: Pt3 = {
+      x: posAttr.getX(i2),
+      y: posAttr.getY(i2),
+      z: posAttr.getZ(i2),
+    };
+
+    const abx = p1.x - p0.x;
+    const aby = p1.y - p0.y;
+    const abz = p1.z - p0.z;
+    const acx = p2.x - p0.x;
+    const acy = p2.y - p0.y;
+    const acz = p2.z - p0.z;
+
+    let nx = aby * acz - abz * acy;
+    let ny = abz * acx - abx * acz;
+    let nz = abx * acy - aby * acx;
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-9) continue;
+
+    if (normAttr) {
+      const avgNx =
+        (normAttr.getX(i0) + normAttr.getX(i1) + normAttr.getX(i2)) / 3;
+      const avgNy =
+        (normAttr.getY(i0) + normAttr.getY(i1) + normAttr.getY(i2)) / 3;
+      const avgNz =
+        (normAttr.getZ(i0) + normAttr.getZ(i1) + normAttr.getZ(i2)) / 3;
+      const aLen = Math.hypot(avgNx, avgNy, avgNz);
+      if (aLen > 0.2) {
+        nx = avgNx / aLen;
+        ny = avgNy / aLen;
+        nz = avgNz / aLen;
+      } else {
+        nx /= len;
+        ny /= len;
+        nz /= len;
+      }
+    } else {
+      nx /= len;
+      ny /= len;
+      nz /= len;
+    }
+
+    initialPolys.push({ pts: [p0, p1, p2], nx, ny, nz });
+  }
+
+  let allCapped = false;
+  const xCutsAll = new Set<number>();
+  const yCutsAll = new Set<number>();
+  const zCutsAll = new Set<number>();
+  const finalPolys: PolyItem[] = [];
+
+  for (const item of initialPolys) {
+    let polys: Pt3[][] = [item.pts];
+
+    const sx = slicePolygonsAlongAxis(
+      polys,
+      'x',
+      bb.min.x,
+      bb.max.x,
+      settings.cutsX
+    );
+    polys = sx.polygons;
+    sx.cutValues.forEach((v) => xCutsAll.add(v));
+    if (sx.capped) allCapped = true;
+
+    const sy = slicePolygonsAlongAxis(
+      polys,
+      'y',
+      bb.min.y,
+      bb.max.y,
+      settings.cutsY
+    );
+    polys = sy.polygons;
+    sy.cutValues.forEach((v) => yCutsAll.add(v));
+    if (sy.capped) allCapped = true;
+
+    const sz = slicePolygonsAlongAxis(
+      polys,
+      'z',
+      bb.min.z,
+      bb.max.z,
+      settings.cutsZ
+    );
+    polys = sz.polygons;
+    sz.cutValues.forEach((v) => zCutsAll.add(v));
+    if (sz.capped) allCapped = true;
+
+    for (const p of polys) {
+      finalPolys.push({ pts: p, nx: item.nx, ny: item.ny, nz: item.nz });
+    }
+  }
+
+  const outPositions: number[] = [];
+  const outNormals: number[] = [];
+  const lineSegmentsCoords: number[] = [];
+  const seenSegs = new Set<string>();
+
+  const xCutArr = Array.from(xCutsAll);
+  const yCutArr = Array.from(yCutsAll);
+  const zCutArr = Array.from(zCutsAll);
+
+  const isOnCutPlane = (a: Pt3, b: Pt3): boolean => {
+    for (const cx of xCutArr) {
+      if (Math.abs(a.x - cx) < 2e-4 && Math.abs(b.x - cx) < 2e-4) return true;
+    }
+    for (const cy of yCutArr) {
+      if (Math.abs(a.y - cy) < 2e-4 && Math.abs(b.y - cy) < 2e-4) return true;
+    }
+    for (const cz of zCutArr) {
+      if (Math.abs(a.z - cz) < 2e-4 && Math.abs(b.z - cz) < 2e-4) return true;
+    }
+    return false;
+  };
+
+  const groove = settings.panelGroove;
+
+  for (const poly of finalPolys) {
+    const pts = poly.pts;
+    const m = pts.length;
+    if (m < 3) continue;
+
+    // Collect crisp planar cut lines along surface
+    for (let i = 0; i < m; i++) {
+      const a = pts[i];
+      const b = pts[(i + 1) % m];
+      const distSq =
+        (a.x - b.x) * (a.x - b.x) +
+        (a.y - b.y) * (a.y - b.y) +
+        (a.z - b.z) * (a.z - b.z);
+      if (distSq < 1e-8) continue;
+      if (isOnCutPlane(a, b)) {
+        const key = segmentDedupKey(a, b);
+        if (!seenSegs.has(key)) {
+          seenSegs.add(key);
+          // Slight outward bias along normal prevents z-fighting on flat faces
+          const bias = 0.0012;
+          lineSegmentsCoords.push(
+            a.x + poly.nx * bias,
+            a.y + poly.ny * bias,
+            a.z + poly.nz * bias,
+            b.x + poly.nx * bias,
+            b.y + poly.ny * bias,
+            b.z + poly.nz * bias
+          );
+        }
+      }
+    }
+
+    // Optional physical 3D panel bevel / tile groove per cell!
+    if (groove > 0.001) {
+      let cx = 0;
+      let cy = 0;
+      let cz = 0;
+      for (const p of pts) {
+        cx += p.x;
+        cy += p.y;
+        cz += p.z;
+      }
+      cx /= m;
+      cy /= m;
+      cz /= m;
+
+      const inset = Math.min(0.28, groove * 2.8);
+      const bevelDepth = groove * 0.35;
+      const innerPts: Pt3[] = pts.map((p) => ({
+        x: p.x + (cx - p.x) * inset,
+        y: p.y + (cy - p.y) * inset,
+        z: p.z + (cz - p.z) * inset,
+      }));
+      const outerSunkPts: Pt3[] = pts.map((p) => ({
+        x: p.x - poly.nx * bevelDepth,
+        y: p.y - poly.ny * bevelDepth,
+        z: p.z - poly.nz * bevelDepth,
+      }));
+
+      // Center raised panel face
+      for (let i = 1; i < m - 1; i++) {
+        outPositions.push(
+          innerPts[0].x,
+          innerPts[0].y,
+          innerPts[0].z,
+          innerPts[i].x,
+          innerPts[i].y,
+          innerPts[i].z,
+          innerPts[i + 1].x,
+          innerPts[i + 1].y,
+          innerPts[i + 1].z
+        );
+        outNormals.push(
+          poly.nx,
+          poly.ny,
+          poly.nz,
+          poly.nx,
+          poly.ny,
+          poly.nz,
+          poly.nx,
+          poly.ny,
+          poly.nz
+        );
+      }
+
+      // Sloped bevel skirt around panel
+      for (let i = 0; i < m; i++) {
+        const nxt = (i + 1) % m;
+        const o0 = outerSunkPts[i];
+        const o1 = outerSunkPts[nxt];
+        const i1 = innerPts[nxt];
+        const i0 = innerPts[i];
+
+        const e1x = o1.x - o0.x;
+        const e1y = o1.y - o0.y;
+        const e1z = o1.z - o0.z;
+        const e2x = i0.x - o0.x;
+        const e2y = i0.y - o0.y;
+        const e2z = i0.z - o0.z;
+        let bnx = e1y * e2z - e1z * e2y;
+        let bny = e1z * e2x - e1x * e2z;
+        let bnz = e1x * e2y - e1y * e2x;
+        const bLen = Math.hypot(bnx, bny, bnz) || 1;
+        bnx /= bLen;
+        bny /= bLen;
+        bnz /= bLen;
+
+        outPositions.push(
+          o0.x,
+          o0.y,
+          o0.z,
+          o1.x,
+          o1.y,
+          o1.z,
+          i1.x,
+          i1.y,
+          i1.z,
+          o0.x,
+          o0.y,
+          o0.z,
+          i1.x,
+          i1.y,
+          i1.z,
+          i0.x,
+          i0.y,
+          i0.z
+        );
+        for (let k = 0; k < 6; k++) {
+          outNormals.push(bnx, bny, bnz);
+        }
+      }
+    } else {
+      // Clean flat triangulation of convex sub-polygon
+      for (let i = 1; i < m - 1; i++) {
+        outPositions.push(
+          pts[0].x,
+          pts[0].y,
+          pts[0].z,
+          pts[i].x,
+          pts[i].y,
+          pts[i].z,
+          pts[i + 1].x,
+          pts[i + 1].y,
+          pts[i + 1].z
+        );
+        outNormals.push(
+          poly.nx,
+          poly.ny,
+          poly.nz,
+          poly.nx,
+          poly.ny,
+          poly.nz,
+          poly.nx,
+          poly.ny,
+          poly.nz
+        );
+      }
+    }
+  }
+
+  // Also include sharp silhouette edges of baseGeo so outer borders match cut lines cleanly
+  const outerEdges = new THREE.EdgesGeometry(baseGeo, 28);
+  const outerPos = outerEdges.getAttribute('position');
+  if (outerPos) {
+    for (let i = 0; i < outerPos.count; i += 2) {
+      const a: Pt3 = {
+        x: outerPos.getX(i),
+        y: outerPos.getY(i),
+        z: outerPos.getZ(i),
+      };
+      const b: Pt3 = {
+        x: outerPos.getX(i + 1),
+        y: outerPos.getY(i + 1),
+        z: outerPos.getZ(i + 1),
+      };
+      const key = segmentDedupKey(a, b);
+      if (!seenSegs.has(key)) {
+        seenSegs.add(key);
+        lineSegmentsCoords.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    }
+  }
+  outerEdges.dispose();
+
+  const outGeo = new THREE.BufferGeometry();
+  outGeo.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(outPositions, 3)
+  );
+  outGeo.setAttribute(
+    'normal',
+    new THREE.Float32BufferAttribute(outNormals, 3)
+  );
+  outGeo.boundingBox = bb.clone();
+  outGeo.computeBoundingSphere();
+
+  let gridLinesGeometry: THREE.BufferGeometry | null = null;
+  if (lineSegmentsCoords.length >= 6) {
+    gridLinesGeometry = new THREE.BufferGeometry();
+    gridLinesGeometry.setAttribute(
+      'position',
+      new THREE.Float32BufferAttribute(lineSegmentsCoords, 3)
+    );
+  }
+
   return {
     geometry: outGeo,
-    stats: computeGeometryStats(baseGeo, outGeo, capped),
+    gridLinesGeometry,
+    stats: computeGeometryStats(baseGeo, outGeo, settings, allCapped),
   };
 }

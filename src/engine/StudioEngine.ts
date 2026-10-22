@@ -29,7 +29,9 @@ import {
   DragFeedback,
   GraphicsQuality,
   GridSettings,
+  isSubdivisionActive,
   LightingMood,
+  normalizeSubdivisionSettings,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PrimitiveKind,
@@ -934,35 +936,34 @@ export class StudioEngine {
     return mesh.userData.baseMaterial as THREE.MeshStandardMaterial;
   }
 
-  private syncWireframeOverlay(mesh: THREE.Mesh, showWireframe: boolean): void {
-    const existing = mesh.getObjectByName('__subdivWireframe') as THREE.Mesh | undefined;
-    if (!showWireframe) {
-      if (existing) {
-        mesh.remove(existing);
-        (existing.material as THREE.Material).dispose();
-      }
-      return;
-    }
-
+  private syncSubdivisionGridLines(
+    mesh: THREE.Mesh,
+    gridLinesGeo: THREE.BufferGeometry | null,
+    showGridLines: boolean
+  ): void {
+    const existing = mesh.getObjectByName('__subdivGridLines') as
+      | THREE.LineSegments
+      | undefined;
     if (existing) {
-      existing.geometry = mesh.geometry;
+      mesh.remove(existing);
+      existing.geometry.dispose();
+      (existing.material as THREE.Material).dispose();
+    }
+
+    if (!showGridLines || !gridLinesGeo) {
       return;
     }
 
-    const wireMat = new THREE.MeshBasicMaterial({
+    const lineMat = new THREE.LineBasicMaterial({
       color: '#38bdf8',
-      wireframe: true,
       transparent: true,
-      opacity: 0.42,
+      opacity: 0.72,
       depthTest: true,
-      polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
     });
-    const wireMesh = new THREE.Mesh(mesh.geometry, wireMat);
-    wireMesh.name = '__subdivWireframe';
-    wireMesh.raycast = () => {};
-    mesh.add(wireMesh);
+    const lineSegs = new THREE.LineSegments(gridLinesGeo.clone(), lineMat);
+    lineSegs.name = '__subdivGridLines';
+    lineSegs.raycast = () => {};
+    mesh.add(lineSegs);
   }
 
   private getMeshHalfDiagonal(mesh: THREE.Mesh): number {
@@ -1140,7 +1141,7 @@ export class StudioEngine {
         !mesh.visible ||
         this.ghostedMeshIds.has(id) ||
         mesh.userData.kind !== 'cube' ||
-        (subdiv && subdiv.level > 0) ||
+        isSubdivisionActive(subdiv) ||
         baseMat.transparent
       ) {
         if (Array.isArray(mesh.material)) {
@@ -1924,7 +1925,7 @@ export class StudioEngine {
         position: { x: round3(sx), y: round3(floorTopY - minY), z: round3(sz) },
         rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
-        color: '#cbd5e1',
+        color: asset.dominantColorHex || '#cbd5e1',
         roughness: 0.5,
         metalness: 0.1,
         opacity: 1,
@@ -2002,7 +2003,20 @@ export class StudioEngine {
       if (!(node as THREE.Mesh).isMesh) return;
       const m = node as THREE.Mesh;
       m.castShadow = op > 0.35;
+
+      // Dispose any previously generated custom material before replacing
+      const disposeCurrentCustom = () => {
+        if (!m.userData.hasCustomMatApplied) return;
+        if (Array.isArray(m.material)) {
+          m.material.forEach((cm) => cm.dispose());
+        } else if (m.material) {
+          m.material.dispose();
+        }
+        m.userData.hasCustomMatApplied = false;
+      };
+
       if (!useCustom) {
+        disposeCurrentCustom();
         const orig = m.userData.origMaterials as
           | THREE.Material
           | THREE.Material[]
@@ -2015,27 +2029,44 @@ export class StudioEngine {
         return;
       }
 
-      const applyStd = (targetMat: THREE.Material) => {
-        const std = targetMat as THREE.MeshStandardMaterial;
-        if (std.color) std.color.copy(baseMat.color);
-        if (typeof std.roughness === 'number') std.roughness = baseMat.roughness;
-        if (typeof std.metalness === 'number') std.metalness = baseMat.metalness;
-        std.transparent = op < 0.995;
-        std.opacity = op;
-        std.depthWrite = op >= 0.98;
-        if (std.emissive) {
-          std.emissive.set(emissiveHex);
-          std.emissiveIntensity = emissiveIntensity;
-        }
-        std.flatShading = baseMat.flatShading;
-        std.needsUpdate = true;
+      // TRUE COLOR REPLACEMENT:
+      // Build a clean MeshStandardMaterial WITHOUT baked albedo textures (`map: null`)
+      // and WITHOUT `vertexColors` so choosing White (#ffffff) on a yellow imported .glb cube
+      // truly turns the cube pure White (#ffffff) instead of multiplying White * Yellow!
+      const buildTrueColorMat = (origMat?: THREE.Material): THREE.MeshStandardMaterial => {
+        const origStd = origMat as THREE.MeshStandardMaterial | undefined;
+        const fresh = new THREE.MeshStandardMaterial({
+          color: baseMat.color.clone(),
+          map: null,
+          vertexColors: false,
+          roughness: baseMat.roughness,
+          metalness: baseMat.metalness,
+          transparent: op < 0.995,
+          opacity: op,
+          depthWrite: op >= 0.98,
+          emissive: new THREE.Color(emissiveHex),
+          emissiveIntensity,
+          flatShading: baseMat.flatShading,
+          side: origStd?.side ?? THREE.FrontSide,
+          normalMap: origStd?.normalMap ?? null,
+          bumpMap: origStd?.bumpMap ?? null,
+          aoMap: origStd?.aoMap ?? null,
+        });
+        return fresh;
       };
 
-      if (Array.isArray(m.material)) {
-        m.material.forEach(applyStd);
-      } else if (m.material) {
-        applyStd(m.material);
+      const orig = m.userData.origMaterials as
+        | THREE.Material
+        | THREE.Material[]
+        | undefined;
+
+      disposeCurrentCustom();
+      if (Array.isArray(orig)) {
+        m.material = orig.map((om) => buildTrueColorMat(om));
+      } else {
+        m.material = buildTrueColorMat(orig);
       }
+      m.userData.hasCustomMatApplied = true;
     });
   }
 
@@ -2046,6 +2077,10 @@ export class StudioEngine {
     mesh.userData.userOpacity = 1;
     mesh.userData.userEmissiveHex = '#000000';
     mesh.userData.userEmissiveIntensity = 0;
+    const entry = getRegisteredImportedModel(mesh.userData.modelAssetId as string);
+    if (entry?.dominantColorHex) {
+      this.getBaseMaterial(mesh).color.set(entry.dominantColorHex);
+    }
     this.applyMaterialToImportedVisual(mesh);
     this.updateSelectionHighlight();
     this.pushHistorySnapshot();
@@ -2057,17 +2092,24 @@ export class StudioEngine {
       ? getRegisteredImportedModel(data.modelAssetId)
       : undefined;
 
-    const subdiv = data.subdivision ?? { ...DEFAULT_SUBDIVISION_SETTINGS };
+    const subdiv = normalizeSubdivisionSettings(data.subdivision);
     let geometry: THREE.BufferGeometry;
+    let gridLinesGeometry: THREE.BufferGeometry | null = null;
     let stats: SubdivisionStats;
 
     if (importedEntry) {
-      geometry = importedEntry.colliderGeometry.clone();
-      stats = computeGeometryStats(geometry, geometry, false);
+      const built = buildSubdividedGeometry(
+        importedEntry.colliderGeometry,
+        subdiv
+      );
+      geometry = built.geometry;
+      gridLinesGeometry = built.gridLinesGeometry;
+      stats = built.stats;
     } else {
       const baseGeo = this.getOrCreateBaseGeometry(data.kind);
       const built = buildSubdividedGeometry(baseGeo, subdiv);
       geometry = built.geometry;
+      gridLinesGeometry = built.gridLinesGeometry;
       stats = built.stats;
     }
 
@@ -2130,8 +2172,15 @@ export class StudioEngine {
           this.applyMaterialToImportedVisual(mesh);
         }
       }
-    } else {
-      this.syncWireframeOverlay(mesh, subdiv.wireframe);
+    }
+
+    this.syncSubdivisionGridLines(
+      mesh,
+      gridLinesGeometry,
+      subdiv.showGridLines && isSubdivisionActive(subdiv)
+    );
+    if (gridLinesGeometry) {
+      gridLinesGeometry.dispose();
     }
 
     return mesh;
@@ -2339,41 +2388,65 @@ export class StudioEngine {
     return { ...this.gridSettings };
   }
 
+  public alignGridToSelectedBase(): GridSettings | null {
+    if (!this.selectedId) return null;
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh) return null;
+    const bounds = this.computeWorldBounds(mesh);
+    if (bounds.isEmpty()) return null;
+    const nextY = Math.round(bounds.min.y * 20) / 20;
+    return this.updateGridSettings({ visible: true, elevationY: nextY });
+  }
+
   public updateObjectSubdivision(
     id: string,
     patch: Partial<ObjectSubdivisionSettings>,
     recordHistory = true
   ): SubdivisionStats | null {
     const mesh = this.meshMap.get(id);
-    if (!mesh || mesh.userData.modelAssetId) return null;
+    if (!mesh) return null;
 
-    const currentSubdiv =
-      (mesh.userData.subdivision as ObjectSubdivisionSettings | undefined) ?? {
-        ...DEFAULT_SUBDIVISION_SETTINGS,
-      };
-    const nextSubdiv: ObjectSubdivisionSettings = {
+    const currentSubdiv = normalizeSubdivisionSettings(
+      mesh.userData.subdivision as ObjectSubdivisionSettings | undefined
+    );
+    const nextSubdiv = normalizeSubdivisionSettings({
       ...currentSubdiv,
       ...patch,
-    };
+    });
 
     const geomChanged =
-      nextSubdiv.level !== currentSubdiv.level ||
-      nextSubdiv.mode !== currentSubdiv.mode ||
-      Math.abs(nextSubdiv.crease - currentSubdiv.crease) > 0.001 ||
-      nextSubdiv.lockBase !== currentSubdiv.lockBase;
+      nextSubdiv.cutsX !== currentSubdiv.cutsX ||
+      nextSubdiv.cutsY !== currentSubdiv.cutsY ||
+      nextSubdiv.cutsZ !== currentSubdiv.cutsZ ||
+      Math.abs(nextSubdiv.panelGroove - currentSubdiv.panelGroove) > 0.0005;
 
-    const kind = mesh.userData.kind as PrimitiveKind;
-    const baseGeo = this.getOrCreateBaseGeometry(kind);
+    const importedEntry = mesh.userData.modelAssetId
+      ? getRegisteredImportedModel(mesh.userData.modelAssetId as string)
+      : undefined;
+    const baseGeo = importedEntry
+      ? importedEntry.colliderGeometry
+      : this.getOrCreateBaseGeometry(mesh.userData.kind as PrimitiveKind);
 
-    if (geomChanged) {
-      const { geometry, stats } = buildSubdividedGeometry(baseGeo, nextSubdiv);
-      mesh.geometry.dispose();
-      mesh.geometry = geometry;
-      mesh.userData.subdivStats = stats;
+    if (geomChanged || nextSubdiv.showGridLines !== currentSubdiv.showGridLines) {
+      const built = buildSubdividedGeometry(baseGeo, nextSubdiv);
+      if (geomChanged) {
+        mesh.geometry.dispose();
+        mesh.geometry = built.geometry;
+        mesh.userData.subdivStats = built.stats;
+      } else {
+        built.geometry.dispose();
+      }
+      this.syncSubdivisionGridLines(
+        mesh,
+        built.gridLinesGeometry,
+        nextSubdiv.showGridLines && isSubdivisionActive(nextSubdiv)
+      );
+      if (built.gridLinesGeometry) {
+        built.gridLinesGeometry.dispose();
+      }
     }
 
     mesh.userData.subdivision = nextSubdiv;
-    this.syncWireframeOverlay(mesh, nextSubdiv.wireframe);
     this.updateSeamlessTouchFaces();
 
     if (recordHistory) {
@@ -2381,6 +2454,146 @@ export class StudioEngine {
     }
     this.emitState();
     return (mesh.userData.subdivStats as SubdivisionStats) ?? null;
+  }
+
+  /**
+   * Splits the currently selected object physically into `cutsX * cutsY * cutsZ`
+   * independent smaller 3D sub-blocks aligned with the object's exact orientation & bounds,
+   * enabling per-block editing (delete individual squares to carve holes, extrude, paint)!
+   */
+  public splitSelectedIntoSubBlocks(): number {
+    if (!this.selectedId) return 0;
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh) return 0;
+
+    const curSub = normalizeSubdivisionSettings(
+      mesh.userData.subdivision as ObjectSubdivisionSettings | undefined
+    );
+    const nx = curSub.cutsX > 1 || curSub.cutsY > 1 || curSub.cutsZ > 1 ? curSub.cutsX : 2;
+    const ny = curSub.cutsX > 1 || curSub.cutsY > 1 || curSub.cutsZ > 1 ? curSub.cutsY : 2;
+    const nz = curSub.cutsX > 1 || curSub.cutsY > 1 || curSub.cutsZ > 1 ? curSub.cutsZ : 2;
+
+    if (nx * ny * nz <= 1) return 0;
+
+    mesh.geometry.computeBoundingBox();
+    const bb =
+      mesh.geometry.boundingBox ??
+      new THREE.Box3(
+        new THREE.Vector3(-0.5, -0.5, -0.5),
+        new THREE.Vector3(0.5, 0.5, 0.5)
+      );
+
+    const localSpanX = Math.max(0.02, bb.max.x - bb.min.x);
+    const localSpanY = Math.max(0.02, bb.max.y - bb.min.y);
+    const localSpanZ = Math.max(0.02, bb.max.z - bb.min.z);
+
+    const cellLocalW = localSpanX / nx;
+    const cellLocalH = localSpanY / ny;
+    const cellLocalD = localSpanZ / nz;
+
+    const worldScaleX = round3(Math.abs(mesh.scale.x) * cellLocalW);
+    const worldScaleY = round3(Math.abs(mesh.scale.y) * cellLocalH);
+    const worldScaleZ = round3(Math.abs(mesh.scale.z) * cellLocalD);
+
+    const serializedParent = this.serializeObject(this.selectedId);
+    if (!serializedParent) return 0;
+
+    mesh.updateMatrixWorld(true);
+    const rotDeg: Vec3 = {
+      x: round3(mesh.rotation.x * RAD2DEG),
+      y: round3(mesh.rotation.y * RAD2DEG),
+      z: round3(mesh.rotation.z * RAD2DEG),
+    };
+
+    const gid = `grp_sub_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const groupTitle = serializedParent.name;
+
+    // Remove parent object before spawning its split children
+    this.transformControls.detach();
+    this.disposeMesh(mesh);
+    this.objectGroup.remove(mesh);
+    this.meshMap.delete(serializedParent.id);
+    this.ghostedMeshIds.delete(serializedParent.id);
+
+    // If total grid >= 64 (e.g. >= 4x4x4), build outer shell blocks only to stay blazingly fast!
+    const shellOnly = nx >= 4 && ny >= 4 && nz >= 4;
+    const localPt = new THREE.Vector3();
+    let createdCount = 0;
+    let firstSubId: string | null = null;
+
+    for (let iy = 0; iy < ny; iy++) {
+      for (let iz = 0; iz < nz; iz++) {
+        for (let ix = 0; ix < nx; ix++) {
+          if (
+            shellOnly &&
+            ix > 0 &&
+            ix < nx - 1 &&
+            iy > 0 &&
+            iy < ny - 1 &&
+            iz > 0 &&
+            iz < nz - 1
+          ) {
+            continue;
+          }
+
+          localPt.set(
+            bb.min.x + (ix + 0.5) * cellLocalW,
+            bb.min.y + (iy + 0.5) * cellLocalH,
+            bb.min.z + (iz + 0.5) * cellLocalD
+          );
+          localPt.applyMatrix4(mesh.matrixWorld);
+
+          createdCount++;
+          const subId = `sub-${Date.now()}-${createdCount}-${Math.random()
+            .toString(36)
+            .slice(2, 6)}`;
+          if (!firstSubId) firstSubId = subId;
+
+          const subData: SceneObjectData = {
+            id: subId,
+            name: `${groupTitle} [${ix + 1},${iy + 1},${iz + 1}]`,
+            kind: 'cube',
+            position: {
+              x: round3(localPt.x),
+              y: round3(localPt.y),
+              z: round3(localPt.z),
+            },
+            rotation: { ...rotDeg },
+            scale: {
+              x: Math.max(0.02, worldScaleX),
+              y: Math.max(0.02, worldScaleY),
+              z: Math.max(0.02, worldScaleZ),
+            },
+            color: serializedParent.color,
+            roughness: serializedParent.roughness,
+            metalness: serializedParent.metalness,
+            opacity: serializedParent.opacity,
+            emissive: serializedParent.emissive,
+            emissiveIntensity: serializedParent.emissiveIntensity,
+            flatShading: serializedParent.flatShading,
+            subdivision: { ...DEFAULT_SUBDIVISION_SETTINGS },
+            visible: true,
+            groupId: gid,
+            groupName: groupTitle,
+            archRole: serializedParent.archRole,
+          };
+
+          const subMesh = this.buildMeshFromData(subData);
+          this.objectGroup.add(subMesh);
+          this.meshMap.set(subId, subMesh);
+        }
+      }
+    }
+
+    // Automatically enable single-part editing so user can immediately edit/delete/color individual sub-blocks!
+    this.editSinglePartMode = true;
+    this.updateSeamlessTouchFaces();
+    if (firstSubId) {
+      this.selectObject(firstSubId, false);
+    }
+    this.pushHistorySnapshot();
+    this.emitState();
+    return createdCount;
   }
 
   public rotateSelectedBy(axis: 'x' | 'y' | 'z', deltaDeg: number): boolean {
@@ -2977,7 +3190,12 @@ export class StudioEngine {
       return mesh.userData.subdivStats as SubdivisionStats;
     }
     const baseGeo = this.getOrCreateBaseGeometry(mesh.userData.kind as PrimitiveKind);
-    return computeGeometryStats(baseGeo, mesh.geometry, false);
+    return computeGeometryStats(
+      baseGeo,
+      mesh.geometry,
+      mesh.userData.subdivision as ObjectSubdivisionSettings | undefined,
+      false
+    );
   }
 
   public pushHistoryFromUI(): void {
@@ -3083,6 +3301,8 @@ export class StudioEngine {
     const obj = this.serializeObject(this.selectedId);
     if (!obj) return;
 
+    this.refreshGridSelectionFootprint();
+
     this.callbacks.onDragFeedback({
       active: true,
       axis: extra?.forceSurfaceMode ? 'SURFACE' : this.transformControls.axis,
@@ -3095,7 +3315,36 @@ export class StudioEngine {
     });
   }
 
+  private refreshGridSelectionFootprint(): void {
+    if (!this.selectedId) {
+      this.gridSystem.updateSelectionFootprint(null);
+      return;
+    }
+    const selMesh = this.meshMap.get(this.selectedId);
+    if (!selMesh || !selMesh.visible) {
+      this.gridSystem.updateSelectionFootprint(null);
+      return;
+    }
+
+    const gid = !this.editSinglePartMode
+      ? (selMesh.userData.groupId as string | null | undefined)
+      : null;
+
+    if (gid) {
+      const groupBox = new THREE.Box3();
+      for (const m of this.meshMap.values()) {
+        if (m.visible && m.userData.groupId === gid) {
+          groupBox.union(this.computeWorldBounds(m));
+        }
+      }
+      this.gridSystem.updateSelectionFootprint(groupBox);
+    } else {
+      this.gridSystem.updateSelectionFootprint(this.computeWorldBounds(selMesh));
+    }
+  }
+
   private emitState(): void {
+    this.refreshGridSelectionFootprint();
     this.callbacks.onStateChange({
       objects: this.serializeAllObjects(),
       selectedId: this.selectedId,
@@ -3106,10 +3355,13 @@ export class StudioEngine {
   }
 
   private disposeMesh(mesh: THREE.Mesh): void {
-    const wire = mesh.getObjectByName('__subdivWireframe') as THREE.Mesh | undefined;
-    if (wire) {
-      mesh.remove(wire);
-      (wire.material as THREE.Material).dispose();
+    const gridLines = mesh.getObjectByName('__subdivGridLines') as
+      | THREE.LineSegments
+      | undefined;
+    if (gridLines) {
+      mesh.remove(gridLines);
+      gridLines.geometry.dispose();
+      (gridLines.material as THREE.Material).dispose();
     }
     const visualRoot = mesh.getObjectByName('__importedVisualRoot');
     if (visualRoot) {

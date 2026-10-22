@@ -18,6 +18,7 @@ export interface LoadedImportedModelAsset {
   name: string;
   format: string;
   thumbDataUrl: string;
+  dominantColorHex: string;
   visualTemplate: THREE.Group;
   colliderGeometry: THREE.BufferGeometry;
   size: THREE.Vector3;
@@ -298,6 +299,87 @@ function buildNormalizedTemplateAndCollider(
   };
 }
 
+function sampleDominantModelColor(visualTemplate: THREE.Group): string {
+  let sampledHex: string | null = null;
+
+  visualTemplate.traverse((node) => {
+    if (sampledHex || !(node as THREE.Mesh).isMesh) return;
+    const m = node as THREE.Mesh;
+
+    // 1. Check vertex colors if present
+    const colAttr = m.geometry?.getAttribute('color');
+    if (colAttr && colAttr.count > 0) {
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      const step = Math.max(1, Math.floor(colAttr.count / 32));
+      let n = 0;
+      for (let i = 0; i < colAttr.count; i += step) {
+        r += colAttr.getX(i);
+        g += colAttr.getY(i);
+        b += colAttr.getZ(i);
+        n++;
+      }
+      if (n > 0) {
+        const c = new THREE.Color(r / n, g / n, b / n);
+        sampledHex = `#${c.getHexString()}`;
+        return;
+      }
+    }
+
+    const firstMat = (
+      Array.isArray(m.material) ? m.material[0] : m.material
+    ) as THREE.MeshStandardMaterial | undefined;
+    if (!firstMat) return;
+
+    // 2. If material has a baseColorTexture (`map`), sample its average pixel color!
+    if (firstMat.map?.image && typeof document !== 'undefined') {
+      try {
+        const img = firstMat.map.image as CanvasImageSource & {
+          width?: number;
+          height?: number;
+        };
+        if (img.width && img.height) {
+          const cv = document.createElement('canvas');
+          cv.width = 8;
+          cv.height = 8;
+          const ctx = cv.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, 8, 8);
+            const data = ctx.getImageData(0, 0, 8, 8).data;
+            let sr = 0;
+            let sg = 0;
+            let sb = 0;
+            let cnt = 0;
+            for (let i = 0; i < data.length; i += 4) {
+              if (data[i + 3] < 20) continue;
+              sr += data[i] / 255;
+              sg += data[i + 1] / 255;
+              sb += data[i + 2] / 255;
+              cnt++;
+            }
+            if (cnt > 0) {
+              const texCol = new THREE.Color(sr / cnt, sg / cnt, sb / cnt);
+              if (firstMat.color) texCol.multiply(firstMat.color);
+              sampledHex = `#${texCol.getHexString()}`;
+              return;
+            }
+          }
+        }
+      } catch {
+        // Fallback to material color
+      }
+    }
+
+    // 3. Direct material color
+    if (firstMat.color) {
+      sampledHex = `#${firstMat.color.getHexString()}`;
+    }
+  });
+
+  return sampledHex || '#cbd5e1';
+}
+
 function renderImportedThumbDataUrl(
   visualTemplate: THREE.Group,
   size: THREE.Vector3
@@ -389,6 +471,7 @@ export async function importExternal3DFile(
     buildNormalizedTemplateAndCollider(rawRoot, domainWorldSize, false);
 
   const thumbDataUrl = renderImportedThumbDataUrl(visualTemplate, size);
+  const dominantColorHex = sampleDominantModelColor(visualTemplate);
   const assetId = `mdl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   // Persist normalized binary GLB into IndexedDB so reopening the project restores it seamlessly
@@ -411,6 +494,7 @@ export async function importExternal3DFile(
     name: cleanName,
     format,
     thumbDataUrl,
+    dominantColorHex,
     visualTemplate,
     colliderGeometry,
     size,
@@ -449,6 +533,7 @@ export async function hydrateImportedModelsForObjects(
         name: rec.name,
         format: rec.format,
         thumbDataUrl: rec.thumbDataUrl,
+        dominantColorHex: sampleDominantModelColor(visualTemplate),
         visualTemplate,
         colliderGeometry,
         size,

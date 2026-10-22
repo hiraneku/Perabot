@@ -27,6 +27,9 @@ import {
   Sunset,
   Moon,
   Loader2,
+  Ruler,
+  ScanLine,
+  BoxSelect,
 } from 'lucide-react';
 import { CameraPresetType } from '../engine/viewportHelpers';
 import { TRANSLATIONS } from '../i18n/translations';
@@ -34,6 +37,7 @@ import {
   AppLanguage,
   GridSettings,
   GridStyle,
+  GridVerticalMode,
   LightingMood,
   MagnetStrength,
   SnapSettings,
@@ -75,7 +79,7 @@ const PortalDropdown: React.FC<PortalDropdownProps> = ({
       const menu = menuRef.current;
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
-      const menuWidth = menu?.offsetWidth || 280;
+      const menuWidth = menu?.offsetWidth || 300;
       const vw = window.innerWidth;
       const desiredLeft =
         align === 'right' ? rect.right - menuWidth : rect.left;
@@ -129,11 +133,20 @@ const PortalDropdown: React.FC<PortalDropdownProps> = ({
   );
 };
 
+const QUICK_PLOT_PRESETS: Array<{ label: string; w: number; d: number }> = [
+  { label: '4×4m', w: 4, d: 4 },
+  { label: '6×6m', w: 6, d: 6 },
+  { label: '8×12m', w: 8, d: 12 },
+  { label: '10×15m', w: 10, d: 15 },
+];
+
+export type SaveIndicatorState = 'saved' | 'dirty' | 'saving';
+
 interface TopBarProps {
   language: AppLanguage;
   studioMode: StudioMode;
   projectName: string;
-  isSavingProject: boolean;
+  saveState: SaveIndicatorState;
   isImporting3D?: boolean;
   lightingMood: LightingMood;
   interiorPeek: boolean;
@@ -148,6 +161,7 @@ interface TopBarProps {
   hasSelection: boolean;
   objectCount: number;
   onGoHome: () => void;
+  onSaveNow: () => void;
   onRenameProject: (name: string) => void;
   onTriggerImport3D: () => void;
   onCycleLightingMood: () => void;
@@ -160,6 +174,7 @@ interface TopBarProps {
   onUpdateSurface: (patch: Partial<SurfaceSettings>, reconformNow?: boolean) => void;
   onConformNow: () => void;
   onUpdateGrid: (patch: Partial<GridSettings>) => void;
+  onAlignGridToSelection: () => void;
   onFocusCamera: () => void;
   onCameraPreset: (preset: CameraPresetType) => void;
   onExport: (format: 'glb' | 'gltf') => void;
@@ -173,7 +188,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   language,
   studioMode,
   projectName,
-  isSavingProject,
+  saveState,
   isImporting3D = false,
   lightingMood,
   interiorPeek,
@@ -188,6 +203,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   hasSelection,
   objectCount,
   onGoHome,
+  onSaveNow,
   onRenameProject,
   onTriggerImport3D,
   onCycleLightingMood,
@@ -200,6 +216,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onUpdateSurface,
   onConformNow,
   onUpdateGrid,
+  onAlignGridToSelection,
   onFocusCamera,
   onCameraPreset,
   onExport,
@@ -236,9 +253,16 @@ export const TopBar: React.FC<TopBarProps> = ({
     snapSettings.grid,
   ].filter(Boolean).length;
 
+  const saveTooltip =
+    saveState === 'saving'
+      ? t.savingNow
+      : saveState === 'dirty'
+      ? t.unsavedChanges
+      : t.savedAuto;
+
   return (
     <header className="topbar">
-      {/* Pinned Left: Home + Compact Project Title + Undo/Redo */}
+      {/* Pinned Left: Home + Compact Project Title + Smart Save Pill + Undo/Redo */}
       <div className="topbar-group topbar-left">
         <button
           type="button"
@@ -288,13 +312,21 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span className="project-title-text">{projectName}</span>
             </button>
           )}
-          <span className="project-save-dot" title={t.savedAuto}>
-            {isSavingProject ? (
+          <button
+            type="button"
+            className={`project-save-dot state-${saveState}`}
+            title={saveTooltip}
+            onClick={onSaveNow}
+            aria-label={saveTooltip}
+          >
+            {saveState === 'saving' ? (
               <Loader2 size={11} className="spin-icon" />
+            ) : saveState === 'dirty' ? (
+              <span className="dirty-pulse-dot" />
             ) : (
               <Check size={11} />
             )}
-          </span>
+          </button>
         </div>
 
         <div className="btn-cluster">
@@ -303,8 +335,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             className="icon-btn"
             disabled={!canUndo}
             onClick={onUndo}
-            title="Undo (Ctrl+Z)"
-            aria-label="Undo"
+            title={t.undo}
+            aria-label={t.undo}
           >
             <Undo2 size={16} />
           </button>
@@ -313,21 +345,21 @@ export const TopBar: React.FC<TopBarProps> = ({
             className="icon-btn"
             disabled={!canRedo}
             onClick={onRedo}
-            title="Redo (Ctrl+Y)"
-            aria-label="Redo"
+            title={t.redo}
+            aria-label={t.redo}
           >
             <Redo2 size={16} />
           </button>
         </div>
       </div>
 
-      {/* Scrollable Middle Track: Future-proof horizontal scroll container so new mechanics NEVER clip or push right buttons off-screen! */}
-      <div className="topbar-center-scroll">
-        <div className="topbar-center-inner">
-          {/* Import 3D Model (.glb, .gltf, .obj, .stl, .ply, .fbx) */}
+      {/* Horizontally Scrollable Center Track — NEVER clips off-screen */}
+      <div className="topbar-scroll-zone">
+        <div className="topbar-scroll-inner">
+          {/* Import 3D Button (TopBar ONLY, as requested) */}
           <button
             type="button"
-            className="chip-btn import-3d-chip"
+            className={`chip-btn import-3d-chip ${isImporting3D ? 'active' : ''}`}
             onClick={onTriggerImport3D}
             disabled={isImporting3D}
             title={t.import3DHint}
@@ -340,31 +372,23 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span>{t.import3DBtn}</span>
           </button>
 
-          {/* 1. Smart Snapping Split Button */}
+          {/* 3-Mode Smart Snapping Popover */}
           <div className="dropdown-wrap" ref={snapRef}>
-            <div className="split-btn">
-              <button
-                type="button"
-                className={`chip-btn ${snapSettings.enabled ? 'active' : ''}`}
-                onClick={() => onUpdateSnap({ enabled: !snapSettings.enabled })}
-                title="Aktifkan / Matikan Sistem Snap Pintar"
-              >
-                <Magnet size={15} />
-                <span>{t.snap}</span>
-                {snapSettings.enabled && (
-                  <span className="snap-badge">{activeSnapCount}</span>
-                )}
-              </button>
-              <button
-                type="button"
-                className={`chip-caret ${snapSettings.enabled ? 'active' : ''}`}
-                onClick={() => toggleMenu('snap')}
-                aria-label="Pengaturan Snap Pintar"
-                title="Atur Magnet Blok, Garis Sejajar & Snap Grid"
-              >
-                <ChevronDown size={13} />
-              </button>
-            </div>
+            <button
+              type="button"
+              className={`chip-btn ${
+                snapSettings.enabled && activeSnapCount > 0 ? 'active' : ''
+              }`}
+              onClick={() => toggleMenu('snap')}
+              title={t.snapSystemTitle}
+            >
+              <Magnet size={15} />
+              <span>{t.snap}</span>
+              <span className="mini-badge">
+                {snapSettings.enabled ? activeSnapCount : 0}
+              </span>
+              <ChevronDown size={13} />
+            </button>
 
             <PortalDropdown
               open={openMenu === 'snap'}
@@ -373,116 +397,118 @@ export const TopBar: React.FC<TopBarProps> = ({
               className="snap-popover"
             >
               <div className="snap-popover-head">
-                <span>Sistem Snap Pintar</span>
+                <span>{t.snapSystemTitle}</span>
                 <button
                   type="button"
-                  className={`mini-toggle-pill ${snapSettings.enabled ? 'on' : ''}`}
-                  onClick={() => onUpdateSnap({ enabled: !snapSettings.enabled })}
+                  className={`mini-master-toggle ${
+                    snapSettings.enabled ? 'on' : ''
+                  }`}
+                  onClick={() =>
+                    onUpdateSnap({ enabled: !snapSettings.enabled })
+                  }
                 >
-                  {snapSettings.enabled ? 'Aktif' : 'Nonaktif'}
+                  {snapSettings.enabled ? t.activeState : t.inactiveState}
                 </button>
               </div>
 
-              <div className="snap-subblock">
+              <div
+                className={`snap-mode-card ${
+                  snapSettings.objectMagnet ? 'selected' : ''
+                }`}
+              >
                 <button
                   type="button"
-                  className={`snap-option-row compact ${
-                    snapSettings.objectMagnet ? 'checked' : ''
-                  }`}
+                  className="snap-mode-row"
                   onClick={() =>
-                    onUpdateSnap({
-                      enabled: true,
-                      objectMagnet: !snapSettings.objectMagnet,
-                    })
+                    onUpdateSnap({ objectMagnet: !snapSettings.objectMagnet })
                   }
                 >
-                  <div className="snap-option-text">
-                    <strong>Magnet Blok & Sudut</strong>
-                    <span>
-                      Tempel rapat permukaan, garis tepi & sudut otomatis saat blok berdekatan
-                    </span>
-                  </div>
                   <span className="snap-check-box">
                     {snapSettings.objectMagnet && <Check size={13} />}
                   </span>
+                  <div className="snap-mode-info">
+                    <strong>{t.snapMagnetTitle}</strong>
+                    <small>{t.snapMagnetDesc}</small>
+                  </div>
                 </button>
+
                 {snapSettings.objectMagnet && (
-                  <div className="segmented-pills">
+                  <div className="snap-sub-chips">
                     {(
                       [
-                        { id: 'subtle', label: 'Halus' },
-                        { id: 'normal', label: 'Normal' },
-                        { id: 'strong', label: 'Kuat' },
+                        { id: 'subtle', label: t.strengthSubtle },
+                        { id: 'normal', label: t.strengthNormal },
+                        { id: 'strong', label: t.strengthStrong },
                       ] as Array<{ id: MagnetStrength; label: string }>
-                    ).map((item) => (
+                    ).map((st) => (
                       <button
-                        key={item.id}
+                        key={st.id}
                         type="button"
-                        className={`seg-pill ${
-                          snapSettings.magnetStrength === item.id ? 'active' : ''
+                        className={`sub-chip ${
+                          snapSettings.magnetStrength === st.id ? 'active' : ''
                         }`}
-                        onClick={() =>
-                          onUpdateSnap({
-                            enabled: true,
-                            magnetStrength: item.id,
-                          })
-                        }
+                        onClick={() => onUpdateSnap({ magnetStrength: st.id })}
                       >
-                        {item.label}
+                        {st.label}
                       </button>
                     ))}
                   </div>
                 )}
               </div>
 
-              <button
-                type="button"
-                className={`snap-option-row ${snapSettings.alignment ? 'checked' : ''}`}
-                onClick={() =>
-                  onUpdateSnap({ enabled: true, alignment: !snapSettings.alignment })
-                }
+              <div
+                className={`snap-mode-card ${
+                  snapSettings.alignment ? 'selected' : ''
+                }`}
               >
-                <div className="snap-option-text">
-                  <strong>Garis Sejajar (Alignment)</strong>
-                  <span>Garis bantu laser saat lurus tengah/tepi dengan objek jauh</span>
-                </div>
-                <span className="snap-check-box">
-                  {snapSettings.alignment && <Check size={13} />}
-                </span>
-              </button>
-
-              <div className="snap-subblock">
                 <button
                   type="button"
-                  className={`snap-option-row compact ${
-                    snapSettings.grid ? 'checked' : ''
-                  }`}
+                  className="snap-mode-row"
                   onClick={() =>
-                    onUpdateSnap({ enabled: true, grid: !snapSettings.grid })
+                    onUpdateSnap({ alignment: !snapSettings.alignment })
                   }
                 >
-                  <div className="snap-option-text">
-                    <strong>Snap Grid ({snapSettings.gridStep}m)</strong>
-                    <span>Kunci langkah geser & skala ke ukuran petak grid</span>
+                  <span className="snap-check-box">
+                    {snapSettings.alignment && <Check size={13} />}
+                  </span>
+                  <div className="snap-mode-info">
+                    <strong>{t.snapAlignTitle}</strong>
+                    <small>{t.snapAlignDesc}</small>
                   </div>
+                </button>
+              </div>
+
+              <div
+                className={`snap-mode-card ${snapSettings.grid ? 'selected' : ''}`}
+              >
+                <button
+                  type="button"
+                  className="snap-mode-row"
+                  onClick={() => onUpdateSnap({ grid: !snapSettings.grid })}
+                >
                   <span className="snap-check-box">
                     {snapSettings.grid && <Check size={13} />}
                   </span>
+                  <div className="snap-mode-info">
+                    <strong>{t.snapGridTitle}</strong>
+                    <small>{t.snapGridDesc}</small>
+                  </div>
                 </button>
+
                 {snapSettings.grid && (
-                  <div className="segmented-pills">
-                    {[0.1, 0.25, 0.5, 1.0, 2.0].map((step) => (
+                  <div className="snap-sub-chips">
+                    {[0.1, 0.25, 0.5, 1.0].map((st) => (
                       <button
-                        key={step}
+                        key={st}
                         type="button"
-                        className={`seg-pill ${
-                          Math.abs(snapSettings.gridStep - step) < 0.001 ? 'active' : ''
+                        className={`sub-chip ${
+                          Math.abs(snapSettings.gridStep - st) < 0.001
+                            ? 'active'
+                            : ''
                         }`}
-                        onClick={() =>
-                          onUpdateSnap({ enabled: true, gridStep: step })
-                        }
+                        onClick={() => onUpdateSnap({ gridStep: st })}
                       >
-                        {step}m
+                        {st}m
                       </button>
                     ))}
                   </div>
@@ -491,145 +517,130 @@ export const TopBar: React.FC<TopBarProps> = ({
             </PortalDropdown>
           </div>
 
-          {/* 2. Surface Alignment Split Button */}
+          {/* Surface Alignment Popover */}
           <div className="dropdown-wrap" ref={surfaceRef}>
-            <div className="split-btn">
-              <button
-                type="button"
-                className={`chip-btn ${surfaceSettings.enabled ? 'active-emerald' : ''}`}
-                onClick={() =>
-                  onUpdateSurface({ enabled: !surfaceSettings.enabled }, false)
-                }
-                title="Aktifkan / Matikan Fitur Surface Alignment & Terrain Conforming (T)"
-              >
-                <Layers size={15} />
-                <span>{t.surface}</span>
-              </button>
-              <button
-                type="button"
-                className={`chip-caret ${
-                  surfaceSettings.enabled ? 'active-emerald' : ''
-                }`}
-                onClick={() => toggleMenu('surface')}
-                aria-label="Pengaturan Surface Alignment & Terrain Conforming"
-                title="Atur Align to Surface Normal, Sisi Tempel & Terrain Conforming"
-              >
-                <ChevronDown size={13} />
-              </button>
-            </div>
+            <button
+              type="button"
+              className={`chip-btn ${
+                surfaceSettings.enabled || surfaceSettings.clickToPlace
+                  ? 'active'
+                  : ''
+              }`}
+              onClick={() => toggleMenu('surface')}
+              title={`${t.surfaceSystemTitle} (T)`}
+            >
+              <Layers size={15} />
+              <span>{t.surface}</span>
+              <ChevronDown size={13} />
+            </button>
 
             <PortalDropdown
               open={openMenu === 'surface'}
               anchorRef={surfaceRef}
               onClose={() => setOpenMenu(null)}
-              className="surface-popover"
+              className="snap-popover surface-popover"
             >
               <div className="snap-popover-head">
-                <span>Surface Alignment & Terrain</span>
+                <span>{t.surfaceSystemTitle}</span>
                 <button
                   type="button"
-                  className={`mini-toggle-pill emerald ${
+                  className={`mini-master-toggle ${
                     surfaceSettings.enabled ? 'on' : ''
                   }`}
                   onClick={() =>
-                    onUpdateSurface({ enabled: !surfaceSettings.enabled }, false)
+                    onUpdateSurface({ enabled: !surfaceSettings.enabled })
                   }
                 >
-                  {surfaceSettings.enabled ? 'Aktif' : 'Nonaktif'}
+                  {surfaceSettings.enabled ? t.activeState : t.inactiveState}
                 </button>
               </div>
 
-              <div className="snap-subblock">
-                <div className="grid-section-title">Mode Orientasi Permukaan</div>
-                <div className="surface-mode-cards">
-                  {(
-                    [
-                      {
-                        id: 'align-normal',
-                        title: 'Ikuti Normal (Align Normal)',
-                        sub: 'Miring presisi mengikuti kemiringan atap, dinding, kubah & bukit',
-                      },
-                      {
-                        id: 'upright-follow',
-                        title: 'Tegak Ikuti Kontur',
-                        sub: 'Tetap berdiri tegak lurus sambil mengikuti tinggi permukaan / tanah',
-                      },
-                      {
-                        id: 'foundation-seat',
-                        title: 'Fondasi Lereng (Anti-Melayang)',
-                        sub: 'Tanam sudut tapak terendah bangunan ke lereng miring',
-                      },
-                    ] as Array<{
-                      id: SurfaceConformMode;
-                      title: string;
-                      sub: string;
-                    }>
-                  ).map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`surface-mode-card ${
-                        surfaceSettings.conformMode === item.id ? 'active' : ''
-                      }`}
-                      onClick={() =>
-                        onUpdateSurface(
-                          { enabled: true, conformMode: item.id },
-                          true
-                        )
-                      }
-                    >
-                      <div className="surface-card-head">
-                        <strong>{item.title}</strong>
-                        {surfaceSettings.conformMode === item.id && (
-                          <Check size={13} />
-                        )}
-                      </div>
-                      <small>{item.sub}</small>
-                    </button>
-                  ))}
+              <div className="grid-section-label">{t.surfaceOrientSection}</div>
+              {(
+                [
+                  {
+                    id: 'align-normal',
+                    title: t.surfModeNormalTitle,
+                    desc: t.surfModeNormalDesc,
+                  },
+                  {
+                    id: 'upright-follow',
+                    title: t.surfModeUprightTitle,
+                    desc: t.surfModeUprightDesc,
+                  },
+                  {
+                    id: 'foundation-seat',
+                    title: t.surfModeFoundationTitle,
+                    desc: t.surfModeFoundationDesc,
+                  },
+                ] as Array<{
+                  id: SurfaceConformMode;
+                  title: string;
+                  desc: string;
+                }>
+              ).map((m) => (
+                <div
+                  key={m.id}
+                  className={`snap-mode-card ${
+                    surfaceSettings.conformMode === m.id ? 'selected' : ''
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="snap-mode-row"
+                    onClick={() =>
+                      onUpdateSurface(
+                        { enabled: true, conformMode: m.id },
+                        true
+                      )
+                    }
+                  >
+                    <span className="snap-check-box">
+                      {surfaceSettings.conformMode === m.id && (
+                        <Check size={13} />
+                      )}
+                    </span>
+                    <div className="snap-mode-info">
+                      <strong>{m.title}</strong>
+                      <small>{m.desc}</small>
+                    </div>
+                  </button>
                 </div>
+              ))}
+
+              <div className="grid-section-label">{t.surfAttachFaceSection}</div>
+              <div className="snap-sub-chips" style={{ paddingLeft: 0 }}>
+                {(
+                  [
+                    { id: 'auto', label: t.surfAttachAuto },
+                    { id: '-y', label: t.surfAttachBottom },
+                    { id: '-z', label: t.surfAttachBack },
+                    { id: '+y', label: t.surfAttachTop },
+                  ] as Array<{ id: SurfaceAttachAxis; label: string }>
+                ).map((ax) => (
+                  <button
+                    key={ax.id}
+                    type="button"
+                    className={`sub-chip ${
+                      surfaceSettings.attachAxis === ax.id ? 'active' : ''
+                    }`}
+                    onClick={() =>
+                      onUpdateSurface({ attachAxis: ax.id }, true)
+                    }
+                  >
+                    {ax.label}
+                  </button>
+                ))}
               </div>
 
-              {surfaceSettings.conformMode === 'align-normal' && (
-                <div className="snap-subblock">
-                  <div className="grid-section-title">
-                    Sisi Objek yang Menempel ke Permukaan
-                  </div>
-                  <div className="segmented-pills">
-                    {(
-                      [
-                        { id: 'auto', label: 'Pintar' },
-                        { id: '-y', label: 'Alas (-Y)' },
-                        { id: '-z', label: 'Belakang (-Z)' },
-                        { id: '+y', label: 'Atas (+Y)' },
-                      ] as Array<{ id: SurfaceAttachAxis; label: string }>
-                    ).map((ax) => (
-                      <button
-                        key={ax.id}
-                        type="button"
-                        className={`seg-pill ${
-                          surfaceSettings.attachAxis === ax.id ? 'active' : ''
-                        }`}
-                        onClick={() =>
-                          onUpdateSurface(
-                            { enabled: true, attachAxis: ax.id },
-                            true
-                          )
-                        }
-                      >
-                        {ax.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="snap-subblock">
+              <div
+                className={`snap-mode-card ${
+                  surfaceSettings.autoOnMove ? 'selected' : ''
+                }`}
+              >
                 <button
                   type="button"
-                  className={`snap-option-row compact ${
-                    surfaceSettings.autoOnMove ? 'checked' : ''
-                  }`}
+                  className="snap-mode-row"
                   onClick={() =>
                     onUpdateSurface({
                       enabled: true,
@@ -637,22 +648,24 @@ export const TopBar: React.FC<TopBarProps> = ({
                     })
                   }
                 >
-                  <div className="snap-option-text">
-                    <strong>Ikuti Otomatis saat Geser</strong>
-                    <span>
-                      Seret objek terpilih atau panah XZ untuk meluncur mengikuti permukaan
-                    </span>
-                  </div>
                   <span className="snap-check-box">
                     {surfaceSettings.autoOnMove && <Check size={13} />}
                   </span>
+                  <div className="snap-mode-info">
+                    <strong>{t.surfAutoMoveTitle}</strong>
+                    <small>{t.surfAutoMoveDesc}</small>
+                  </div>
                 </button>
+              </div>
 
+              <div
+                className={`snap-mode-card ${
+                  surfaceSettings.clickToPlace ? 'selected' : ''
+                }`}
+              >
                 <button
                   type="button"
-                  className={`snap-option-row compact ${
-                    surfaceSettings.clickToPlace ? 'checked' : ''
-                  }`}
+                  className="snap-mode-row"
                   onClick={() =>
                     onUpdateSurface({
                       enabled: true,
@@ -660,73 +673,46 @@ export const TopBar: React.FC<TopBarProps> = ({
                     })
                   }
                 >
-                  <div className="snap-option-text">
-                    <strong>Klik Target Permukaan (1-Tap Place)</strong>
-                    <span>
-                      Ketuk bidang atap/dinding/bukit mana saja untuk memindahkan objek terpilih ke sana
-                    </span>
-                  </div>
                   <span className="snap-check-box">
                     {surfaceSettings.clickToPlace && <Check size={13} />}
                   </span>
+                  <div className="snap-mode-info">
+                    <strong>{t.surfClickPlaceTitle}</strong>
+                    <small>{t.surfClickPlaceDesc}</small>
+                  </div>
                 </button>
               </div>
 
-              <div className="snap-subblock">
-                <div className="grid-row-between">
-                  <span className="grid-section-title">
-                    Putar di Permukaan: <b>{surfaceSettings.spinDeg}°</b>
-                  </span>
-                  <div className="mini-preset-btns">
-                    {[0, 90, 180, -90].map((deg) => (
-                      <button
-                        key={deg}
-                        type="button"
-                        className={`mini-floor-btn ${
-                          surfaceSettings.spinDeg === deg ? 'active' : ''
-                        }`}
-                        onClick={() =>
-                          onUpdateSurface({ spinDeg: deg }, true)
-                        }
-                      >
-                        {deg}°
-                      </button>
-                    ))}
-                  </div>
+              <div className="grid-slider-row">
+                <div className="grid-slider-head">
+                  <span>{t.surfSpinLabel}</span>
+                  <strong>{Math.round(surfaceSettings.spinDeg)}°</strong>
                 </div>
                 <input
                   type="range"
-                  className="studio-range"
                   min={-180}
                   max={180}
                   step={15}
                   value={surfaceSettings.spinDeg}
                   onChange={(e) =>
                     onUpdateSurface(
-                      { spinDeg: parseInt(e.target.value, 10) },
+                      { spinDeg: parseFloat(e.target.value) },
                       true
                     )
                   }
                 />
+              </div>
 
-                <div className="grid-row-between" style={{ marginTop: 8 }}>
-                  <span className="grid-section-title">
-                    Offset Jarak Normal: <b>{surfaceSettings.offset.toFixed(2)}m</b>
-                  </span>
-                  <button
-                    type="button"
-                    className="mini-floor-btn"
-                    onClick={() => onUpdateSurface({ offset: 0 }, true)}
-                  >
-                    Reset 0m
-                  </button>
+              <div className="grid-slider-row">
+                <div className="grid-slider-head">
+                  <span>{t.surfOffsetLabel}</span>
+                  <strong>{surfaceSettings.offset.toFixed(2)}m</strong>
                 </div>
                 <input
                   type="range"
-                  className="studio-range"
-                  min={-0.2}
-                  max={0.3}
-                  step={0.02}
+                  min={-0.3}
+                  max={0.5}
+                  step={0.01}
                   value={surfaceSettings.offset}
                   onChange={(e) =>
                     onUpdateSurface(
@@ -747,162 +733,331 @@ export const TopBar: React.FC<TopBarProps> = ({
                 }}
               >
                 <ArrowDownToLine size={15} />
-                <span>Tempel Objek Terpilih ke Bawah Sekarang</span>
+                <span>{t.surfConformNowCta}</span>
               </button>
             </PortalDropdown>
           </div>
 
-          {/* 3. World / Tile / Terrain Grid Split Button */}
+          {/* Advanced Architectural Grid & Guides Popover */}
           <div className="dropdown-wrap" ref={gridRef}>
-            <div className="split-btn">
-              <button
-                type="button"
-                className={`chip-btn ${
-                  gridSettings.visible
-                    ? gridSettings.style === 'terrain'
-                      ? 'active-emerald'
-                      : 'active-subtle'
-                    : ''
-                }`}
-                onClick={() => onUpdateGrid({ visible: !gridSettings.visible })}
-                title="Tampilkan / Sembunyikan World Grid & Terrain"
-              >
-                {gridSettings.style === 'terrain' ? (
-                  <Mountain size={15} />
-                ) : (
-                  <Grid3x3 size={15} />
-                )}
-                <span>
-                  {gridSettings.style === 'terrain'
-                    ? 'Terrain'
-                    : gridSettings.style === 'tile'
-                    ? 'Tile'
-                    : t.grid}
-                </span>
-                <span className="grid-step-tag">{gridSettings.spacing}m</span>
-              </button>
-              <button
-                type="button"
-                className={`chip-caret ${
-                  gridSettings.visible
-                    ? gridSettings.style === 'terrain'
-                      ? 'active-emerald'
-                      : 'active-subtle'
-                    : ''
-                }`}
-                onClick={() => toggleMenu('grid')}
-                aria-label="Pengaturan World Grid, Tile Grid & Terrain Grid"
-                title="Atur Gaya Grid, Spasi Petak, Tile & 3D Terrain"
-              >
-                <ChevronDown size={13} />
-              </button>
-            </div>
+            <button
+              type="button"
+              className={`chip-btn ${gridSettings.visible ? 'active' : ''}`}
+              onClick={() => toggleMenu('grid')}
+              title={t.gridSystemTitle}
+            >
+              {gridSettings.style === 'terrain' ? (
+                <Mountain size={15} />
+              ) : (
+                <Grid3x3 size={15} />
+              )}
+              <span>{t.grid}</span>
+              <span className="mini-badge">{gridSettings.spacing}m</span>
+              <ChevronDown size={13} />
+            </button>
 
             <PortalDropdown
               open={openMenu === 'grid'}
               anchorRef={gridRef}
               onClose={() => setOpenMenu(null)}
-              className="grid-popover"
+              className="snap-popover grid-popover"
             >
               <div className="snap-popover-head">
-                <span>World, Tile & Terrain Grid</span>
+                <span>{t.gridSystemTitle}</span>
                 <button
                   type="button"
-                  className={`mini-toggle-pill ${gridSettings.visible ? 'on' : ''}`}
-                  onClick={() => onUpdateGrid({ visible: !gridSettings.visible })}
+                  className={`mini-master-toggle ${
+                    gridSettings.visible ? 'on' : ''
+                  }`}
+                  onClick={() =>
+                    onUpdateGrid({ visible: !gridSettings.visible })
+                  }
                 >
-                  {gridSettings.visible ? 'Tampil' : 'Sembunyi'}
+                  {gridSettings.visible ? t.visibleState : t.hiddenState}
                 </button>
               </div>
 
-              <div className="snap-subblock">
-                <div className="grid-section-title">Gaya Lantai & Grid</div>
-                <div className="grid-style-cards">
-                  {(
-                    [
-                      { id: 'wire', title: 'World Grid', sub: 'Garis standar' },
-                      { id: 'tile', title: 'Tile Grid', sub: 'Ubin arsitektur' },
-                      { id: 'blueprint', title: 'Blueprint', sub: 'CAD biru teknis' },
-                      { id: 'terrain', title: 'Terrain 3D', sub: 'Kontur tanah' },
-                    ] as Array<{ id: GridStyle; title: string; sub: string }>
-                  ).map((st) => (
-                    <button
-                      key={st.id}
-                      type="button"
-                      className={`grid-style-card ${
-                        gridSettings.style === st.id ? 'active' : ''
-                      }`}
-                      onClick={() =>
-                        onUpdateGrid({ visible: true, style: st.id })
-                      }
-                    >
-                      <strong>{st.title}</strong>
-                      <small>{st.sub}</small>
-                    </button>
-                  ))}
-                </div>
+              {/* 1. Precision Cell Size + Sync Snap */}
+              <div className="grid-section-row">
+                <span className="grid-section-label">
+                  {t.gridCellSizeSection}
+                </span>
+                <button
+                  type="button"
+                  className="grid-inline-action"
+                  onClick={() => {
+                    onUpdateGrid({ syncSnap: true });
+                    onUpdateSnap({
+                      enabled: true,
+                      grid: true,
+                      gridStep: gridSettings.spacing,
+                    });
+                  }}
+                >
+                  {t.gridSyncSnapBtn} ({gridSettings.spacing}m)
+                </button>
               </div>
-
-              <div className="snap-subblock">
-                <div className="grid-row-between">
-                  <span className="grid-section-title">
-                    Spasi Petak Grid: <b>{gridSettings.spacing}m</b>
-                  </span>
+              <div className="snap-sub-chips" style={{ paddingLeft: 0 }}>
+                {[0.1, 0.25, 0.5, 1.0].map((cell) => (
                   <button
+                    key={cell}
                     type="button"
-                    className={`mini-link-pill ${gridSettings.syncSnap ? 'active' : ''}`}
-                    onClick={() => onUpdateGrid({ syncSnap: !gridSettings.syncSnap })}
-                    title="Otomatis samakan langkah Snap Grid dengan spasi petak"
+                    className={`sub-chip ${
+                      Math.abs(gridSettings.spacing - cell) < 0.001
+                        ? 'active'
+                        : ''
+                    }`}
+                    onClick={() => {
+                      onUpdateGrid({ spacing: cell });
+                      if (snapSettings.grid || gridSettings.syncSnap) {
+                        onUpdateSnap({ gridStep: cell });
+                      }
+                    }}
                   >
-                    {gridSettings.syncSnap && <Check size={11} />}
-                    <span>Sinkron Snap</span>
+                    {cell}m
                   </button>
-                </div>
-
-                <div className="segmented-pills">
-                  {[0.25, 0.5, 1.0, 2.0].map((sp) => (
-                    <button
-                      key={sp}
-                      type="button"
-                      className={`seg-pill ${
-                        Math.abs(gridSettings.spacing - sp) < 0.001 ? 'active' : ''
-                      }`}
-                      onClick={() => onUpdateGrid({ spacing: sp })}
-                    >
-                      {sp}m
-                    </button>
-                  ))}
-                </div>
-
-                <input
-                  type="range"
-                  className="studio-range"
-                  min={0.1}
-                  max={2.5}
-                  step={0.05}
-                  value={gridSettings.spacing}
-                  onChange={(e) =>
-                    onUpdateGrid({ spacing: Number(e.target.value) })
-                  }
-                />
+                ))}
               </div>
 
+              {/* 2. Smart Architectural Measurement & Plot Guides */}
+              <div className="grid-section-label">
+                {t.gridSmartGuidesSection}
+              </div>
+
+              {/* Meter Coordinate Ruler */}
+              <div
+                className={`snap-mode-card ${
+                  gridSettings.showRuler ? 'selected' : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  className="snap-mode-row"
+                  onClick={() =>
+                    onUpdateGrid({ showRuler: !gridSettings.showRuler })
+                  }
+                >
+                  <span className="snap-check-box">
+                    {gridSettings.showRuler && <Check size={13} />}
+                  </span>
+                  <div className="snap-mode-info">
+                    <strong>
+                      <Ruler
+                        size={12}
+                        style={{ display: 'inline', marginRight: 5 }}
+                      />
+                      {t.gridRulerTitle}
+                    </strong>
+                    <small>{t.gridRulerDesc}</small>
+                  </div>
+                </button>
+              </div>
+
+              {/* Live Selected Object Footprint */}
+              <div
+                className={`snap-mode-card ${
+                  gridSettings.showSelectionFootprint ? 'selected' : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  className="snap-mode-row"
+                  onClick={() =>
+                    onUpdateGrid({
+                      showSelectionFootprint:
+                        !gridSettings.showSelectionFootprint,
+                    })
+                  }
+                >
+                  <span className="snap-check-box">
+                    {gridSettings.showSelectionFootprint && <Check size={13} />}
+                  </span>
+                  <div className="snap-mode-info">
+                    <strong>
+                      <ScanLine
+                        size={12}
+                        style={{ display: 'inline', marginRight: 5 }}
+                      />
+                      {t.gridFootprintTitle}
+                    </strong>
+                    <small>{t.gridFootprintDesc}</small>
+                  </div>
+                </button>
+              </div>
+
+              {/* Plot / Room Boundary Frame */}
+              <div
+                className={`snap-mode-card ${
+                  gridSettings.showPlotBoundary ? 'selected' : ''
+                }`}
+              >
+                <button
+                  type="button"
+                  className="snap-mode-row"
+                  onClick={() =>
+                    onUpdateGrid({
+                      showPlotBoundary: !gridSettings.showPlotBoundary,
+                    })
+                  }
+                >
+                  <span className="snap-check-box">
+                    {gridSettings.showPlotBoundary && <Check size={13} />}
+                  </span>
+                  <div className="snap-mode-info">
+                    <strong>
+                      <BoxSelect
+                        size={12}
+                        style={{ display: 'inline', marginRight: 5 }}
+                      />
+                      {t.gridPlotTitle}
+                    </strong>
+                    <small>{t.gridPlotDesc}</small>
+                  </div>
+                </button>
+
+                {gridSettings.showPlotBoundary && (
+                  <div className="grid-plot-config">
+                    <div className="snap-sub-chips" style={{ paddingLeft: 0 }}>
+                      {QUICK_PLOT_PRESETS.map((pr) => (
+                        <button
+                          key={pr.label}
+                          type="button"
+                          className={`sub-chip ${
+                            gridSettings.plotWidth === pr.w &&
+                            gridSettings.plotDepth === pr.d
+                              ? 'active'
+                              : ''
+                          }`}
+                          onClick={() =>
+                            onUpdateGrid({ plotWidth: pr.w, plotDepth: pr.d })
+                          }
+                        >
+                          {pr.label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="grid-plot-dims-row">
+                      <label className="grid-dim-field">
+                        <span>{t.gridPlotWidth}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={80}
+                          step={0.5}
+                          value={gridSettings.plotWidth}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
+                            if (Number.isFinite(v) && v >= 1) {
+                              onUpdateGrid({ plotWidth: Math.min(80, v) });
+                            }
+                          }}
+                        />
+                      </label>
+                      <span className="grid-dim-times">×</span>
+                      <label className="grid-dim-field">
+                        <span>{t.gridPlotDepth}</span>
+                        <input
+                          type="number"
+                          min={1}
+                          max={80}
+                          step={0.5}
+                          value={gridSettings.plotDepth}
+                          onChange={(e) => {
+                            const v = parseFloat(e.target.value);
+                            if (Number.isFinite(v) && v >= 1) {
+                              onUpdateGrid({ plotDepth: Math.min(80, v) });
+                            }
+                          }}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Vertical Wall Height Reference Grid */}
+              <div className="grid-section-label">{t.gridVertSection}</div>
+              <div className="snap-sub-chips" style={{ paddingLeft: 0 }}>
+                {(
+                  [
+                    { id: 'none', label: t.gridVertOff },
+                    { id: 'back', label: t.gridVertBack },
+                    { id: 'corner', label: t.gridVertCorner },
+                  ] as Array<{ id: GridVerticalMode; label: string }>
+                ).map((vm) => (
+                  <button
+                    key={vm.id}
+                    type="button"
+                    className={`sub-chip ${
+                      gridSettings.verticalGrid === vm.id ? 'active' : ''
+                    }`}
+                    onClick={() => onUpdateGrid({ verticalGrid: vm.id })}
+                  >
+                    {vm.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* 3. Visual Floor Style */}
+              <div className="grid-section-label">{t.gridStyleSection}</div>
+              <div className="grid-style-cards">
+                {(
+                  [
+                    {
+                      id: 'wire',
+                      label: t.gridStyleWire,
+                      sub: t.gridStyleWireSub,
+                    },
+                    {
+                      id: 'tile',
+                      label: t.gridStyleTile,
+                      sub: t.gridStyleTileSub,
+                    },
+                    {
+                      id: 'blueprint',
+                      label: t.gridStyleBlueprint,
+                      sub: t.gridStyleBlueprintSub,
+                    },
+                    {
+                      id: 'terrain',
+                      label: t.gridStyleTerrain,
+                      sub: t.gridStyleTerrainSub,
+                    },
+                  ] as Array<{ id: GridStyle; label: string; sub: string }>
+                ).map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    className={`grid-style-btn ${
+                      gridSettings.style === st.id ? 'active' : ''
+                    }`}
+                    onClick={() => onUpdateGrid({ style: st.id })}
+                  >
+                    <strong>{st.label}</strong>
+                    <small>{st.sub}</small>
+                  </button>
+                ))}
+              </div>
+
+              {/* 3D Terrain Sub-panel */}
               {gridSettings.style === 'terrain' && (
-                <div className="snap-subblock terrain-highlight-block">
-                  <div className="grid-section-title">Bentuk Kontur Terrain 3D</div>
-                  <div className="segmented-pills">
+                <div className="terrain-subpanel">
+                  <div className="grid-section-label">
+                    {t.terrainShapeSection}
+                  </div>
+                  <div className="snap-sub-chips" style={{ paddingLeft: 0 }}>
                     {(
                       [
-                        { id: 'hills', label: 'Bukit' },
-                        { id: 'valley', label: 'Lembah' },
-                        { id: 'terraced', label: 'Terasering' },
-                        { id: 'flat', label: 'Datar' },
+                        { id: 'hills', label: t.terrainHills },
+                        { id: 'valley', label: t.terrainValley },
+                        { id: 'terraced', label: t.terrainTerraced },
+                        { id: 'flat', label: t.terrainFlat },
                       ] as Array<{ id: TerrainPreset; label: string }>
                     ).map((tp) => (
                       <button
                         key={tp.id}
                         type="button"
-                        className={`seg-pill ${
+                        className={`sub-chip ${
                           gridSettings.terrainPreset === tp.id ? 'active' : ''
                         }`}
                         onClick={() => onUpdateGrid({ terrainPreset: tp.id })}
@@ -912,133 +1067,119 @@ export const TopBar: React.FC<TopBarProps> = ({
                     ))}
                   </div>
 
-                  <div className="grid-slider-pair">
-                    <label>
-                      <span>
-                        Tinggi Kontur ({gridSettings.terrainAmplitude.toFixed(1)}m)
-                      </span>
-                      <input
-                        type="range"
-                        className="studio-range"
-                        min={0.3}
-                        max={4.0}
-                        step={0.1}
-                        value={gridSettings.terrainAmplitude}
-                        onChange={(e) =>
-                          onUpdateGrid({ terrainAmplitude: Number(e.target.value) })
-                        }
-                      />
-                    </label>
+                  <div className="grid-slider-row">
+                    <div className="grid-slider-head">
+                      <span>{t.terrainHeightLabel}</span>
+                      <strong>
+                        {gridSettings.terrainAmplitude.toFixed(1)}m
+                      </strong>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={4}
+                      step={0.1}
+                      value={gridSettings.terrainAmplitude}
+                      onChange={(e) =>
+                        onUpdateGrid({
+                          terrainAmplitude: parseFloat(e.target.value),
+                        })
+                      }
+                    />
                   </div>
                 </div>
               )}
 
-              <div className="snap-subblock">
-                <div className="grid-two-col">
-                  <div>
-                    <div className="grid-section-title">Subdivisi Petak</div>
-                    <div className="segmented-pills">
-                      {[2, 4, 5, 10].map((sub) => (
-                        <button
-                          key={sub}
-                          type="button"
-                          className={`seg-pill ${
-                            gridSettings.subdivisions === sub ? 'active' : ''
-                          }`}
-                          onClick={() => onUpdateGrid({ subdivisions: sub })}
-                        >
-                          {sub}×
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="grid-section-title">Luas Dunia</div>
-                    <div className="segmented-pills">
-                      {[20, 40, 80, 120].map((ws) => (
-                        <button
-                          key={ws}
-                          type="button"
-                          className={`seg-pill ${
-                            gridSettings.worldSize === ws ? 'active' : ''
-                          }`}
-                          onClick={() => onUpdateGrid({ worldSize: ws })}
-                        >
-                          {ws}m
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="snap-subblock">
-                <div className="grid-row-between">
-                  <span className="grid-section-title">
-                    Elevasi Lantai Kerja (Y = {gridSettings.elevationY.toFixed(1)}m)
-                  </span>
-                  <div className="mini-preset-btns">
-                    {[
-                      { y: 0, label: 'Lt.1 (0m)' },
-                      { y: 3, label: 'Lt.2 (3m)' },
-                      { y: 6, label: 'Lt.3 (6m)' },
-                    ].map((lv) => (
+              {/* 4. Workplane Elevation + Match Object Base */}
+              <div className="grid-slider-row">
+                <div className="grid-slider-head">
+                  <span>{t.gridElevationLabel}</span>
+                  <div className="grid-elev-actions">
+                    <strong>{gridSettings.elevationY.toFixed(2)}m</strong>
+                    {hasSelection && (
                       <button
-                        key={lv.y}
                         type="button"
-                        className={`mini-floor-btn ${
-                          Math.abs(gridSettings.elevationY - lv.y) < 0.05 ? 'active' : ''
-                        }`}
-                        onClick={() => onUpdateGrid({ elevationY: lv.y })}
+                        className="grid-inline-action"
+                        onClick={onAlignGridToSelection}
                       >
-                        {lv.label}
+                        {t.gridFitObjectBaseBtn}
                       </button>
-                    ))}
+                    )}
+                    {Math.abs(gridSettings.elevationY) > 0.005 && (
+                      <button
+                        type="button"
+                        className="grid-inline-action subtle"
+                        onClick={() => onUpdateGrid({ elevationY: 0 })}
+                      >
+                        0m
+                      </button>
+                    )}
                   </div>
                 </div>
                 <input
                   type="range"
-                  className="studio-range"
                   min={-3}
-                  max={12}
-                  step={0.5}
+                  max={6}
+                  step={0.25}
                   value={gridSettings.elevationY}
                   onChange={(e) =>
-                    onUpdateGrid({ elevationY: Number(e.target.value) })
+                    onUpdateGrid({ elevationY: parseFloat(e.target.value) })
                   }
                 />
+              </div>
 
-                <div className="grid-footer-row">
-                  <button
-                    type="button"
-                    className={`mini-link-pill ${gridSettings.showAxes ? 'active' : ''}`}
-                    onClick={() => onUpdateGrid({ showAxes: !gridSettings.showAxes })}
-                  >
-                    {gridSettings.showAxes && <Check size={11} />}
-                    <span>{gridSettings.showAxes ? 'Sumbu X/Z Aktif' : 'Sumbu X/Z Mati'}</span>
-                  </button>
+              {/* 5. World Size & Axes / Opacity */}
+              <div className="grid-slider-row">
+                <div className="grid-slider-head">
+                  <span>{t.gridWorldSizeLabel}</span>
+                  <strong>
+                    {gridSettings.worldSize}×{gridSettings.worldSize}m
+                  </strong>
+                </div>
+                <div className="snap-sub-chips" style={{ paddingLeft: 0 }}>
+                  {[16, 28, 48, 80].map((sz) => (
+                    <button
+                      key={sz}
+                      type="button"
+                      className={`sub-chip ${
+                        gridSettings.worldSize === sz ? 'active' : ''
+                      }`}
+                      onClick={() => onUpdateGrid({ worldSize: sz })}
+                    >
+                      {sz}m
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-                  <label className="opacity-inline">
-                    <span>Opasitas</span>
-                    <input
-                      type="range"
-                      className="studio-range compact"
-                      min={0.2}
-                      max={1}
-                      step={0.05}
-                      value={gridSettings.opacity}
-                      onChange={(e) =>
-                        onUpdateGrid({ opacity: Number(e.target.value) })
-                      }
-                    />
-                  </label>
+              <div className="grid-footer-toggles">
+                <button
+                  type="button"
+                  className={`sub-chip ${gridSettings.showAxes ? 'active' : ''}`}
+                  onClick={() =>
+                    onUpdateGrid({ showAxes: !gridSettings.showAxes })
+                  }
+                >
+                  {gridSettings.showAxes ? t.gridAxesOn : t.gridAxesOff}
+                </button>
+                <div className="grid-opacity-inline">
+                  <span>{t.gridOpacityLabel}</span>
+                  <input
+                    type="range"
+                    min={0.15}
+                    max={1}
+                    step={0.05}
+                    value={gridSettings.opacity}
+                    onChange={(e) =>
+                      onUpdateGrid({ opacity: parseFloat(e.target.value) })
+                    }
+                  />
                 </div>
               </div>
             </PortalDropdown>
           </div>
 
-          {/* Interior Peek ("Intip Ruang") */}
+          {/* Interior Peek Cutaway */}
           <button
             type="button"
             className={`chip-btn ${interiorPeek ? 'active' : ''}`}
@@ -1049,7 +1190,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span>{t.peekInterior}</span>
           </button>
 
-          {/* First-Person Walkthrough ("Jalan Kaki") */}
+          {/* First-Person Walkthrough */}
           <button
             type="button"
             className={`chip-btn ${walkthroughActive ? 'active' : ''}`}
@@ -1065,10 +1206,10 @@ export const TopBar: React.FC<TopBarProps> = ({
             type="button"
             className="chip-btn"
             onClick={onFocusCamera}
-            title="Fokus ke Objek / Reset Kamera (F)"
+            title={`${t.focusBtn} (F)`}
           >
             <Focus size={15} />
-            <span>Fokus</span>
+            <span>{t.focusBtn}</span>
           </button>
 
           {/* Quick Camera Views */}
@@ -1077,10 +1218,10 @@ export const TopBar: React.FC<TopBarProps> = ({
               type="button"
               className="chip-btn"
               onClick={() => toggleMenu('view')}
-              title="Sudut Pandang Kamera"
+              title={t.quickCameraHeader}
             >
               <Camera size={15} />
-              <span>Sudut</span>
+              <span>{t.cameraViewsBtn}</span>
               <ChevronDown size={13} />
             </button>
 
@@ -1089,7 +1230,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               anchorRef={viewRef}
               onClose={() => setOpenMenu(null)}
             >
-              <div className="dropdown-label">Kamera Cepat</div>
+              <div className="dropdown-label">{t.quickCameraHeader}</div>
               <button
                 type="button"
                 className="dropdown-item"
@@ -1098,7 +1239,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   setOpenMenu(null);
                 }}
               >
-                <span>Perspektif 3D</span>
+                <span>{t.camPerspective}</span>
                 <kbd>0</kbd>
               </button>
               <button
@@ -1109,7 +1250,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   setOpenMenu(null);
                 }}
               >
-                <span>Tampak Depan (Z)</span>
+                <span>{t.camFront}</span>
                 <kbd>1</kbd>
               </button>
               <button
@@ -1120,7 +1261,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   setOpenMenu(null);
                 }}
               >
-                <span>Tampak Samping (X)</span>
+                <span>{t.camSide}</span>
                 <kbd>3</kbd>
               </button>
               <button
@@ -1131,7 +1272,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   setOpenMenu(null);
                 }}
               >
-                <span>Tampak Atas (Y)</span>
+                <span>{t.camTop}</span>
                 <kbd>7</kbd>
               </button>
             </PortalDropdown>
@@ -1181,7 +1322,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             className="primary-btn export-btn"
             onClick={() => toggleMenu('export')}
             disabled={objectCount === 0}
-            title="Export 3D (.glb / .gltf)"
+            title={t.exportFormatHeader}
           >
             <Download size={15} />
             <span className="hide-sm">{t.exportBtn}</span>
@@ -1194,7 +1335,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             onClose={() => setOpenMenu(null)}
             align="right"
           >
-            <div className="dropdown-label">Format File 3D</div>
+            <div className="dropdown-label">{t.exportFormatHeader}</div>
             <button
               type="button"
               className="dropdown-item"
@@ -1204,8 +1345,8 @@ export const TopBar: React.FC<TopBarProps> = ({
               }}
             >
               <div>
-                <strong>Ekspor .GLB</strong>
-                <div className="dropdown-sub">Biner tunggal (Blender, Godot, Unity)</div>
+                <strong>{t.exportGlbTitle}</strong>
+                <div className="dropdown-sub">{t.exportGlbSub}</div>
               </div>
             </button>
             <button
@@ -1217,8 +1358,8 @@ export const TopBar: React.FC<TopBarProps> = ({
               }}
             >
               <div>
-                <strong>Ekspor .GLTF</strong>
-                <div className="dropdown-sub">Format JSON standar glTF 2.0</div>
+                <strong>{t.exportGltfTitle}</strong>
+                <div className="dropdown-sub">{t.exportGltfSub}</div>
               </div>
             </button>
           </PortalDropdown>
@@ -1238,8 +1379,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           className={`icon-btn ${isFullscreen ? 'active' : ''}`}
           onClick={onToggleFullscreen}
-          title="Fullscreen"
-          aria-label="Fullscreen"
+          title={t.fullscreen}
+          aria-label={t.fullscreen}
         >
           {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
         </button>
@@ -1258,8 +1399,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           className={`icon-btn desktop-only ${inspectorOpen ? 'active' : ''}`}
           onClick={onToggleInspector}
-          title="Buka / Tutup Sidebar Properti"
-          aria-label="Panel Properti"
+          title={t.toggleRightPanel}
+          aria-label={t.toggleRightPanel}
         >
           <PanelRight size={16} />
         </button>
