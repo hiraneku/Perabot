@@ -11,21 +11,21 @@ import {
   Trash2,
   ChevronDown,
   Camera,
+  Check,
 } from 'lucide-react';
 import { CameraPresetType } from '../engine/viewportHelpers';
+import { ProximityStrength, SnapSettings } from '../types/studio';
 
 interface TopBarProps {
   canUndo: boolean;
   canRedo: boolean;
-  snapEnabled: boolean;
-  snapStep: number;
+  snapSettings: SnapSettings;
   gridVisible: boolean;
   inspectorOpen: boolean;
   objectCount: number;
   onUndo: () => void;
   onRedo: () => void;
-  onToggleSnap: () => void;
-  onChangeSnapStep: (step: number) => void;
+  onUpdateSnap: (patch: Partial<SnapSettings>) => void;
   onToggleGrid: () => void;
   onFocusCamera: () => void;
   onCameraPreset: (preset: CameraPresetType) => void;
@@ -38,15 +38,13 @@ interface TopBarProps {
 export const TopBar: React.FC<TopBarProps> = ({
   canUndo,
   canRedo,
-  snapEnabled,
-  snapStep,
+  snapSettings,
   gridVisible,
   inspectorOpen,
   objectCount,
   onUndo,
   onRedo,
-  onToggleSnap,
-  onChangeSnapStep,
+  onUpdateSnap,
   onToggleGrid,
   onFocusCamera,
   onCameraPreset,
@@ -78,6 +76,14 @@ export const TopBar: React.FC<TopBarProps> = ({
     window.addEventListener('pointerdown', handleClickOutside);
     return () => window.removeEventListener('pointerdown', handleClickOutside);
   }, []);
+
+  const activeSnapCount = [
+    snapSettings.magnetic,
+    snapSettings.edge,
+    snapSettings.alignment,
+    snapSettings.proximity,
+    snapSettings.grid,
+  ].filter(Boolean).length;
 
   return (
     <header className="topbar">
@@ -119,48 +125,183 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </div>
 
-      {/* Center: Viewport Helpers (Snap, Grid, Camera Views) */}
+      {/* Center: Smart Snapping Menu, Grid, Focus, Camera Views */}
       <div className="topbar-group topbar-center">
         <div className="dropdown-wrap" ref={snapRef}>
           <div className="split-btn">
             <button
               type="button"
-              className={`chip-btn ${snapEnabled ? 'active' : ''}`}
-              onClick={onToggleSnap}
-              title="Magnet Snap ke Grid"
+              className={`chip-btn ${snapSettings.enabled ? 'active' : ''}`}
+              onClick={() => onUpdateSnap({ enabled: !snapSettings.enabled })}
+              title="Aktifkan / Matikan Sistem Snap Pintar"
             >
               <Magnet size={15} />
-              <span className="hide-sm">Snap</span>
-              {snapEnabled && <span className="snap-badge">{snapStep}m</span>}
+              <span className="hide-xs">Snap</span>
+              {snapSettings.enabled && (
+                <span className="snap-badge">{activeSnapCount} Mode</span>
+              )}
             </button>
             <button
               type="button"
-              className={`chip-caret ${snapEnabled ? 'active' : ''}`}
+              className={`chip-caret ${snapSettings.enabled ? 'active' : ''}`}
               onClick={() => setSnapMenuOpen((v) => !v)}
-              aria-label="Ukuran Snap"
-              title="Atur jarak Snap"
+              aria-label="Pengaturan Snap Pintar"
+              title="Atur Magnetic, Edge, Alignment, Proximity & Grid Snap"
             >
               <ChevronDown size={13} />
             </button>
           </div>
 
           {snapMenuOpen && (
-            <div className="dropdown-menu">
-              <div className="dropdown-label">Jarak Snap Grid</div>
-              {[0.1, 0.25, 0.5, 1.0].map((step) => (
+            <div className="dropdown-menu snap-popover">
+              <div className="snap-popover-head">
+                <span>Sistem Snap Pintar</span>
                 <button
-                  key={step}
                   type="button"
-                  className={`dropdown-item ${snapStep === step ? 'selected' : ''}`}
-                  onClick={() => {
-                    onChangeSnapStep(step);
-                    setSnapMenuOpen(false);
-                  }}
+                  className={`mini-toggle-pill ${snapSettings.enabled ? 'on' : ''}`}
+                  onClick={() => onUpdateSnap({ enabled: !snapSettings.enabled })}
                 >
-                  <span>{step} meter</span>
-                  {snapStep === step && <span className="check-mark">Aktif</span>}
+                  {snapSettings.enabled ? 'Aktif' : 'Nonaktif'}
                 </button>
-              ))}
+              </div>
+
+              {/* 1. Magnetic Snapping */}
+              <button
+                type="button"
+                className={`snap-option-row ${snapSettings.magnetic ? 'checked' : ''}`}
+                onClick={() =>
+                  onUpdateSnap({ enabled: true, magnetic: !snapSettings.magnetic })
+                }
+              >
+                <div className="snap-option-text">
+                  <strong>Magnetic Snapping</strong>
+                  <span>Tempel rapat permukaan dinding, atap & lantai</span>
+                </div>
+                <span className="snap-check-box">
+                  {snapSettings.magnetic && <Check size={13} />}
+                </span>
+              </button>
+
+              {/* 2. Edge & Vertex Snapping */}
+              <button
+                type="button"
+                className={`snap-option-row ${snapSettings.edge ? 'checked' : ''}`}
+                onClick={() =>
+                  onUpdateSnap({ enabled: true, edge: !snapSettings.edge })
+                }
+              >
+                <div className="snap-option-text">
+                  <strong>Edge & Corner Snap</strong>
+                  <span>Kunci presisi ke garis tepi & titik sudut 3D</span>
+                </div>
+                <span className="snap-check-box">
+                  {snapSettings.edge && <Check size={13} />}
+                </span>
+              </button>
+
+              {/* 3. Alignment Snapping */}
+              <button
+                type="button"
+                className={`snap-option-row ${snapSettings.alignment ? 'checked' : ''}`}
+                onClick={() =>
+                  onUpdateSnap({ enabled: true, alignment: !snapSettings.alignment })
+                }
+              >
+                <div className="snap-option-text">
+                  <strong>Alignment Snapping</strong>
+                  <span>Garis bantu sejajar tengah & rata batas objek</span>
+                </div>
+                <span className="snap-check-box">
+                  {snapSettings.alignment && <Check size={13} />}
+                </span>
+              </button>
+
+              {/* 4. Proximity Snapping */}
+              <div className="snap-subblock">
+                <button
+                  type="button"
+                  className={`snap-option-row compact ${
+                    snapSettings.proximity ? 'checked' : ''
+                  }`}
+                  onClick={() =>
+                    onUpdateSnap({ enabled: true, proximity: !snapSettings.proximity })
+                  }
+                >
+                  <div className="snap-option-text">
+                    <strong>Proximity Snapping</strong>
+                    <span>Tarik otomatis saat mendekati objek sekitar</span>
+                  </div>
+                  <span className="snap-check-box">
+                    {snapSettings.proximity && <Check size={13} />}
+                  </span>
+                </button>
+                {snapSettings.proximity && (
+                  <div className="segmented-pills">
+                    {(
+                      [
+                        { id: 'subtle', label: 'Halus' },
+                        { id: 'normal', label: 'Normal' },
+                        { id: 'strong', label: 'Kuat' },
+                      ] as Array<{ id: ProximityStrength; label: string }>
+                    ).map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`seg-pill ${
+                          snapSettings.proximityStrength === item.id ? 'active' : ''
+                        }`}
+                        onClick={() =>
+                          onUpdateSnap({
+                            enabled: true,
+                            proximityStrength: item.id,
+                          })
+                        }
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 5. Snap to Grid */}
+              <div className="snap-subblock">
+                <button
+                  type="button"
+                  className={`snap-option-row compact ${
+                    snapSettings.grid ? 'checked' : ''
+                  }`}
+                  onClick={() =>
+                    onUpdateSnap({ enabled: true, grid: !snapSettings.grid })
+                  }
+                >
+                  <div className="snap-option-text">
+                    <strong>Snap to Grid</strong>
+                    <span>Kunci gerakan ke ukuran petak meter lantai</span>
+                  </div>
+                  <span className="snap-check-box">
+                    {snapSettings.grid && <Check size={13} />}
+                  </span>
+                </button>
+                {snapSettings.grid && (
+                  <div className="segmented-pills">
+                    {[0.1, 0.25, 0.5, 1.0].map((step) => (
+                      <button
+                        key={step}
+                        type="button"
+                        className={`seg-pill ${
+                          snapSettings.gridStep === step ? 'active' : ''
+                        }`}
+                        onClick={() =>
+                          onUpdateSnap({ enabled: true, gridStep: step })
+                        }
+                      >
+                        {step}m
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

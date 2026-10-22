@@ -1,5 +1,8 @@
 import * as THREE from 'three';
-import { TransformControls, TransformControlsGizmo } from 'three/examples/jsm/controls/TransformControls.js';
+import {
+  TransformControls,
+  TransformControlsGizmo,
+} from 'three/examples/jsm/controls/TransformControls.js';
 
 export type CameraPresetType = 'perspective' | 'front' | 'right' | 'top';
 
@@ -13,7 +16,6 @@ export function createFloorGrid(): THREE.Group {
   const group = new THREE.Group();
   group.name = '__studioFloor';
 
-  // Soft shadow-receiving plane
   const shadowGeo = new THREE.PlaneGeometry(80, 80);
   shadowGeo.rotateX(-Math.PI / 2);
   const shadowMat = new THREE.ShadowMaterial({
@@ -25,14 +27,14 @@ export function createFloorGrid(): THREE.Group {
   shadowPlane.receiveShadow = true;
   group.add(shadowPlane);
 
-  // Minor 0.5m grid (40m x 40m => 80 divisions)
+  // Minor 0.5m grid
   const minorGrid = new THREE.GridHelper(40, 80, '#252a36', '#212631');
   minorGrid.position.y = -0.001;
   (minorGrid.material as THREE.Material).transparent = true;
   (minorGrid.material as THREE.Material).opacity = 0.55;
   group.add(minorGrid);
 
-  // Major 1.0m grid (40m x 40m => 40 divisions)
+  // Major 1.0m grid
   const majorGrid = new THREE.GridHelper(40, 40, '#363f52', '#31394a');
   majorGrid.position.y = 0;
   (majorGrid.material as THREE.Material).transparent = true;
@@ -66,10 +68,12 @@ export function createFloorGrid(): THREE.Group {
 }
 
 /**
- * Tunes Three.js TransformControls to match Blender 4.x studio ergonomics:
- * - High-contrast luminous Red (#ff3b57), Green (#78e82c), Blue (#3898ff) axes
- * - Continuous bi-directional shafts connecting both positive & negative arrowheads
- *   (atas & bawah, kiri & kanan, depan & belakang)
+ * Tunes Three.js TransformControls for comfortable mobile & desktop architecture work:
+ * 1. Luminous Blender 4.x axis colors (#ff3b57 Red, #78e82c Green, #3898ff Blue)
+ * 2. Bi-directional shafts on Move arrows (+ and - arrowheads connected cleanly)
+ * 3. Controlled, non-chaotic Rotate Gizmo:
+ *    - Removes free-trackball (XYZE) and diagonal screen-ring (E) that cause crooked tilts
+ *    - Replaces half-arcs with clean full 360° X, Y, Z protractor rings + accurate touch pickers
  */
 export function enhanceTransformGizmo(controls: TransformControls): void {
   const root = controls.getHelper();
@@ -83,7 +87,52 @@ export function enhanceTransformGizmo(controls: TransformControls): void {
   const COLOR_Y = new THREE.Color('#78e82c');
   const COLOR_Z = new THREE.Color('#3898ff');
 
-  // Update colors across translate, rotate, and scale gizmos before first frame
+  // 1. Remove chaotic XYZE (free trackball) and E (view-plane ring) from rotate gizmo & picker
+  for (const rotContainer of [gizmoObj.gizmo.rotate, gizmoObj.picker.rotate]) {
+    const toRemove = rotContainer.children.filter(
+      (c) => c.name === 'XYZE' || c.name === 'E'
+    );
+    for (const item of toRemove) {
+      rotContainer.remove(item);
+      const m = item as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+    }
+  }
+
+  // 2. Upgrade X, Y, Z rotate rings to crisp full 360° circles
+  for (const child of gizmoObj.gizmo.rotate.children) {
+    const mesh = child as THREE.Mesh;
+    if (mesh.name === 'X' || mesh.name === 'Y' || mesh.name === 'Z') {
+      const oldGeo = mesh.geometry;
+      const fullRing = new THREE.TorusGeometry(0.5, 0.011, 8, 72, Math.PI * 2);
+      if (mesh.name === 'X') {
+        fullRing.rotateY(Math.PI / 2); // YZ plane
+      } else if (mesh.name === 'Y') {
+        fullRing.rotateX(Math.PI / 2); // XZ horizontal plane
+      }
+      // Z stays in XY plane
+      mesh.geometry = fullRing;
+      oldGeo.dispose();
+    }
+  }
+
+  // Refine rotate touch pickers so X, Y, Z rings are easy to grab without overlapping
+  for (const child of gizmoObj.picker.rotate.children) {
+    const mesh = child as THREE.Mesh;
+    if (mesh.name === 'X' || mesh.name === 'Y' || mesh.name === 'Z') {
+      const oldGeo = mesh.geometry;
+      const pickerRing = new THREE.TorusGeometry(0.5, 0.075, 6, 36, Math.PI * 2);
+      if (mesh.name === 'X') {
+        pickerRing.rotateY(Math.PI / 2);
+      } else if (mesh.name === 'Y') {
+        pickerRing.rotateX(Math.PI / 2);
+      }
+      mesh.geometry = pickerRing;
+      oldGeo.dispose();
+    }
+  }
+
+  // 3. Apply luminous Blender axis colors across translate, rotate, and scale
   const groups = [gizmoObj.gizmo.translate, gizmoObj.gizmo.rotate, gizmoObj.gizmo.scale];
   for (const grp of groups) {
     for (const child of grp.children) {
@@ -101,8 +150,7 @@ export function enhanceTransformGizmo(controls: TransformControls): void {
     }
   }
 
-  // Add matching negative-direction shafts on translate gizmo so both arrowheads
-  // (+0.5 and -0.5) are connected through the origin for X, Y, and Z
+  // 4. Add negative-direction shafts on translate gizmo so both + and - arrows connect cleanly
   const translateGroup = gizmoObj.gizmo.translate;
   const findAxisMaterial = (axisName: 'X' | 'Y' | 'Z'): THREE.Material | null => {
     const found = translateGroup.children.find((c) => c.name === axisName) as
@@ -119,7 +167,6 @@ export function enhanceTransformGizmo(controls: TransformControls): void {
     if (!mat) return;
 
     const shaftGeo = new THREE.CylinderGeometry(0.0085, 0.0085, 0.5, 8);
-    // Translate along -Y in local cylinder space, then bake axis rotation
     shaftGeo.translate(0, -0.25, 0);
     const rotMatrix = new THREE.Matrix4().makeRotationFromEuler(
       new THREE.Euler(rotation[0], rotation[1], rotation[2])
@@ -135,4 +182,104 @@ export function enhanceTransformGizmo(controls: TransformControls): void {
   addNegativeShaft('X', [0, 0, -Math.PI / 2]);
   addNegativeShaft('Y', [0, 0, 0]);
   addNegativeShaft('Z', [Math.PI / 2, 0, 0]);
+}
+
+/**
+ * Live 3D Protractor Sector & Degree Ticks shown while rotating an object,
+ * giving calm, clear visual feedback of exact swept rotation angle.
+ */
+export class RotationProtractorVisualizer {
+  public readonly group = new THREE.Group();
+  private tickLines: THREE.LineSegments;
+  private sectorMesh: THREE.Mesh;
+
+  constructor() {
+    this.group.name = '__rotationProtractor';
+    this.group.visible = false;
+    this.group.renderOrder = 995;
+
+    // Build 15° protractor ticks around a unit circle in XY plane
+    const tickPts: number[] = [];
+    for (let deg = 0; deg < 360; deg += 15) {
+      const rad = (deg * Math.PI) / 180;
+      const isMajor = deg % 90 === 0;
+      const isMid = deg % 45 === 0;
+      const inner = isMajor ? 0.82 : isMid ? 0.87 : 0.92;
+      const outer = 1.0;
+      tickPts.push(
+        Math.cos(rad) * inner,
+        Math.sin(rad) * inner,
+        0,
+        Math.cos(rad) * outer,
+        Math.sin(rad) * outer,
+        0
+      );
+    }
+    const tickGeo = new THREE.BufferGeometry();
+    tickGeo.setAttribute('position', new THREE.Float32BufferAttribute(tickPts, 3));
+    const tickMat = new THREE.LineBasicMaterial({
+      color: '#f8fafc',
+      transparent: true,
+      opacity: 0.55,
+      depthTest: false,
+      toneMapped: false,
+    });
+    this.tickLines = new THREE.LineSegments(tickGeo, tickMat);
+    this.tickLines.renderOrder = 996;
+    this.group.add(this.tickLines);
+
+    const sectorGeo = new THREE.RingGeometry(0.12, 0.98, 48, 1, 0, 0.001);
+    const sectorMat = new THREE.MeshBasicMaterial({
+      color: '#78e82c',
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.26,
+      depthTest: false,
+      toneMapped: false,
+    });
+    this.sectorMesh = new THREE.Mesh(sectorGeo, sectorMat);
+    this.sectorMesh.renderOrder = 995;
+    this.group.add(this.sectorMesh);
+  }
+
+  public show(
+    position: THREE.Vector3,
+    axis: 'X' | 'Y' | 'Z',
+    angleRad: number,
+    radiusScale = 1.05
+  ): void {
+    this.group.visible = true;
+    this.group.position.copy(position);
+    this.group.scale.setScalar(radiusScale);
+
+    // Orient XY-plane protractor perpendicular to active axis
+    if (axis === 'X') {
+      this.group.rotation.set(0, Math.PI / 2, 0);
+      (this.sectorMesh.material as THREE.MeshBasicMaterial).color.set('#ff3b57');
+    } else if (axis === 'Y') {
+      this.group.rotation.set(-Math.PI / 2, 0, 0);
+      (this.sectorMesh.material as THREE.MeshBasicMaterial).color.set('#78e82c');
+    } else {
+      this.group.rotation.set(0, 0, 0);
+      (this.sectorMesh.material as THREE.MeshBasicMaterial).color.set('#3898ff');
+    }
+
+    // Update swept sector geometry cleanly
+    const clamped = Math.max(-Math.PI * 2, Math.min(Math.PI * 2, angleRad));
+    const start = clamped >= 0 ? 0 : clamped;
+    const len = Math.max(0.002, Math.abs(clamped));
+    this.sectorMesh.geometry.dispose();
+    this.sectorMesh.geometry = new THREE.RingGeometry(0.12, 0.98, 48, 1, start, len);
+  }
+
+  public hide(): void {
+    this.group.visible = false;
+  }
+
+  public dispose(): void {
+    this.tickLines.geometry.dispose();
+    (this.tickLines.material as THREE.Material).dispose();
+    this.sectorMesh.geometry.dispose();
+    (this.sectorMesh.material as THREE.Material).dispose();
+  }
 }

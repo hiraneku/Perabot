@@ -7,12 +7,16 @@ import {
   CameraPresetType,
   createFloorGrid,
   enhanceTransformGizmo,
+  RotationProtractorVisualizer,
 } from './viewportHelpers';
 import { createPrimitiveGeometry, PRIMITIVE_META } from './primitives';
+import { SnappingEngine, SnapVisualizer } from './SnappingEngine';
 import {
+  DEFAULT_SNAP_SETTINGS,
   DragFeedback,
   PrimitiveKind,
   SceneObjectData,
+  SnapSettings,
   TransformMode,
   TransformSpace,
   Vec3,
@@ -21,6 +25,13 @@ import {
 interface HistorySnapshot {
   objects: SceneObjectData[];
   selectedId: string | null;
+}
+
+interface InternalTransformControls {
+  rotationAngle?: number;
+  rotationAxis?: THREE.Vector3;
+  _quaternionStart?: THREE.Quaternion;
+  _parentQuaternionInv?: THREE.Quaternion;
 }
 
 export interface StudioEngineCallbacks {
@@ -57,9 +68,14 @@ export class StudioEngine {
   private selectedId: string | null = null;
   private transformMode: TransformMode = 'translate';
   private transformSpace: TransformSpace = 'world';
-  private snapStep = 0.25;
+  private snapSettings: SnapSettings = { ...DEFAULT_SNAP_SETTINGS };
   private gridVisible = true;
   private floorGroup: THREE.Group;
+
+  private snappingEngine = new SnappingEngine();
+  private snapVisualizer = new SnapVisualizer();
+  private protractorVisualizer = new RotationProtractorVisualizer();
+  private isApplyingCustomTransform = false;
 
   private counters: Record<PrimitiveKind, number> = {
     cube: 0,
@@ -78,7 +94,6 @@ export class StudioEngine {
   private animationFrameId: number | null = null;
   private resizeObserver: ResizeObserver;
 
-  // Camera smooth transition state
   private cameraTween: {
     active: boolean;
     elapsed: number;
@@ -130,11 +145,13 @@ export class StudioEngine {
     this.floorGroup = createFloorGrid();
     this.scene.add(this.floorGroup);
 
-    // 6. User Objects Container
+    // 6. User Objects + Visual Snap & Protractor Overlays
     this.objectGroup.name = 'PerabotSceneObjects';
     this.scene.add(this.objectGroup);
+    this.scene.add(this.snapVisualizer.group);
+    this.scene.add(this.protractorVisualizer.group);
 
-    // 7. Orbit Controls (Desktop Mouse + Mobile Touch friendly)
+    // 7. Orbit Controls
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
     this.orbitControls.dampingFactor = 0.08;
@@ -147,7 +164,7 @@ export class StudioEngine {
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
 
-    // 8. Transform Controls (Blender-style Red / Green / Blue Arrows)
+    // 8. Transform Controls (Blender RGB Arrows + Controlled 360° Rotate Rings)
     this.transformControls = new TransformControls(
       this.camera,
       this.renderer.domElement
@@ -156,6 +173,7 @@ export class StudioEngine {
     this.transformControls.setSpace('world');
     this.updateGizmoResponsiveSize();
     enhanceTransformGizmo(this.transformControls);
+    this.applyControlSnapConfig();
     this.scene.add(this.transformControls.getHelper());
 
     this.transformControls.addEventListener('dragging-changed', (event) => {
@@ -164,6 +182,8 @@ export class StudioEngine {
       if (isDragging) {
         this.wasGizmoDragging = true;
       } else {
+        this.snapVisualizer.clear();
+        this.protractorVisualizer.hide();
         this.pushHistorySnapshot();
         this.emitDragFeedback(false);
         this.emitState();
@@ -171,33 +191,127 @@ export class StudioEngine {
     });
 
     this.transformControls.addEventListener('objectChange', () => {
-      this.emitDragFeedback(true);
-      this.emitState();
+      if (this.isApplyingCustomTransform) return;
+      this.handleGizmoObjectChange();
     });
 
-    // 9. Interactive 3D Axis ViewHelper (Blender corner navigation gizmo)
+    // 9. Interactive 3D Axis ViewHelper
     this.viewHelper = new ViewHelper(this.camera, this.renderer.domElement);
     this.viewHelper.setLabelStyle('bold 24px system-ui, sans-serif', '#0d1016', 16);
     this.viewHelper.setLabels('X', 'Y', 'Z');
     this.viewHelper.center.copy(this.orbitControls.target);
 
-    // 10. Pointer listeners for clean selection & ViewHelper clicks
+    // 10. Pointer listeners
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
 
-    // 11. Resize observer for responsive viewport layout
+    // 11. Resize observer
     this.resizeObserver = new ResizeObserver(() => {
       this.handleResize();
     });
     this.resizeObserver.observe(this.container);
 
-    // 12. Spawn initial default Cube (Blender-style starter block) with RGB arrows visible
+    // 12. Spawn initial default Cube
     this.spawnPrimitive('cube', false);
     this.pushHistorySnapshot();
     this.emitState();
 
     // 13. Start render loop
     this.animate();
+  }
+
+  private handleGizmoObjectChange(): void {
+    if (!this.selectedId) return;
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh) return;
+
+    const mode = this.transformControls.getMode();
+    const axis = this.transformControls.axis;
+
+    this.isApplyingCustomTransform = true;
+    try {
+      if (mode === 'translate') {
+        const rawPos = mesh.position.clone();
+        const others = Array.from(this.meshMap.values());
+        const snapRes = this.snappingEngine.computeSnap(
+          mesh,
+          rawPos,
+          axis,
+          others,
+          this.snapSettings
+        );
+        mesh.position.copy(snapRes.snappedPosition);
+        this.snapVisualizer.update(snapRes);
+        this.protractorVisualizer.hide();
+        this.emitDragFeedback(true, { snapLabel: snapRes.snapLabel });
+      } else if (mode === 'rotate') {
+        this.snapVisualizer.clear();
+        const internal = this.transformControls as unknown as InternalTransformControls;
+        const rawAngle = internal.rotationAngle ?? 0;
+        const startQuat = internal._quaternionStart;
+        const rotAxis = internal.rotationAxis;
+
+        // Controlled rotation: calm sensitivity (0.42x) + optional crisp degree snapping
+        let controlledAngle = rawAngle * 0.42;
+        const stepDeg = this.snapSettings.rotationSnapDeg;
+        if (stepDeg > 0) {
+          const stepRad = stepDeg * DEG2RAD;
+          controlledAngle = Math.round(controlledAngle / stepRad) * stepRad;
+        }
+
+        if (startQuat && rotAxis && (axis === 'X' || axis === 'Y' || axis === 'Z')) {
+          const deltaQ = new THREE.Quaternion().setFromAxisAngle(
+            rotAxis.clone().normalize(),
+            controlledAngle
+          );
+          if (this.transformSpace === 'local') {
+            mesh.quaternion.copy(startQuat).multiply(deltaQ).normalize();
+          } else {
+            mesh.quaternion.copy(deltaQ).multiply(startQuat).normalize();
+          }
+
+          const radiusScale =
+            Math.max(mesh.scale.x, mesh.scale.y, mesh.scale.z, 0.9) * 0.88;
+          this.protractorVisualizer.show(mesh.position, axis, controlledAngle, radiusScale);
+        }
+
+        const deltaDeg = Math.round(controlledAngle * RAD2DEG);
+        this.emitDragFeedback(true, {
+          deltaAngleDeg: deltaDeg,
+          snapLabel: stepDeg > 0 ? `Kunci Sudut ${stepDeg}°` : 'Putar Halus Bebas',
+        });
+      } else {
+        // scale mode
+        this.snapVisualizer.clear();
+        this.protractorVisualizer.hide();
+        mesh.scale.set(
+          Math.max(0.05, mesh.scale.x),
+          Math.max(0.05, mesh.scale.y),
+          Math.max(0.05, mesh.scale.z)
+        );
+        this.emitDragFeedback(true, {
+          snapLabel:
+            this.snapSettings.enabled && this.snapSettings.grid
+              ? `Skala Grid ${this.snapSettings.gridStep}m`
+              : null,
+        });
+      }
+    } finally {
+      this.isApplyingCustomTransform = false;
+    }
+
+    this.emitState();
+  }
+
+  private applyControlSnapConfig(): void {
+    // Translation & Rotation snapping are handled with higher intelligence in handleGizmoObjectChange
+    this.transformControls.setTranslationSnap(null);
+    this.transformControls.setRotationSnap(null);
+    if (this.snapSettings.enabled && this.snapSettings.grid) {
+      this.transformControls.setScaleSnap(this.snapSettings.gridStep);
+    } else {
+      this.transformControls.setScaleSnap(null);
+    }
   }
 
   private setupLighting(): void {
@@ -227,7 +341,7 @@ export class StudioEngine {
 
   private updateGizmoResponsiveSize(): void {
     const isCompact = window.innerWidth < 768 || 'ontouchstart' in window;
-    this.transformControls.setSize(isCompact ? 1.22 : 1.05);
+    this.transformControls.setSize(isCompact ? 1.24 : 1.08);
   }
 
   private handleResize = (): void => {
@@ -249,19 +363,16 @@ export class StudioEngine {
     const dy = event.clientY - this.pointerDownPos.y;
     const dist = Math.hypot(dx, dy);
 
-    // Ignore drags (camera orbit or gizmo transform drag)
     if (dist > 6 || this.wasGizmoDragging || this.transformControls.dragging) {
       this.wasGizmoDragging = false;
       return;
     }
 
-    // Check if user tapped the 3D Axis ViewHelper in bottom-right corner
     this.viewHelper.center.copy(this.orbitControls.target);
     if (this.viewHelper.handleClick(event as unknown as MouseEvent)) {
       return;
     }
 
-    // Raycast against scene meshes for selection
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -304,7 +415,6 @@ export class StudioEngine {
     if (!this.cameraTween) return;
     this.cameraTween.elapsed += delta;
     const rawT = Math.min(this.cameraTween.elapsed / this.cameraTween.duration, 1);
-    // Smooth cubic ease-out
     const t = 1 - Math.pow(1 - rawT, 3);
 
     this.camera.position.lerpVectors(this.cameraTween.fromPos, this.cameraTween.toPos, t);
@@ -322,7 +432,6 @@ export class StudioEngine {
   }
 
   private findCleanSpawnPosition(): Vec3 {
-    // Prefer center (0, 0.5, 0) if unoccupied; otherwise pick nearest clean grid slot
     const candidates: Array<[number, number]> = [
       [0, 0],
       [1.5, 0],
@@ -353,7 +462,6 @@ export class StudioEngine {
       }
     }
 
-    // Fallback spiral offset
     const idx = existing.length;
     const angle = idx * 0.9;
     const radius = 2 + Math.floor(idx / 6) * 1.5;
@@ -388,7 +496,6 @@ export class StudioEngine {
     this.objectGroup.add(mesh);
     this.meshMap.set(id, mesh);
 
-    // Ensure Move gizmo (Red, Green, Blue arrows) is active when spawning if currently in 'select'
     if (this.transformMode === 'select') {
       this.transformMode = 'translate';
       this.transformControls.setMode('translate');
@@ -428,7 +535,6 @@ export class StudioEngine {
       kind: data.kind,
     };
 
-    // Subtle architectural crease wireframe + selection outline child
     const edgesGeo = new THREE.EdgesGeometry(geometry, 24);
     const edgesMat = new THREE.LineBasicMaterial({
       color: '#0b0e14',
@@ -439,7 +545,7 @@ export class StudioEngine {
     const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat);
     edgeLines.name = '__selectionEdges';
     edgeLines.userData.isHelper = true;
-    edgeLines.raycast = () => {}; // Never intercept object raycast
+    edgeLines.raycast = () => {};
     mesh.add(edgeLines);
 
     return mesh;
@@ -467,6 +573,8 @@ export class StudioEngine {
       id = null;
     }
     this.selectedId = id;
+    this.snapVisualizer.clear();
+    this.protractorVisualizer.hide();
     this.updateSelectionHighlight();
 
     if (id && this.transformMode !== 'select') {
@@ -487,6 +595,8 @@ export class StudioEngine {
 
   public setTransformMode(mode: TransformMode): void {
     this.transformMode = mode;
+    this.snapVisualizer.clear();
+    this.protractorVisualizer.hide();
     if (mode === 'select') {
       this.transformControls.detach();
     } else {
@@ -515,17 +625,65 @@ export class StudioEngine {
     return this.transformSpace;
   }
 
-  public setSnap(enabled: boolean, step = this.snapStep): void {
-    this.snapStep = step;
-    if (enabled) {
-      this.transformControls.setTranslationSnap(step);
-      this.transformControls.setRotationSnap(15 * DEG2RAD);
-      this.transformControls.setScaleSnap(step);
+  public updateSnapSettings(patch: Partial<SnapSettings>): SnapSettings {
+    this.snapSettings = {
+      ...this.snapSettings,
+      ...patch,
+    };
+    this.applyControlSnapConfig();
+    return { ...this.snapSettings };
+  }
+
+  public getSnapSettings(): SnapSettings {
+    return { ...this.snapSettings };
+  }
+
+  /**
+   * Controlled step rotation around X, Y, or Z axis (e.g. -90°, -45°, +15°, +90°)
+   */
+  public rotateSelectedBy(axis: 'x' | 'y' | 'z', deltaDeg: number): boolean {
+    if (!this.selectedId) return false;
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh) return false;
+
+    const unitAxis =
+      axis === 'x'
+        ? new THREE.Vector3(1, 0, 0)
+        : axis === 'y'
+        ? new THREE.Vector3(0, 1, 0)
+        : new THREE.Vector3(0, 0, 1);
+
+    const q = new THREE.Quaternion().setFromAxisAngle(unitAxis, deltaDeg * DEG2RAD);
+    if (this.transformSpace === 'local') {
+      mesh.quaternion.multiply(q).normalize();
     } else {
-      this.transformControls.setTranslationSnap(null);
-      this.transformControls.setRotationSnap(null);
-      this.transformControls.setScaleSnap(null);
+      mesh.quaternion.premultiply(q).normalize();
     }
+
+    // Keep Euler values tidy (avoid -0 / 89.9998 floating noise)
+    mesh.rotation.set(
+      Math.round(mesh.rotation.x * RAD2DEG * 100) / 100 * DEG2RAD,
+      Math.round(mesh.rotation.y * RAD2DEG * 100) / 100 * DEG2RAD,
+      Math.round(mesh.rotation.z * RAD2DEG * 100) / 100 * DEG2RAD
+    );
+
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  /**
+   * Resets selected object's rotation cleanly back to upright (0°, 0°, 0°)
+   */
+  public resetSelectedRotation(): boolean {
+    if (!this.selectedId) return false;
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh) return false;
+
+    mesh.rotation.set(0, 0, 0);
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
   }
 
   public setGridVisible(visible: boolean): void {
@@ -569,39 +727,75 @@ export class StudioEngine {
     this.emitState();
   }
 
-  public dropSelectedToFloor(): void {
-    if (!this.selectedId) return;
-    const mesh = this.meshMap.get(this.selectedId);
-    if (!mesh) return;
-
-    // Compute world bounding box of geometry (excluding helper lines)
+  private computeWorldBounds(mesh: THREE.Mesh): THREE.Box3 {
     mesh.updateMatrixWorld(true);
     const geo = mesh.geometry;
     geo.computeBoundingBox();
-    if (!geo.boundingBox) return;
+    const bb = geo.boundingBox ?? new THREE.Box3();
+    const out = new THREE.Box3();
 
     const corners = [
-      new THREE.Vector3(geo.boundingBox.min.x, geo.boundingBox.min.y, geo.boundingBox.min.z),
-      new THREE.Vector3(geo.boundingBox.max.x, geo.boundingBox.min.y, geo.boundingBox.min.z),
-      new THREE.Vector3(geo.boundingBox.min.x, geo.boundingBox.min.y, geo.boundingBox.max.z),
-      new THREE.Vector3(geo.boundingBox.max.x, geo.boundingBox.min.y, geo.boundingBox.max.z),
-      new THREE.Vector3(geo.boundingBox.min.x, geo.boundingBox.max.y, geo.boundingBox.min.z),
-      new THREE.Vector3(geo.boundingBox.max.x, geo.boundingBox.max.y, geo.boundingBox.min.z),
-      new THREE.Vector3(geo.boundingBox.min.x, geo.boundingBox.max.y, geo.boundingBox.max.z),
-      new THREE.Vector3(geo.boundingBox.max.x, geo.boundingBox.max.y, geo.boundingBox.max.z),
+      new THREE.Vector3(bb.min.x, bb.min.y, bb.min.z),
+      new THREE.Vector3(bb.max.x, bb.min.y, bb.min.z),
+      new THREE.Vector3(bb.min.x, bb.min.y, bb.max.z),
+      new THREE.Vector3(bb.max.x, bb.min.y, bb.max.z),
+      new THREE.Vector3(bb.min.x, bb.max.y, bb.min.z),
+      new THREE.Vector3(bb.max.x, bb.max.y, bb.min.z),
+      new THREE.Vector3(bb.min.x, bb.max.y, bb.max.z),
+      new THREE.Vector3(bb.max.x, bb.max.y, bb.max.z),
     ];
 
-    let minY = Infinity;
     for (const c of corners) {
       c.applyMatrix4(mesh.matrixWorld);
-      if (c.y < minY) minY = c.y;
+      out.expandByPoint(c);
+    }
+    return out;
+  }
+
+  /**
+   * Drops selected object onto the highest surface directly beneath it,
+   * or onto the floor (Y=0) if nothing is underneath.
+   */
+  public dropSelectedToFloor(): string {
+    if (!this.selectedId) return '';
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh) return '';
+
+    const movBounds = this.computeWorldBounds(mesh);
+    let targetSurfaceY = 0;
+    let landedOnName: string | null = null;
+
+    for (const other of this.meshMap.values()) {
+      if (other === mesh || !other.visible) continue;
+      const otherBounds = this.computeWorldBounds(other);
+
+      const overlapX =
+        Math.min(movBounds.max.x, otherBounds.max.x) -
+        Math.max(movBounds.min.x, otherBounds.min.x);
+      const overlapZ =
+        Math.min(movBounds.max.z, otherBounds.max.z) -
+        Math.max(movBounds.min.z, otherBounds.min.z);
+
+      // Must overlap horizontally and sit below or barely touching moving object's bottom
+      if (
+        overlapX > 0.04 &&
+        overlapZ > 0.04 &&
+        otherBounds.max.y <= movBounds.min.y + 0.08 &&
+        otherBounds.max.y > targetSurfaceY
+      ) {
+        targetSurfaceY = otherBounds.max.y;
+        landedOnName = other.name;
+      }
     }
 
-    if (Number.isFinite(minY)) {
-      mesh.position.y -= minY;
-      this.pushHistorySnapshot();
-      this.emitState();
-    }
+    const deltaY = targetSurfaceY - movBounds.min.y;
+    mesh.position.y += deltaY;
+    this.pushHistorySnapshot();
+    this.emitState();
+
+    return landedOnName
+      ? `Ditempelkan tepat di atas ${landedOnName}`
+      : 'Ditempelkan ke lantai (Y=0)';
   }
 
   public updateObjectMaterial(
@@ -658,9 +852,9 @@ export class StudioEngine {
       id: newId,
       name: `${current.name} (Salinan)`,
       position: {
-        x: round3(current.position.x + 0.75),
+        x: round3(current.position.x + 1.0),
         y: current.position.y,
-        z: round3(current.position.z + 0.75),
+        z: round3(current.position.z),
       },
     };
 
@@ -693,6 +887,8 @@ export class StudioEngine {
 
   public clearScene(): void {
     this.transformControls.detach();
+    this.snapVisualizer.clear();
+    this.protractorVisualizer.hide();
     this.selectedId = null;
 
     for (const mesh of this.meshMap.values()) {
@@ -766,7 +962,6 @@ export class StudioEngine {
 
     for (const mesh of this.meshMap.values()) {
       if (!mesh.visible) continue;
-      // Clone mesh WITHOUT viewport selection wireframe helpers
       const cleanMesh = new THREE.Mesh(
         mesh.geometry.clone(),
         (mesh.material as THREE.MeshStandardMaterial).clone()
@@ -786,7 +981,6 @@ export class StudioEngine {
       onlyVisible: true,
     });
 
-    // Dispose temporary clones
     exportScene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;
@@ -856,7 +1050,6 @@ export class StudioEngine {
       selectedId: this.selectedId,
     };
 
-    // Trim future redo states if branching
     if (this.historyIndex < this.history.length - 1) {
       this.history = this.history.slice(0, this.historyIndex + 1);
     }
@@ -891,6 +1084,8 @@ export class StudioEngine {
 
   private restoreSnapshot(snapshot: HistorySnapshot): void {
     this.transformControls.detach();
+    this.snapVisualizer.clear();
+    this.protractorVisualizer.hide();
 
     for (const mesh of this.meshMap.values()) {
       this.disposeMesh(mesh);
@@ -914,7 +1109,10 @@ export class StudioEngine {
     this.emitState();
   }
 
-  private emitDragFeedback(active: boolean): void {
+  private emitDragFeedback(
+    active: boolean,
+    extra?: { deltaAngleDeg?: number; snapLabel?: string | null }
+  ): void {
     if (!active || !this.selectedId) {
       this.callbacks.onDragFeedback({
         active: false,
@@ -923,6 +1121,8 @@ export class StudioEngine {
         position: { x: 0, y: 0, z: 0 },
         rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
+        deltaAngleDeg: 0,
+        snapLabel: null,
       });
       return;
     }
@@ -937,6 +1137,8 @@ export class StudioEngine {
       position: obj.position,
       rotation: obj.rotation,
       scale: obj.scale,
+      deltaAngleDeg: extra?.deltaAngleDeg,
+      snapLabel: extra?.snapLabel ?? null,
     });
   }
 
@@ -975,6 +1177,8 @@ export class StudioEngine {
     this.transformControls.dispose();
     this.orbitControls.dispose();
     this.viewHelper.dispose();
+    this.snapVisualizer.dispose();
+    this.protractorVisualizer.dispose();
 
     for (const mesh of this.meshMap.values()) {
       this.disposeMesh(mesh);

@@ -4,6 +4,22 @@ export type TransformMode = 'select' | 'translate' | 'rotate' | 'scale';
 
 export type TransformSpace = 'world' | 'local';
 
+export type ProximityStrength = 'subtle' | 'normal' | 'strong';
+
+export type RotationSnapStep = 0 | 5 | 15 | 45 | 90;
+
+export interface SnapSettings {
+  enabled: boolean; // Master Smart Snap switch
+  grid: boolean; // Snap to Grid
+  gridStep: number; // 0.1 | 0.25 | 0.5 | 1.0 (meters)
+  magnetic: boolean; // Surface-to-surface flush contact & floor magnet
+  edge: boolean; // Corner vertex & edge midpoint snapping
+  alignment: boolean; // Smart alignment guides (center & flush bounds)
+  proximity: boolean; // Proximity threshold filtering & magnetic pull
+  proximityStrength: ProximityStrength;
+  rotationSnapDeg: RotationSnapStep; // Controlled rotation angle step
+}
+
 export interface Vec3 {
   x: number;
   y: number;
@@ -38,7 +54,27 @@ export interface DragFeedback {
   position: Vec3;
   rotation: Vec3;
   scale: Vec3;
+  deltaAngleDeg?: number;
+  snapLabel?: string | null;
 }
+
+export const DEFAULT_SNAP_SETTINGS: SnapSettings = {
+  enabled: true,
+  grid: true,
+  gridStep: 0.25,
+  magnetic: true,
+  edge: true,
+  alignment: true,
+  proximity: true,
+  proximityStrength: 'normal',
+  rotationSnapDeg: 15,
+};
+
+export const PROXIMITY_RADIUS_MAP: Record<ProximityStrength, number> = {
+  subtle: 0.12,
+  normal: 0.22,
+  strong: 0.36,
+};
 
 export const MATERIAL_PRESETS: MaterialPreset[] = [
   { id: 'plaster', label: 'Dinding Putih', color: '#e5e7eb', roughness: 0.78, metalness: 0.04 },

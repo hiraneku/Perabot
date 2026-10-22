@@ -3,9 +3,12 @@ import { StudioEngine } from './engine/StudioEngine';
 import { CameraPresetType } from './engine/viewportHelpers';
 import { PRIMITIVE_META } from './engine/primitives';
 import {
+  DEFAULT_SNAP_SETTINGS,
   DragFeedback,
   PrimitiveKind,
+  RotationSnapStep,
   SceneObjectData,
+  SnapSettings,
   TransformMode,
   TransformSpace,
   Vec3,
@@ -15,6 +18,7 @@ import { TransformToolbar } from './components/TransformToolbar';
 import { DesktopSpawnDock, MobileBottomBar } from './components/SpawnDock';
 import { InspectorPanel } from './components/InspectorPanel';
 import { HelpModal } from './components/HelpModal';
+import { RotationControlBar } from './components/RotationControlBar';
 
 export const App: React.FC = () => {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -27,8 +31,9 @@ export const App: React.FC = () => {
 
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [transformSpace, setTransformSpace] = useState<TransformSpace>('world');
-  const [snapEnabled, setSnapEnabled] = useState(false);
-  const [snapStep, setSnapStep] = useState(0.25);
+  const [snapSettings, setSnapSettings] = useState<SnapSettings>({
+    ...DEFAULT_SNAP_SETTINGS,
+  });
   const [gridVisible, setGridVisible] = useState(true);
 
   const [inspectorOpen, setInspectorOpen] = useState(true);
@@ -42,6 +47,8 @@ export const App: React.FC = () => {
     position: { x: 0, y: 0, z: 0 },
     rotation: { x: 0, y: 0, z: 0 },
     scale: { x: 1, y: 1, z: 1 },
+    deltaAngleDeg: 0,
+    snapLabel: null,
   });
 
   const [toast, setToast] = useState<string | null>(null);
@@ -57,7 +64,6 @@ export const App: React.FC = () => {
     }, 2200);
   }, []);
 
-  // Initialize Three.js StudioEngine
   useEffect(() => {
     const container = viewportRef.current;
     if (!container) return;
@@ -109,26 +115,38 @@ export const App: React.FC = () => {
     showToast(next === 'world' ? 'Mode Sumbu Global' : 'Mode Sumbu Lokal');
   }, [transformSpace, showToast]);
 
-  const handleToggleSnap = useCallback(() => {
+  const handleUpdateSnap = useCallback((patch: Partial<SnapSettings>) => {
     const engine = engineRef.current;
     if (!engine) return;
-    const next = !snapEnabled;
-    setSnapEnabled(next);
-    engine.setSnap(next, snapStep);
-    showToast(next ? `Snap Grid Aktif (${snapStep}m)` : 'Snap Grid Nonaktif');
-  }, [snapEnabled, snapStep, showToast]);
+    const next = engine.updateSnapSettings(patch);
+    setSnapSettings(next);
+  }, []);
 
-  const handleChangeSnapStep = useCallback(
-    (step: number) => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      setSnapStep(step);
-      setSnapEnabled(true);
-      engine.setSnap(true, step);
-      showToast(`Snap Grid diatur ke ${step}m`);
+  const handleChangeRotationSnap = useCallback(
+    (step: RotationSnapStep) => {
+      handleUpdateSnap({ rotationSnapDeg: step });
+      showToast(step > 0 ? `Kunci putaran ${step}°` : 'Putaran halus bebas');
+    },
+    [handleUpdateSnap, showToast]
+  );
+
+  const handleRotateStep = useCallback(
+    (axis: 'x' | 'y' | 'z', deltaDeg: number) => {
+      const ok = engineRef.current?.rotateSelectedBy(axis, deltaDeg);
+      if (ok) {
+        const sign = deltaDeg > 0 ? '+' : '';
+        showToast(`Diputar ${axis.toUpperCase()} ${sign}${deltaDeg}°`);
+      }
     },
     [showToast]
   );
+
+  const handleResetRotation = useCallback(() => {
+    const ok = engineRef.current?.resetSelectedRotation();
+    if (ok) {
+      showToast('Rotasi ditegakkan ke 0°');
+    }
+  }, [showToast]);
 
   const handleToggleGrid = useCallback(() => {
     const engine = engineRef.current;
@@ -217,11 +235,12 @@ export const App: React.FC = () => {
   }, [showToast]);
 
   const handleDropToFloor = useCallback(() => {
-    engineRef.current?.dropSelectedToFloor();
-    showToast('Ditempelkan ke lantai (Y=0)');
+    const msg = engineRef.current?.dropSelectedToFloor();
+    if (msg) {
+      showToast(msg);
+    }
   }, [showToast]);
 
-  // Blender-inspired Keyboard Shortcuts for Desktop testing
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -236,7 +255,6 @@ export const App: React.FC = () => {
 
       const key = e.key.toLowerCase();
 
-      // Undo / Redo
       if ((e.ctrlKey || e.metaKey) && key === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
@@ -252,7 +270,6 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Duplicate (Shift+D)
       if (e.shiftKey && key === 'd') {
         e.preventDefault();
         handleDuplicateSelected();
@@ -309,11 +326,16 @@ export const App: React.FC = () => {
     handleCameraPreset,
   ]);
 
-  const formatDragAxis = (axis: string | null) => {
+  const formatDragAxis = (axis: string | null, mode: string) => {
     if (!axis) return '';
-    if (axis === 'X') return 'Sumbu X (Merah • Samping)';
-    if (axis === 'Y') return 'Sumbu Y (Hijau • Atas/Bawah)';
-    if (axis === 'Z') return 'Sumbu Z (Biru • Depan/Belakang)';
+    if (mode === 'rotate') {
+      if (axis === 'X') return 'Putar Sumbu X';
+      if (axis === 'Y') return 'Putar Mendatar Y';
+      if (axis === 'Z') return 'Putar Sumbu Z';
+    }
+    if (axis === 'X') return 'Sumbu X (Merah)';
+    if (axis === 'Y') return 'Sumbu Y (Hijau)';
+    if (axis === 'Z') return 'Sumbu Z (Biru)';
     return `Bidang ${axis}`;
   };
 
@@ -322,15 +344,13 @@ export const App: React.FC = () => {
       <TopBar
         canUndo={canUndo}
         canRedo={canRedo}
-        snapEnabled={snapEnabled}
-        snapStep={snapStep}
+        snapSettings={snapSettings}
         gridVisible={gridVisible}
         inspectorOpen={inspectorOpen}
         objectCount={objects.length}
         onUndo={() => engineRef.current?.undo()}
         onRedo={() => engineRef.current?.redo()}
-        onToggleSnap={handleToggleSnap}
-        onChangeSnapStep={handleChangeSnapStep}
+        onUpdateSnap={handleUpdateSnap}
         onToggleGrid={handleToggleGrid}
         onFocusCamera={handleFocusCamera}
         onCameraPreset={handleCameraPreset}
@@ -341,11 +361,9 @@ export const App: React.FC = () => {
       />
 
       <main className="workspace-main">
-        {/* 3D Viewport Area */}
         <div className="viewport-area">
           <div ref={viewportRef} className="viewport-canvas-host" />
 
-          {/* Left Floating Blender-style Transform Toolbar */}
           <TransformToolbar
             mode={transformMode}
             space={transformSpace}
@@ -357,12 +375,13 @@ export const App: React.FC = () => {
             onDelete={() => handleDeleteObject()}
           />
 
-          {/* Live Gizmo Drag Readout Pill (top-center of viewport) */}
+          {/* Live Gizmo + Smart Snap Readout Pill */}
           {dragFeedback.active && (
             <div className="drag-hud-pill" aria-live="polite">
               <span className="drag-hud-axis">
-                {formatDragAxis(dragFeedback.axis)}
+                {formatDragAxis(dragFeedback.axis, dragFeedback.mode)}
               </span>
+
               {dragFeedback.mode === 'translate' && (
                 <span className="drag-hud-coords">
                   <b className="txt-x">X {dragFeedback.position.x.toFixed(2)}m</b>
@@ -370,6 +389,7 @@ export const App: React.FC = () => {
                   <b className="txt-z">Z {dragFeedback.position.z.toFixed(2)}m</b>
                 </span>
               )}
+
               {dragFeedback.mode === 'scale' && (
                 <span className="drag-hud-coords">
                   <b className="txt-x">X {dragFeedback.scale.x.toFixed(2)}m</b>
@@ -377,27 +397,44 @@ export const App: React.FC = () => {
                   <b className="txt-z">Z {dragFeedback.scale.z.toFixed(2)}m</b>
                 </span>
               )}
+
               {dragFeedback.mode === 'rotate' && (
                 <span className="drag-hud-coords">
+                  <b className="rot-delta-badge">
+                    {(dragFeedback.deltaAngleDeg ?? 0) > 0
+                      ? `+${dragFeedback.deltaAngleDeg}°`
+                      : `${dragFeedback.deltaAngleDeg ?? 0}°`}
+                  </b>
                   <b className="txt-x">X {dragFeedback.rotation.x.toFixed(0)}°</b>
                   <b className="txt-y">Y {dragFeedback.rotation.y.toFixed(0)}°</b>
                   <b className="txt-z">Z {dragFeedback.rotation.z.toFixed(0)}°</b>
                 </span>
               )}
+
+              {dragFeedback.snapLabel && (
+                <span className="snap-live-tag">{dragFeedback.snapLabel}</span>
+              )}
             </div>
           )}
 
-          {/* Subtle Action Toast */}
           {toast && !dragFeedback.active && (
             <div className="toast-pill" role="status">
               {toast}
             </div>
           )}
 
-          {/* Desktop Bottom-Center Spawn Dock (Kubus, Segitiga, Silinder) */}
+          {/* Controlled Rotation Quick Bar (only in Rotate mode when an object is selected) */}
+          {transformMode === 'rotate' && selectedId && (
+            <RotationControlBar
+              rotationSnapDeg={snapSettings.rotationSnapDeg}
+              onChangeRotationSnap={handleChangeRotationSnap}
+              onRotateStep={handleRotateStep}
+              onResetRotation={handleResetRotation}
+            />
+          )}
+
           <DesktopSpawnDock onSpawn={handleSpawn} />
 
-          {/* Subtle Viewport Status Info (bottom-left) */}
           <div className="viewport-status-chip">
             <span>{objects.length} Objek</span>
             <span className="dot-sep">•</span>
@@ -405,7 +442,11 @@ export const App: React.FC = () => {
               {transformMode === 'translate'
                 ? 'Mode Geser (Panah RGB)'
                 : transformMode === 'rotate'
-                ? 'Mode Putar'
+                ? `Mode Putar Terkendali (${
+                    snapSettings.rotationSnapDeg > 0
+                      ? `${snapSettings.rotationSnapDeg}°`
+                      : 'Bebas'
+                  })`
                 : transformMode === 'scale'
                 ? 'Mode Skala'
                 : 'Mode Pilih'}
@@ -413,7 +454,6 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Desktop Collapsible Right Inspector */}
         {inspectorOpen && (
           <InspectorPanel
             objects={objects}
@@ -427,7 +467,6 @@ export const App: React.FC = () => {
           />
         )}
 
-        {/* Mobile Slide-Up Inspector Drawer */}
         {mobileDrawerOpen && (
           <InspectorPanel
             objects={objects}
@@ -444,7 +483,6 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      {/* Mobile Bottom Spawn & Studio Bar */}
       <MobileBottomBar
         onSpawn={handleSpawn}
         objectCount={objects.length}
