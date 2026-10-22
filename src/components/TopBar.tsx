@@ -12,21 +12,29 @@ import {
   ChevronDown,
   Camera,
   Check,
+  Mountain,
 } from 'lucide-react';
 import { CameraPresetType } from '../engine/viewportHelpers';
-import { MagnetStrength, SnapSettings } from '../types/studio';
+import {
+  GridSettings,
+  GridStyle,
+  MagnetStrength,
+  SnapSettings,
+  SurfaceConformMode,
+  TerrainPreset,
+} from '../types/studio';
 
 interface TopBarProps {
   canUndo: boolean;
   canRedo: boolean;
   snapSettings: SnapSettings;
-  gridVisible: boolean;
+  gridSettings: GridSettings;
   inspectorOpen: boolean;
   objectCount: number;
   onUndo: () => void;
   onRedo: () => void;
   onUpdateSnap: (patch: Partial<SnapSettings>) => void;
-  onToggleGrid: () => void;
+  onUpdateGrid: (patch: Partial<GridSettings>) => void;
   onFocusCamera: () => void;
   onCameraPreset: (preset: CameraPresetType) => void;
   onExport: (format: 'glb' | 'gltf') => void;
@@ -39,13 +47,13 @@ export const TopBar: React.FC<TopBarProps> = ({
   canUndo,
   canRedo,
   snapSettings,
-  gridVisible,
+  gridSettings,
   inspectorOpen,
   objectCount,
   onUndo,
   onRedo,
   onUpdateSnap,
-  onToggleGrid,
+  onUpdateGrid,
   onFocusCamera,
   onCameraPreset,
   onExport,
@@ -55,10 +63,12 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
+  const [gridMenuOpen, setGridMenuOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
 
   const exportRef = useRef<HTMLDivElement>(null);
   const snapRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -68,6 +78,9 @@ export const TopBar: React.FC<TopBarProps> = ({
       }
       if (snapRef.current && !snapRef.current.contains(e.target as Node)) {
         setSnapMenuOpen(false);
+      }
+      if (gridRef.current && !gridRef.current.contains(e.target as Node)) {
+        setGridMenuOpen(false);
       }
       if (viewRef.current && !viewRef.current.contains(e.target as Node)) {
         setViewMenuOpen(false);
@@ -123,8 +136,9 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </div>
 
-      {/* Center: Consolidated Smart Snapping Menu, Grid, Focus, Camera Views */}
+      {/* Center: Smart Snapping, Advanced Grid & Terrain, Focus, Camera Views */}
       <div className="topbar-group topbar-center">
+        {/* 1. Smart Snapping + Surface Conform Split Button */}
         <div className="dropdown-wrap" ref={snapRef}>
           <div className="split-btn">
             <button
@@ -134,7 +148,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               title="Aktifkan / Matikan Sistem Snap Pintar"
             >
               <Magnet size={15} />
-              <span>Snap</span>
+              <span className="hide-xs">Snap</span>
               {snapSettings.enabled && (
                 <span className="snap-badge">{activeSnapCount}</span>
               )}
@@ -143,8 +157,8 @@ export const TopBar: React.FC<TopBarProps> = ({
               type="button"
               className={`chip-caret ${snapSettings.enabled ? 'active' : ''}`}
               onClick={() => setSnapMenuOpen((v) => !v)}
-              aria-label="Pengaturan Snap Pintar"
-              title="Atur Magnet Blok, Garis Sejajar & Snap Grid"
+              aria-label="Pengaturan Snap & Surface Alignment"
+              title="Atur Snap Pintar & Surface Conforming"
             >
               <ChevronDown size={13} />
             </button>
@@ -153,7 +167,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           {snapMenuOpen && (
             <div className="dropdown-menu snap-popover">
               <div className="snap-popover-head">
-                <span>Sistem Snap Pintar</span>
+                <span>Snap Pintar & Permukaan</span>
                 <button
                   type="button"
                   className={`mini-toggle-pill ${snapSettings.enabled ? 'on' : ''}`}
@@ -163,7 +177,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </button>
               </div>
 
-              {/* 1. Unified Magnet Blok & Sudut (Magnetic + Edge + Proximity combined) */}
+              {/* 1. Unified Magnet Blok & Sudut */}
               <div className="snap-subblock">
                 <button
                   type="button"
@@ -216,7 +230,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 )}
               </div>
 
-              {/* 2. Garis Sejajar (Alignment Guides across distance) */}
+              {/* 2. Garis Sejajar */}
               <button
                 type="button"
                 className={`snap-option-row ${snapSettings.alignment ? 'checked' : ''}`}
@@ -233,7 +247,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </span>
               </button>
 
-              {/* 3. Snap to Grid */}
+              {/* 3. Snap Grid */}
               <div className="snap-subblock">
                 <button
                   type="button"
@@ -245,8 +259,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                   }
                 >
                   <div className="snap-option-text">
-                    <strong>Snap Grid Lantai</strong>
-                    <span>Kunci langkah geser & skala ke ukuran petak meter</span>
+                    <strong>Snap Grid ({snapSettings.gridStep}m)</strong>
+                    <span>Kunci langkah geser & skala ke ukuran petak grid</span>
                   </div>
                   <span className="snap-check-box">
                     {snapSettings.grid && <Check size={13} />}
@@ -254,12 +268,12 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </button>
                 {snapSettings.grid && (
                   <div className="segmented-pills">
-                    {[0.1, 0.25, 0.5, 1.0].map((step) => (
+                    {[0.1, 0.25, 0.5, 1.0, 2.0].map((step) => (
                       <button
                         key={step}
                         type="button"
                         className={`seg-pill ${
-                          snapSettings.gridStep === step ? 'active' : ''
+                          Math.abs(snapSettings.gridStep - step) < 0.001 ? 'active' : ''
                         }`}
                         onClick={() =>
                           onUpdateSnap({ enabled: true, gridStep: step })
@@ -271,19 +285,322 @@ export const TopBar: React.FC<TopBarProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Surface Alignment & Terrain Conforming Quick Preset */}
+              <div className="snap-subblock">
+                <div className="grid-section-title">
+                  Mode Tempel Permukaan & Terrain (Alat Tempel / Conform)
+                </div>
+                <div className="segmented-pills">
+                  {(
+                    [
+                      { id: 'align-normal', label: 'Ikuti Normal' },
+                      { id: 'upright-follow', label: 'Tegak Kontur' },
+                      { id: 'foundation-seat', label: 'Fondasi' },
+                    ] as Array<{ id: SurfaceConformMode; label: string }>
+                  ).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className={`seg-pill ${
+                        snapSettings.surfaceConformMode === m.id ? 'active' : ''
+                      }`}
+                      onClick={() => onUpdateSnap({ surfaceConformMode: m.id })}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </div>
 
-        <button
-          type="button"
-          className={`chip-btn hide-xs ${gridVisible ? 'active-subtle' : ''}`}
-          onClick={onToggleGrid}
-          title="Tampilkan / Sembunyikan Lantai Grid"
-        >
-          <Grid3x3 size={15} />
-          <span className="hide-md">Grid</span>
-        </button>
+        {/* 2. Advanced World / Tile / Terrain Grid Split Button */}
+        <div className="dropdown-wrap" ref={gridRef}>
+          <div className="split-btn">
+            <button
+              type="button"
+              className={`chip-btn ${
+                gridSettings.visible
+                  ? gridSettings.style === 'terrain'
+                    ? 'active-emerald'
+                    : 'active-subtle'
+                  : ''
+              }`}
+              onClick={() => onUpdateGrid({ visible: !gridSettings.visible })}
+              title="Tampilkan / Sembunyikan World Grid & Terrain"
+            >
+              {gridSettings.style === 'terrain' ? (
+                <Mountain size={15} />
+              ) : (
+                <Grid3x3 size={15} />
+              )}
+              <span className="hide-sm">
+                {gridSettings.style === 'terrain'
+                  ? 'Terrain'
+                  : gridSettings.style === 'tile'
+                  ? 'Tile'
+                  : 'Grid'}
+              </span>
+              <span className="grid-step-tag hide-md">{gridSettings.spacing}m</span>
+            </button>
+            <button
+              type="button"
+              className={`chip-caret ${
+                gridSettings.visible
+                  ? gridSettings.style === 'terrain'
+                    ? 'active-emerald'
+                    : 'active-subtle'
+                  : ''
+              }`}
+              onClick={() => setGridMenuOpen((v) => !v)}
+              aria-label="Pengaturan World Grid, Tile Grid & Terrain Grid"
+              title="Atur Gaya Grid, Spasi Petak, Tile & 3D Terrain"
+            >
+              <ChevronDown size={13} />
+            </button>
+          </div>
+
+          {gridMenuOpen && (
+            <div className="dropdown-menu grid-popover">
+              <div className="snap-popover-head">
+                <span>World, Tile & Terrain Grid</span>
+                <button
+                  type="button"
+                  className={`mini-toggle-pill ${gridSettings.visible ? 'on' : ''}`}
+                  onClick={() => onUpdateGrid({ visible: !gridSettings.visible })}
+                >
+                  {gridSettings.visible ? 'Tampil' : 'Sembunyi'}
+                </button>
+              </div>
+
+              {/* Grid Style Selector */}
+              <div className="snap-subblock">
+                <div className="grid-section-title">Gaya Lantai & Grid</div>
+                <div className="grid-style-cards">
+                  {(
+                    [
+                      { id: 'wire', title: 'World Grid', sub: 'Garis standar' },
+                      { id: 'tile', title: 'Tile Grid', sub: 'Ubin arsitektur' },
+                      { id: 'blueprint', title: 'Blueprint', sub: 'CAD biru teknis' },
+                      { id: 'terrain', title: 'Terrain 3D', sub: 'Kontur tanah' },
+                    ] as Array<{ id: GridStyle; title: string; sub: string }>
+                  ).map((st) => (
+                    <button
+                      key={st.id}
+                      type="button"
+                      className={`grid-style-card ${
+                        gridSettings.style === st.id ? 'active' : ''
+                      }`}
+                      onClick={() =>
+                        onUpdateGrid({ visible: true, style: st.id })
+                      }
+                    >
+                      <strong>{st.title}</strong>
+                      <small>{st.sub}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Adjustable Grid Spacing */}
+              <div className="snap-subblock">
+                <div className="grid-row-between">
+                  <span className="grid-section-title">
+                    Spasi Petak Grid: <b>{gridSettings.spacing}m</b>
+                  </span>
+                  <button
+                    type="button"
+                    className={`mini-link-pill ${gridSettings.syncSnap ? 'active' : ''}`}
+                    onClick={() => onUpdateGrid({ syncSnap: !gridSettings.syncSnap })}
+                    title="Otomatis samakan langkah Snap Grid dengan spasi petak"
+                  >
+                    {gridSettings.syncSnap ? '✓ Sinkron Snap' : 'Sinkron Snap'}
+                  </button>
+                </div>
+
+                <div className="segmented-pills">
+                  {[0.25, 0.5, 1.0, 2.0].map((sp) => (
+                    <button
+                      key={sp}
+                      type="button"
+                      className={`seg-pill ${
+                        Math.abs(gridSettings.spacing - sp) < 0.001 ? 'active' : ''
+                      }`}
+                      onClick={() => onUpdateGrid({ spacing: sp })}
+                    >
+                      {sp}m
+                    </button>
+                  ))}
+                </div>
+
+                <input
+                  type="range"
+                  className="studio-range"
+                  min={0.1}
+                  max={2.5}
+                  step={0.05}
+                  value={gridSettings.spacing}
+                  onChange={(e) =>
+                    onUpdateGrid({ spacing: Number(e.target.value) })
+                  }
+                />
+              </div>
+
+              {/* 3D Terrain Specific Controls */}
+              {gridSettings.style === 'terrain' && (
+                <div className="snap-subblock terrain-highlight-block">
+                  <div className="grid-section-title">Bentuk Kontur Terrain 3D</div>
+                  <div className="segmented-pills">
+                    {(
+                      [
+                        { id: 'hills', label: 'Bukit' },
+                        { id: 'valley', label: 'Lembah' },
+                        { id: 'terraced', label: 'Terasering' },
+                        { id: 'flat', label: 'Datar' },
+                      ] as Array<{ id: TerrainPreset; label: string }>
+                    ).map((tp) => (
+                      <button
+                        key={tp.id}
+                        type="button"
+                        className={`seg-pill ${
+                          gridSettings.terrainPreset === tp.id ? 'active' : ''
+                        }`}
+                        onClick={() => onUpdateGrid({ terrainPreset: tp.id })}
+                      >
+                        {tp.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid-slider-pair">
+                    <label>
+                      <span>
+                        Tinggi Kontur ({gridSettings.terrainAmplitude.toFixed(1)}m)
+                      </span>
+                      <input
+                        type="range"
+                        className="studio-range"
+                        min={0.3}
+                        max={4.0}
+                        step={0.1}
+                        value={gridSettings.terrainAmplitude}
+                        onChange={(e) =>
+                          onUpdateGrid({ terrainAmplitude: Number(e.target.value) })
+                        }
+                      />
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* Subdivisions & World Size */}
+              <div className="snap-subblock">
+                <div className="grid-two-col">
+                  <div>
+                    <div className="grid-section-title">Subdivisi Petak</div>
+                    <div className="segmented-pills">
+                      {[2, 4, 5, 10].map((sub) => (
+                        <button
+                          key={sub}
+                          type="button"
+                          className={`seg-pill ${
+                            gridSettings.subdivisions === sub ? 'active' : ''
+                          }`}
+                          onClick={() => onUpdateGrid({ subdivisions: sub })}
+                        >
+                          {sub}×
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="grid-section-title">Luas Dunia</div>
+                    <div className="segmented-pills">
+                      {[20, 40, 80, 120].map((ws) => (
+                        <button
+                          key={ws}
+                          type="button"
+                          className={`seg-pill ${
+                            gridSettings.worldSize === ws ? 'active' : ''
+                          }`}
+                          onClick={() => onUpdateGrid({ worldSize: ws })}
+                        >
+                          {ws}m
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Workplane Elevation & Axes / Opacity */}
+              <div className="snap-subblock">
+                <div className="grid-row-between">
+                  <span className="grid-section-title">
+                    Elevasi Lantai Kerja (Y = {gridSettings.elevationY.toFixed(1)}m)
+                  </span>
+                  <div className="mini-preset-btns">
+                    {[
+                      { y: 0, label: 'Lt.1 (0m)' },
+                      { y: 3, label: 'Lt.2 (3m)' },
+                      { y: 6, label: 'Lt.3 (6m)' },
+                    ].map((lv) => (
+                      <button
+                        key={lv.y}
+                        type="button"
+                        className={`mini-floor-btn ${
+                          Math.abs(gridSettings.elevationY - lv.y) < 0.05 ? 'active' : ''
+                        }`}
+                        onClick={() => onUpdateGrid({ elevationY: lv.y })}
+                      >
+                        {lv.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  className="studio-range"
+                  min={-3}
+                  max={12}
+                  step={0.5}
+                  value={gridSettings.elevationY}
+                  onChange={(e) =>
+                    onUpdateGrid({ elevationY: Number(e.target.value) })
+                  }
+                />
+
+                <div className="grid-footer-row">
+                  <button
+                    type="button"
+                    className={`mini-link-pill ${gridSettings.showAxes ? 'active' : ''}`}
+                    onClick={() => onUpdateGrid({ showAxes: !gridSettings.showAxes })}
+                  >
+                    {gridSettings.showAxes ? '✓ Sumbu X/Z Aktif' : 'Sumbu X/Z Mati'}
+                  </button>
+
+                  <label className="opacity-inline">
+                    <span>Opasitas</span>
+                    <input
+                      type="range"
+                      className="studio-range compact"
+                      min={0.2}
+                      max={1}
+                      step={0.05}
+                      value={gridSettings.opacity}
+                      onChange={(e) =>
+                        onUpdateGrid({ opacity: Number(e.target.value) })
+                      }
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
 
         <button
           type="button"

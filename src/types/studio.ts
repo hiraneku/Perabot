@@ -1,6 +1,42 @@
-export type PrimitiveKind = 'cube' | 'triangle' | 'cylinder';
+export type PrimitiveKind =
+  | 'cube'
+  | 'triangle'
+  | 'cylinder'
+  | 'horizontal-wedge'
+  | 'vertical-wedge'
+  | 'inverted-wedge'
+  | 'corner-wedge'
+  | 'inverted-corner-wedge'
+  | 'pyramid'
+  | 'horizontal-cylinder'
+  | 'vertical-cylinder'
+  | 'concave-straight'
+  | 'smooth-cube'
+  | 'convex-straight'
+  | 'concave-inner-corner'
+  | 'half-sphere'
+  | 'convex-inner-corner'
+  | 'concave-outer-corner'
+  | 'sphere'
+  | 'beveled-cube'
+  | 'convex-outer-corner'
+  | 'cone'
+  | 'beveled-horizontal-cylinder'
+  | 'beveled-vertical-cylinder';
 
-export type TransformMode = 'select' | 'translate' | 'rotate' | 'scale';
+export type ShapeSubcategory =
+  | 'all'
+  | 'blocks'
+  | 'wedges'
+  | 'curved'
+  | 'cylinders';
+
+export type TransformMode =
+  | 'select'
+  | 'translate'
+  | 'rotate'
+  | 'scale'
+  | 'surface';
 
 export type TransformSpace = 'world' | 'local';
 
@@ -8,27 +44,39 @@ export type MagnetStrength = 'subtle' | 'normal' | 'strong';
 
 export type RotationSnapStep = 0 | 5 | 15 | 45 | 90;
 
+export type SurfaceConformMode =
+  | 'align-normal' // Align object's Up vector to target surface/terrain normal
+  | 'upright-follow' // Keep upright (world Y) while riding surface/terrain height
+  | 'foundation-seat'; // Keep upright and seat lowest base corner into sloped terrain
+
+export type GridStyle = 'wire' | 'tile' | 'blueprint' | 'terrain';
+
+export type TerrainPreset = 'hills' | 'valley' | 'terraced' | 'flat';
+
+export interface GridSettings {
+  visible: boolean;
+  style: GridStyle;
+  spacing: number; // Major grid spacing in meters (0.25 .. 4.0)
+  subdivisions: number; // 2 | 4 | 5 | 10
+  worldSize: number; // 20 | 40 | 80 | 120
+  elevationY: number; // Workplane / ground height (-2 .. 10)
+  opacity: number; // 0.2 .. 1.0
+  showAxes: boolean;
+  syncSnap: boolean;
+  terrainPreset: TerrainPreset;
+  terrainAmplitude: number; // 0.3 .. 4.0 meters
+}
+
 export interface SnapSettings {
-  enabled: boolean; // Master Smart Snap switch
-  /**
-   * Unified Object Magnet: combines Magnetic Surface Contact + Edge/Corner Snap + Proximity Pull
-   * so nearby blocks lock flush together seamlessly without gaps.
-   */
+  enabled: boolean;
   objectMagnet: boolean;
   magnetStrength: MagnetStrength;
-  /**
-   * Distant Alignment Guides: aligns centers/edges across the room with laser guide lines.
-   */
   alignment: boolean;
-  /**
-   * Floor Grid Snap: steps movement & scale to meter grid increments in open space.
-   */
   grid: boolean;
-  gridStep: number; // 0.1 | 0.25 | 0.5 | 1.0 (meters)
-  /**
-   * Controlled Rotation Angle Snap step in degrees (0 = free smooth).
-   */
+  gridStep: number;
   rotationSnapDeg: RotationSnapStep;
+  surfaceConformMode: SurfaceConformMode;
+  surfaceOffset: number; // Optional offset along surface normal (default 0)
 }
 
 export interface Vec3 {
@@ -61,13 +109,27 @@ export interface SceneObjectData {
 export interface DragFeedback {
   active: boolean;
   axis: string | null;
-  mode: 'translate' | 'rotate' | 'scale';
+  mode: TransformMode;
   position: Vec3;
   rotation: Vec3;
   scale: Vec3;
   deltaAngleDeg?: number;
   snapLabel?: string | null;
 }
+
+export const DEFAULT_GRID_SETTINGS: GridSettings = {
+  visible: true,
+  style: 'wire',
+  spacing: 1.0,
+  subdivisions: 2,
+  worldSize: 40,
+  elevationY: 0,
+  opacity: 0.85,
+  showAxes: true,
+  syncSnap: false,
+  terrainPreset: 'hills',
+  terrainAmplitude: 1.4,
+};
 
 export const DEFAULT_SNAP_SETTINGS: SnapSettings = {
   enabled: true,
@@ -77,6 +139,8 @@ export const DEFAULT_SNAP_SETTINGS: SnapSettings = {
   grid: true,
   gridStep: 0.25,
   rotationSnapDeg: 15,
+  surfaceConformMode: 'align-normal',
+  surfaceOffset: 0,
 };
 
 export const MAGNET_RADIUS_MAP: Record<MagnetStrength, number> = {

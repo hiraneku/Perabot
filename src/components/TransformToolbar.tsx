@@ -8,6 +8,7 @@ import {
   ArrowDownToLine,
   Copy,
   Trash2,
+  Layers,
 } from 'lucide-react';
 import { TransformMode, TransformSpace } from '../types/studio';
 import { RgbGizmoIcon } from './ShapeIcons';
@@ -75,6 +76,16 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
         <span className="tool-label">Skala</span>
       </button>
 
+      <button
+        type="button"
+        className={`tool-btn surface-tool ${mode === 'surface' ? 'active' : ''}`}
+        onClick={() => onChangeMode('surface')}
+        title="Surface Alignment & Terrain Conforming — Seret objek mengikuti permukaan / kemiringan (T)"
+      >
+        <Layers size={17} />
+        <span className="tool-label">Tempel</span>
+      </button>
+
       <div className="toolbar-sep" />
 
       <button
@@ -96,10 +107,10 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
         className="tool-btn"
         disabled={!hasSelection}
         onClick={onDropToFloor}
-        title="Turunkan Tepat ke Lantai (Y=0)"
+        title="Turunkan & Sesuaikan ke Permukaan / Terrain di Bawahnya"
       >
         <ArrowDownToLine size={17} />
-        <span className="tool-label">Lantai</span>
+        <span className="tool-label">Conform</span>
       </button>
 
       <button

@@ -33,69 +33,55 @@ interface ObjectSnapProfile {
   points: THREE.Vector3[];
 }
 
-function getLocalStructuralPoints(kind: PrimitiveKind): THREE.Vector3[] {
-  if (kind === 'cube') {
-    const pts: THREE.Vector3[] = [];
-    for (const sx of [-0.5, 0.5]) {
-      for (const sy of [-0.5, 0.5]) {
-        for (const sz of [-0.5, 0.5]) {
-          pts.push(new THREE.Vector3(sx, sy, sz));
-        }
+function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
+  const kind = (mesh.userData.kind as PrimitiveKind) || 'cube';
+  mesh.geometry.computeBoundingBox();
+  const bb =
+    mesh.geometry.boundingBox ??
+    new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+
+  const min = bb.min;
+  const max = bb.max;
+  const mid = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
+
+  const pts: THREE.Vector3[] = [];
+  // 8 bounding corners
+  for (const x of [min.x, max.x]) {
+    for (const y of [min.y, max.y]) {
+      for (const z of [min.z, max.z]) {
+        pts.push(new THREE.Vector3(x, y, z));
       }
     }
-    for (const sy of [-0.5, 0.5]) {
-      for (const sz of [-0.5, 0.5]) pts.push(new THREE.Vector3(0, sy, sz));
-    }
-    for (const sx of [-0.5, 0.5]) {
-      for (const sz of [-0.5, 0.5]) pts.push(new THREE.Vector3(sx, 0, sz));
-    }
-    for (const sx of [-0.5, 0.5]) {
-      for (const sy of [-0.5, 0.5]) pts.push(new THREE.Vector3(sx, sy, 0));
-    }
-    return pts;
   }
+  // 6 face centers
+  pts.push(
+    new THREE.Vector3(mid.x, min.y, mid.z),
+    new THREE.Vector3(mid.x, max.y, mid.z),
+    new THREE.Vector3(min.x, mid.y, mid.z),
+    new THREE.Vector3(max.x, mid.y, mid.z),
+    new THREE.Vector3(mid.x, mid.y, min.z),
+    new THREE.Vector3(mid.x, mid.y, max.z)
+  );
+  // Key top/bottom edge midpoints for roof ridges, wedges, pyramids
+  pts.push(
+    new THREE.Vector3(mid.x, max.y, min.z),
+    new THREE.Vector3(mid.x, max.y, max.z),
+    new THREE.Vector3(min.x, max.y, mid.z),
+    new THREE.Vector3(max.x, max.y, mid.z),
+    new THREE.Vector3(mid.x, min.y, min.z),
+    new THREE.Vector3(mid.x, min.y, max.z),
+    new THREE.Vector3(min.x, min.y, mid.z),
+    new THREE.Vector3(max.x, min.y, mid.z)
+  );
 
-  if (kind === 'triangle') {
-    return [
-      new THREE.Vector3(-0.5, -0.5, 0.5),
-      new THREE.Vector3(0.5, -0.5, 0.5),
-      new THREE.Vector3(0, 0.5, 0.5),
-      new THREE.Vector3(-0.5, -0.5, -0.5),
-      new THREE.Vector3(0.5, -0.5, -0.5),
-      new THREE.Vector3(0, 0.5, -0.5),
-      new THREE.Vector3(0, 0.5, 0),
-      new THREE.Vector3(-0.5, -0.5, 0),
-      new THREE.Vector3(0.5, -0.5, 0),
-      new THREE.Vector3(0, -0.5, 0.5),
-      new THREE.Vector3(0, -0.5, -0.5),
-      new THREE.Vector3(-0.25, 0, 0.5),
-      new THREE.Vector3(0.25, 0, 0.5),
-      new THREE.Vector3(-0.25, 0, -0.5),
-      new THREE.Vector3(0.25, 0, -0.5),
-    ];
-  }
-
-  const pts: THREE.Vector3[] = [
-    new THREE.Vector3(0, 0.5, 0),
-    new THREE.Vector3(0, -0.5, 0),
-  ];
-  const segments = 12;
-  for (let i = 0; i < segments; i++) {
-    const a = (i / segments) * Math.PI * 2;
-    const cx = Math.cos(a) * 0.5;
-    const cz = Math.sin(a) * 0.5;
-    pts.push(new THREE.Vector3(cx, 0.5, cz));
-    pts.push(new THREE.Vector3(cx, -0.5, cz));
-    if (i % 3 === 0) {
-      pts.push(new THREE.Vector3(cx, 0, cz));
-    }
+  if (kind === 'pyramid' || kind === 'cone') {
+    pts.push(new THREE.Vector3(0, max.y, 0));
   }
   return pts;
 }
 
 function buildProfile(mesh: THREE.Mesh, overridePos?: THREE.Vector3): ObjectSnapProfile {
-  const kind = (mesh.userData.kind as PrimitiveKind) || 'cube';
-  const localPts = getLocalStructuralPoints(kind);
+  const localPts = getLocalStructuralPoints(mesh);
 
   const mat = new THREE.Matrix4().compose(
     overridePos ?? mesh.position,
@@ -148,7 +134,8 @@ export class SnappingEngine {
     rawPos: THREE.Vector3,
     dragAxis: string | null,
     otherMeshes: THREE.Mesh[],
-    settings: SnapSettings
+    settings: SnapSettings,
+    groundElevationY = 0
   ): SnapComputeResult {
     const result: SnapComputeResult = {
       snappedPosition: rawPos.clone(),
@@ -256,19 +243,23 @@ export class SnappingEngine {
 
       // 2A. Magnet Blok: Floor Contact + Surface Contact + Edge/Vertex Contact
       if (settings.objectMagnet) {
-        // Floor magnet (Y = 0)
+        // Floor / Workplane magnet
         if (ax === 'y') {
-          const distFloor = Math.abs(currentMoving.box.min.y - 0);
+          const distFloor = Math.abs(currentMoving.box.min.y - groundElevationY);
           if (distFloor <= radius) {
             const score = distFloor * 0.78;
             if (score < bestScore) {
               bestScore = score;
-              chosenDelta = -currentMoving.box.min.y;
-              chosenLabel = 'Magnet • Lantai (Y=0)';
+              chosenDelta = groundElevationY - currentMoving.box.min.y;
+              chosenLabel = `Magnet • Lantai (Y=${groundElevationY}m)`;
               const sizeX = Math.max(0.3, currentMoving.box.max.x - currentMoving.box.min.x);
               const sizeZ = Math.max(0.3, currentMoving.box.max.z - currentMoving.box.min.z);
               chosenContact = {
-                center: new THREE.Vector3(currentMoving.center.x, 0.004, currentMoving.center.z),
+                center: new THREE.Vector3(
+                  currentMoving.center.x,
+                  groundElevationY + 0.004,
+                  currentMoving.center.z
+                ),
                 size: [sizeX, sizeZ],
                 axis: 'y',
               };

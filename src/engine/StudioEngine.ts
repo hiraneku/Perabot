@@ -5,15 +5,18 @@ import { ViewHelper } from 'three/examples/jsm/helpers/ViewHelper.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import {
   CameraPresetType,
-  createFloorGrid,
   enhanceTransformGizmo,
   RotationProtractorVisualizer,
+  SurfaceNormalVisualizer,
 } from './viewportHelpers';
 import { createPrimitiveGeometry, PRIMITIVE_META } from './primitives';
 import { SnappingEngine, SnapVisualizer } from './SnappingEngine';
+import { GridTerrainSystem } from './GridTerrainSystem';
 import {
+  DEFAULT_GRID_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
   DragFeedback,
+  GridSettings,
   PrimitiveKind,
   SceneObjectData,
   SnapSettings,
@@ -46,7 +49,6 @@ export interface StudioEngineCallbacks {
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
 
-// BoxGeometry group normals in exact group index order: 0:+X, 1:-X, 2:+Y, 3:-Y, 4:+Z, 5:-Z
 const BOX_FACE_LOCAL_NORMALS: THREE.Vector3[] = [
   new THREE.Vector3(1, 0, 0),
   new THREE.Vector3(-1, 0, 0),
@@ -72,6 +74,7 @@ export class StudioEngine {
   private viewHelper: ViewHelper;
   private clock = new THREE.Clock();
 
+  private gridSystem = new GridTerrainSystem();
   private objectGroup = new THREE.Group();
   private meshMap = new Map<string, THREE.Mesh>();
   private hiddenFaceMaterial = new THREE.MeshBasicMaterial({ visible: false });
@@ -80,19 +83,19 @@ export class StudioEngine {
   private transformMode: TransformMode = 'translate';
   private transformSpace: TransformSpace = 'world';
   private snapSettings: SnapSettings = { ...DEFAULT_SNAP_SETTINGS };
-  private gridVisible = true;
-  private floorGroup: THREE.Group;
+  private gridSettings: GridSettings = { ...DEFAULT_GRID_SETTINGS };
 
   private snappingEngine = new SnappingEngine();
   private snapVisualizer = new SnapVisualizer();
   private protractorVisualizer = new RotationProtractorVisualizer();
+  private surfaceNormalVisualizer = new SurfaceNormalVisualizer();
   private isApplyingCustomTransform = false;
 
-  private counters: Record<PrimitiveKind, number> = {
-    cube: 0,
-    triangle: 0,
-    cylinder: 0,
-  };
+  // Interactive Surface Drag state
+  private isSurfaceDragging = false;
+  private surfaceDragStartQuat = new THREE.Quaternion();
+
+  private counters: Partial<Record<PrimitiveKind, number>> = {};
 
   private history: HistorySnapshot[] = [];
   private historyIndex = -1;
@@ -121,11 +124,11 @@ export class StudioEngine {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#171a21');
-    this.scene.fog = new THREE.Fog('#171a21', 38, 95);
+    this.scene.fog = new THREE.Fog('#171a21', 45, 130);
 
     const width = Math.max(container.clientWidth, 1);
     const height = Math.max(container.clientHeight, 1);
-    this.camera = new THREE.PerspectiveCamera(46, width / height, 0.05, 250);
+    this.camera = new THREE.PerspectiveCamera(46, width / height, 0.05, 300);
     this.camera.position.set(4.6, 3.6, 5.2);
 
     this.renderer = new THREE.WebGLRenderer({
@@ -148,18 +151,19 @@ export class StudioEngine {
 
     this.setupLighting();
 
-    this.floorGroup = createFloorGrid();
-    this.scene.add(this.floorGroup);
+    // Advanced World / Tile / Terrain Grid
+    this.scene.add(this.gridSystem.group);
 
     this.objectGroup.name = 'PerabotSceneObjects';
     this.scene.add(this.objectGroup);
     this.scene.add(this.snapVisualizer.group);
     this.scene.add(this.protractorVisualizer.group);
+    this.scene.add(this.surfaceNormalVisualizer.group);
 
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
     this.orbitControls.dampingFactor = 0.08;
-    this.orbitControls.maxDistance = 80;
+    this.orbitControls.maxDistance = 120;
     this.orbitControls.minDistance = 0.6;
     this.orbitControls.maxPolarAngle = Math.PI * 0.92;
     this.orbitControls.target.set(0, 0.5, 0);
@@ -205,6 +209,7 @@ export class StudioEngine {
     this.viewHelper.center.copy(this.orbitControls.target);
 
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
 
     this.resizeObserver = new ResizeObserver(() => {
@@ -236,12 +241,14 @@ export class StudioEngine {
       if (mode === 'translate') {
         const rawPos = mesh.position.clone();
         const others = Array.from(this.meshMap.values());
+        const groundY = this.gridSystem.sampleHeight(rawPos.x, rawPos.z);
         const snapRes = this.snappingEngine.computeSnap(
           mesh,
           rawPos,
           axis,
           others,
-          this.snapSettings
+          this.snapSettings,
+          groundY
         );
         mesh.position.copy(snapRes.snappedPosition);
         this.updateSeamlessTouchFaces();
@@ -308,9 +315,97 @@ export class StudioEngine {
   }
 
   /**
-   * Suppresses internal coplanar faces between touching axis-aligned cubes so joined blocks
-   * merge visually into a single continuous solid surface with zero subpixel seam lines.
+   * Aligns an object's local +Y up axis to a target world surface normal while preserving stable yaw heading.
    */
+  private alignQuaternionToNormal(
+    mesh: THREE.Mesh,
+    worldNormal: THREE.Vector3,
+    refQuat: THREE.Quaternion
+  ): void {
+    const n = worldNormal.clone().normalize();
+    // Extract preferred forward vector from reference quaternion
+    const refFwd = new THREE.Vector3(0, 0, 1).applyQuaternion(refQuat);
+    // Project onto tangent plane of worldNormal
+    const projFwd = refFwd.clone().addScaledVector(n, -refFwd.dot(n));
+    if (projFwd.lengthSq() < 1e-4) {
+      const fallback = Math.abs(n.x) < 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+      projFwd.copy(fallback).addScaledVector(n, -fallback.dot(n));
+    }
+    projFwd.normalize();
+
+    const right = new THREE.Vector3().crossVectors(n, projFwd).normalize();
+    const trueFwd = new THREE.Vector3().crossVectors(right, n).normalize();
+
+    const rotMat = new THREE.Matrix4().makeBasis(right, n, trueFwd);
+    mesh.quaternion.setFromRotationMatrix(rotMat);
+  }
+
+  /**
+   * Applies Surface Alignment / Align to Surface Normal / Terrain Conforming at a hit point & normal
+   */
+  private applySurfacePlacementAtHit(
+    mesh: THREE.Mesh,
+    hitPoint: THREE.Vector3,
+    hitNormal: THREE.Vector3,
+    hitTargetName: string,
+    isGroundHit: boolean
+  ): string {
+    const p = hitPoint.clone();
+    let n = hitNormal.clone().normalize();
+
+    // If sliding on ground/terrain and Grid Snap is enabled, snap X/Z to grid step and re-sample terrain!
+    if (isGroundHit && this.snapSettings.enabled && this.snapSettings.grid && this.snapSettings.gridStep > 0) {
+      const step = this.snapSettings.gridStep;
+      p.x = Math.round(p.x / step) * step;
+      p.z = Math.round(p.z / step) * step;
+      p.y = this.gridSystem.sampleHeight(p.x, p.z);
+      n = this.gridSystem.sampleNormal(p.x, p.z);
+    }
+
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox ?? new THREE.Box3();
+    const localBaseDist = -bb.min.y * mesh.scale.y + this.snapSettings.surfaceOffset;
+    const mode = this.snapSettings.surfaceConformMode;
+
+    if (mode === 'align-normal') {
+      this.alignQuaternionToNormal(mesh, n, this.surfaceDragStartQuat);
+      mesh.position.copy(p).addScaledVector(n, localBaseDist);
+      const slopeDeg = Math.round(Math.acos(Math.max(-1, Math.min(1, n.y))) * RAD2DEG);
+      this.surfaceNormalVisualizer.show(p, n);
+      return `Ikuti Normal (${slopeDeg}°) • ${hitTargetName}`;
+    }
+
+    if (mode === 'foundation-seat') {
+      // Keep upright (preserve Y yaw only) and seat lowest footprint corner into sloped ground/surface
+      const euler = new THREE.Euler().setFromQuaternion(this.surfaceDragStartQuat, 'YXZ');
+      mesh.rotation.set(0, euler.y, 0);
+
+      const halfW = (bb.max.x - bb.min.x) * 0.5 * mesh.scale.x;
+      const halfD = (bb.max.z - bb.min.z) * 0.5 * mesh.scale.z;
+      let seatY = p.y;
+      if (isGroundHit) {
+        const samplePts: Array<[number, number]> = [
+          [p.x, p.z],
+          [p.x - halfW, p.z - halfD],
+          [p.x + halfW, p.z - halfD],
+          [p.x - halfW, p.z + halfD],
+          [p.x + halfW, p.z + halfD],
+        ];
+        seatY = Math.min(...samplePts.map(([sx, sz]) => this.gridSystem.sampleHeight(sx, sz)));
+      }
+      mesh.position.set(p.x, seatY + localBaseDist, p.z);
+      this.surfaceNormalVisualizer.show(p, new THREE.Vector3(0, 1, 0));
+      return `Fondasi Menancap • ${hitTargetName}`;
+    }
+
+    // 'upright-follow'
+    const euler = new THREE.Euler().setFromQuaternion(this.surfaceDragStartQuat, 'YXZ');
+    mesh.rotation.set(0, euler.y, 0);
+    mesh.position.set(p.x, p.y + localBaseDist, p.z);
+    this.surfaceNormalVisualizer.show(p, new THREE.Vector3(0, 1, 0));
+    return `Tegak Ikuti Kontur • ${hitTargetName}`;
+  }
+
   private updateSeamlessTouchFaces(): void {
     const cubes: Array<{
       mesh: THREE.Mesh;
@@ -320,7 +415,6 @@ export class StudioEngine {
 
     for (const mesh of this.meshMap.values()) {
       if (!mesh.visible || mesh.userData.kind !== 'cube') continue;
-      // Check if cube is axis-aligned (normals align with X, Y, Z)
       const testX = new THREE.Vector3(1, 0, 0).applyQuaternion(mesh.quaternion);
       const testY = new THREE.Vector3(0, 1, 0).applyQuaternion(mesh.quaternion);
       const isOrtho =
@@ -362,7 +456,6 @@ export class StudioEngine {
           .clone()
           .applyQuaternion(item.mesh.quaternion);
 
-        // Identify which world axis (+x, -x, +y, -y, +z, -z) this face points toward
         let ax: 'x' | 'y' | 'z' = 'x';
         let dir: 1 | -1 = 1;
         if (Math.abs(worldNormal.x) > 0.9) {
@@ -383,13 +476,11 @@ export class StudioEngine {
 
         for (const other of cubes) {
           if (other.mesh === item.mesh) continue;
-          // Ensure neighbor is genuinely on the outward side of this face
           if ((other.center[ax] - item.center[ax]) * dir <= 0.01) continue;
 
           const neighborOppCoord = dir === 1 ? other.box.min[ax] : other.box.max[ax];
           if (Math.abs(faceCoord - neighborOppCoord) > EPS) continue;
 
-          // Check if neighbor face completely covers this face on both perpendicular axes
           const coversP1 =
             other.box.min[p1] <= item.box.min[p1] + EPS &&
             other.box.max[p1] >= item.box.max[p1] - EPS;
@@ -425,24 +516,23 @@ export class StudioEngine {
     this.scene.add(hemiLight);
 
     const keyLight = new THREE.DirectionalLight('#fff8ed', 1.85);
-    keyLight.position.set(9, 16, 11);
+    keyLight.position.set(11, 18, 13);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
     keyLight.shadow.camera.near = 0.5;
-    keyLight.shadow.camera.far = 55;
-    const d = 14;
+    keyLight.shadow.camera.far = 75;
+    const d = 18;
     keyLight.shadow.camera.left = -d;
     keyLight.shadow.camera.right = d;
     keyLight.shadow.camera.top = d;
     keyLight.shadow.camera.bottom = -d;
-    // normalBias prevents internal coplanar joints from bleeding dark shadow stripes
     keyLight.shadow.bias = -0.0002;
     keyLight.shadow.normalBias = 0.045;
     this.scene.add(keyLight);
 
     const fillLight = new THREE.DirectionalLight('#9ec5ff', 0.55);
-    fillLight.position.set(-10, 8, -9);
+    fillLight.position.set(-12, 9, -10);
     this.scene.add(fillLight);
   }
 
@@ -460,12 +550,100 @@ export class StudioEngine {
     this.updateGizmoResponsiveSize();
   };
 
+  private setPointerNDCFromEvent(event: PointerEvent): void {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  }
+
   private handlePointerDown = (event: PointerEvent): void => {
     this.pointerDownPos = { x: event.clientX, y: event.clientY };
     this.wasGizmoDragging = false;
+
+    // In Surface Alignment mode: pressing on the selected object starts interactive surface sliding
+    if (this.transformMode === 'surface' && this.selectedId && event.button <= 0) {
+      const selMesh = this.meshMap.get(this.selectedId);
+      if (selMesh && selMesh.visible) {
+        this.setPointerNDCFromEvent(event);
+        this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+        const hitSelected = this.raycaster.intersectObject(selMesh, false);
+        if (hitSelected.length > 0) {
+          this.isSurfaceDragging = true;
+          this.surfaceDragStartQuat.copy(selMesh.quaternion);
+          this.orbitControls.enabled = false;
+          this.renderer.domElement.setPointerCapture?.(event.pointerId);
+        }
+      }
+    }
+  };
+
+  private handlePointerMove = (event: PointerEvent): void => {
+    if (!this.isSurfaceDragging || !this.selectedId) return;
+    const selMesh = this.meshMap.get(this.selectedId);
+    if (!selMesh) return;
+
+    this.setPointerNDCFromEvent(event);
+    this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+
+    const targets: THREE.Object3D[] = Array.from(this.meshMap.values()).filter(
+      (m) => m.visible && m !== selMesh
+    );
+    const groundCollider = this.gridSystem.getGroundCollider();
+    if (groundCollider && this.gridSettings.visible) {
+      targets.push(groundCollider);
+    }
+
+    const hits = this.raycaster.intersectObjects(targets, false);
+    if (hits.length === 0) return;
+
+    const hit = hits[0];
+    const hitObj = hit.object as THREE.Mesh;
+    const isGround = hitObj === groundCollider;
+    let worldNormal = new THREE.Vector3(0, 1, 0);
+
+    if (isGround) {
+      worldNormal = this.gridSystem.sampleNormal(hit.point.x, hit.point.z);
+    } else if (hit.face) {
+      worldNormal
+        .copy(hit.face.normal)
+        .transformDirection(hitObj.matrixWorld)
+        .normalize();
+      if (worldNormal.dot(this.raycaster.ray.direction) > 0) {
+        worldNormal.negate();
+      }
+    }
+
+    const targetLabel = isGround
+      ? this.gridSettings.style === 'terrain'
+        ? 'Terrain 3D'
+        : 'Lantai Kerja'
+      : hitObj.name;
+
+    const label = this.applySurfacePlacementAtHit(
+      selMesh,
+      hit.point,
+      worldNormal,
+      targetLabel,
+      isGround
+    );
+    this.updateSeamlessTouchFaces();
+    this.emitDragFeedback(true, { snapLabel: label });
+    this.emitState();
   };
 
   private handlePointerUp = (event: PointerEvent): void => {
+    if (this.isSurfaceDragging) {
+      this.isSurfaceDragging = false;
+      this.surfaceNormalVisualizer.hide();
+      this.orbitControls.enabled = true;
+      this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+      this.updateSeamlessTouchFaces();
+      this.pushHistorySnapshot();
+      this.emitDragFeedback(false);
+      this.emitState();
+      return;
+    }
+
     const dx = event.clientX - this.pointerDownPos.x;
     const dy = event.clientY - this.pointerDownPos.y;
     const dist = Math.hypot(dx, dy);
@@ -480,10 +658,7 @@ export class StudioEngine {
       return;
     }
 
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
+    this.setPointerNDCFromEvent(event);
     this.raycaster.setFromCamera(this.pointerNDC, this.camera);
     const selectableMeshes = Array.from(this.meshMap.values()).filter((m) => m.visible);
     const hits = this.raycaster.intersectObjects(selectableMeshes, false);
@@ -508,7 +683,7 @@ export class StudioEngine {
       this.viewHelper.update(delta);
     } else if (this.cameraTween?.active) {
       this.updateCameraTween(delta);
-    } else if (!this.transformControls.dragging) {
+    } else if (!this.transformControls.dragging && !this.isSurfaceDragging) {
       this.orbitControls.enabled = true;
       this.orbitControls.update();
     }
@@ -538,59 +713,69 @@ export class StudioEngine {
     }
   }
 
-  private findCleanSpawnPosition(): Vec3 {
+  private findCleanSpawnXZ(): [number, number] {
+    const step = Math.max(1.5, this.gridSettings.spacing * 1.5);
     const candidates: Array<[number, number]> = [
       [0, 0],
-      [1.5, 0],
-      [-1.5, 0],
-      [0, 1.5],
-      [0, -1.5],
-      [1.5, 1.5],
-      [-1.5, 1.5],
-      [1.5, -1.5],
-      [-1.5, -1.5],
-      [3, 0],
-      [-3, 0],
-      [0, 3],
-      [0, -3],
+      [step, 0],
+      [-step, 0],
+      [0, step],
+      [0, -step],
+      [step, step],
+      [-step, step],
+      [step, -step],
+      [-step, -step],
+      [step * 2, 0],
+      [-step * 2, 0],
+      [0, step * 2],
+      [0, -step * 2],
     ];
 
     const existing = Array.from(this.meshMap.values()).filter((m) => m.visible);
 
     for (const [cx, cz] of candidates) {
+      const groundY = this.gridSystem.sampleHeight(cx, cz);
       const occupied = existing.some(
         (m) =>
           Math.abs(m.position.x - cx) < 0.75 &&
           Math.abs(m.position.z - cz) < 0.75 &&
-          Math.abs(m.position.y - 0.5) < 0.75
+          Math.abs(m.position.y - (groundY + 0.5)) < 0.85
       );
       if (!occupied) {
-        return { x: cx, y: 0.5, z: cz };
+        return [cx, cz];
       }
     }
 
     const idx = existing.length;
     const angle = idx * 0.9;
     const radius = 2 + Math.floor(idx / 6) * 1.5;
-    return {
-      x: Math.round(Math.cos(angle) * radius * 2) / 2,
-      y: 0.5,
-      z: Math.round(Math.sin(angle) * radius * 2) / 2,
-    };
+    return [
+      Math.round(Math.cos(angle) * radius * 2) / 2,
+      Math.round(Math.sin(angle) * radius * 2) / 2,
+    ];
   }
 
   public spawnPrimitive(kind: PrimitiveKind, recordHistory = true): string {
-    this.counters[kind] += 1;
+    const nextNum = (this.counters[kind] ?? 0) + 1;
+    this.counters[kind] = nextNum;
+
     const meta = PRIMITIVE_META[kind];
     const id = `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const name = `${meta.label} ${this.counters[kind]}`;
-    const pos = this.findCleanSpawnPosition();
+    const name = `${meta.label} ${nextNum}`;
+
+    const [sx, sz] = this.findCleanSpawnXZ();
+    const previewGeo = createPrimitiveGeometry(kind);
+    previewGeo.computeBoundingBox();
+    const minY = previewGeo.boundingBox?.min.y ?? -0.5;
+    previewGeo.dispose();
+
+    const groundY = this.gridSystem.sampleHeight(sx, sz);
 
     const data: SceneObjectData = {
       id,
       name,
       kind,
-      position: pos,
+      position: { x: sx, y: round3(groundY - minY), z: sz },
       rotation: { x: 0, y: 0, z: 0 },
       scale: { x: 1, y: 1, z: 1 },
       color: meta.defaultColor,
@@ -618,10 +803,6 @@ export class StudioEngine {
     return id;
   }
 
-  /**
-   * Builds pure clean 3D geometry WITHOUT permanent black wireframe border lines,
-   * so touching blocks fuse cleanly into continuous walls/roofs without dividing lines.
-   */
   private buildMeshFromData(data: SceneObjectData): THREE.Mesh {
     const geometry = createPrimitiveGeometry(data.kind);
     const baseMaterial = new THREE.MeshStandardMaterial({
@@ -654,9 +835,10 @@ export class StudioEngine {
   private updateSelectionHighlight(): void {
     for (const [id, mesh] of this.meshMap.entries()) {
       const mat = this.getBaseMaterial(mesh);
-      // Only use a gentle surface glow when in 'select' mode (where gizmo is hidden)
       if (id === this.selectedId && this.transformMode === 'select') {
         mat.emissive.set('#221808');
+      } else if (id === this.selectedId && this.transformMode === 'surface') {
+        mat.emissive.set('#0a291f');
       } else {
         mat.emissive.set('#000000');
       }
@@ -670,9 +852,10 @@ export class StudioEngine {
     this.selectedId = id;
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
+    this.surfaceNormalVisualizer.hide();
     this.updateSelectionHighlight();
 
-    if (id && this.transformMode !== 'select') {
+    if (id && this.transformMode !== 'select' && this.transformMode !== 'surface') {
       const mesh = this.meshMap.get(id);
       if (mesh && mesh.visible) {
         this.transformControls.attach(mesh);
@@ -692,9 +875,10 @@ export class StudioEngine {
     this.transformMode = mode;
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
+    this.surfaceNormalVisualizer.hide();
     this.updateSelectionHighlight();
 
-    if (mode === 'select') {
+    if (mode === 'select' || mode === 'surface') {
       this.transformControls.detach();
     } else {
       this.transformControls.setMode(mode);
@@ -733,6 +917,19 @@ export class StudioEngine {
 
   public getSnapSettings(): SnapSettings {
     return { ...this.snapSettings };
+  }
+
+  public updateGridSettings(patch: Partial<GridSettings>): GridSettings {
+    this.gridSettings = this.gridSystem.updateSettings(patch);
+    if (this.gridSettings.syncSnap && patch.spacing !== undefined) {
+      this.snapSettings.gridStep = patch.spacing;
+      this.applyControlSnapConfig();
+    }
+    return { ...this.gridSettings };
+  }
+
+  public getGridSettings(): GridSettings {
+    return { ...this.gridSettings };
   }
 
   public rotateSelectedBy(axis: 'x' | 'y' | 'z', deltaDeg: number): boolean {
@@ -776,15 +973,6 @@ export class StudioEngine {
     this.pushHistorySnapshot();
     this.emitState();
     return true;
-  }
-
-  public setGridVisible(visible: boolean): void {
-    this.gridVisible = visible;
-    this.floorGroup.visible = visible;
-  }
-
-  public getGridVisible(): boolean {
-    return this.gridVisible;
   }
 
   public updateObjectTransform(
@@ -845,46 +1033,80 @@ export class StudioEngine {
     return out;
   }
 
+  /**
+   * Conforms selected object downward onto the highest 3D surface or terrain underneath it,
+   * respecting the active Surface/Terrain Conform Mode (Align Normal, Upright, or Foundation Seat).
+   */
   public dropSelectedToFloor(): string {
     if (!this.selectedId) return '';
     const mesh = this.meshMap.get(this.selectedId);
     if (!mesh) return '';
 
+    this.surfaceDragStartQuat.copy(mesh.quaternion);
     const movBounds = this.computeWorldBounds(mesh);
-    let targetSurfaceY = 0;
-    let landedOnName: string | null = null;
 
-    for (const other of this.meshMap.values()) {
-      if (other === mesh || !other.visible) continue;
-      const otherBounds = this.computeWorldBounds(other);
+    // Raycast straight down from slightly above the object's center against other objects + ground
+    const downRay = new THREE.Raycaster(
+      new THREE.Vector3(mesh.position.x, movBounds.max.y + 0.5, mesh.position.z),
+      new THREE.Vector3(0, -1, 0)
+    );
 
-      const overlapX =
-        Math.min(movBounds.max.x, otherBounds.max.x) -
-        Math.max(movBounds.min.x, otherBounds.min.x);
-      const overlapZ =
-        Math.min(movBounds.max.z, otherBounds.max.z) -
-        Math.max(movBounds.min.z, otherBounds.min.z);
-
-      if (
-        overlapX > 0.04 &&
-        overlapZ > 0.04 &&
-        otherBounds.max.y <= movBounds.min.y + 0.08 &&
-        otherBounds.max.y > targetSurfaceY
-      ) {
-        targetSurfaceY = otherBounds.max.y;
-        landedOnName = other.name;
-      }
+    const targets: THREE.Object3D[] = Array.from(this.meshMap.values()).filter(
+      (m) => m.visible && m !== mesh
+    );
+    const groundCollider = this.gridSystem.getGroundCollider();
+    if (groundCollider) {
+      targets.push(groundCollider);
     }
 
-    const deltaY = targetSurfaceY - movBounds.min.y;
-    mesh.position.y += deltaY;
+    const hits = downRay.intersectObjects(targets, false);
+    if (hits.length > 0) {
+      const hit = hits[0];
+      const hitObj = hit.object as THREE.Mesh;
+      const isGround = hitObj === groundCollider;
+      let normal = new THREE.Vector3(0, 1, 0);
+      if (isGround) {
+        normal = this.gridSystem.sampleNormal(hit.point.x, hit.point.z);
+      } else if (hit.face) {
+        normal.copy(hit.face.normal).transformDirection(hitObj.matrixWorld).normalize();
+        if (normal.y < 0) normal.negate();
+      }
+
+      const targetName = isGround
+        ? this.gridSettings.style === 'terrain'
+          ? 'Terrain 3D'
+          : 'Lantai'
+        : hitObj.name;
+
+      const label = this.applySurfacePlacementAtHit(
+        mesh,
+        hit.point,
+        normal,
+        targetName,
+        isGround
+      );
+      this.surfaceNormalVisualizer.hide();
+      this.updateSeamlessTouchFaces();
+      this.pushHistorySnapshot();
+      this.emitState();
+      return label;
+    }
+
+    // Fallback to terrain/ground elevation directly at (x, z)
+    const groundY = this.gridSystem.sampleHeight(mesh.position.x, mesh.position.z);
+    const groundNorm = this.gridSystem.sampleNormal(mesh.position.x, mesh.position.z);
+    const label = this.applySurfacePlacementAtHit(
+      mesh,
+      new THREE.Vector3(mesh.position.x, groundY, mesh.position.z),
+      groundNorm,
+      'Lantai',
+      true
+    );
+    this.surfaceNormalVisualizer.hide();
     this.updateSeamlessTouchFaces();
     this.pushHistorySnapshot();
     this.emitState();
-
-    return landedOnName
-      ? `Ditempelkan tepat di atas ${landedOnName}`
-      : 'Ditempelkan ke lantai (Y=0)';
+    return label;
   }
 
   public updateObjectMaterial(
@@ -918,7 +1140,12 @@ export class StudioEngine {
       mesh.visible = patch.visible;
       if (!patch.visible && this.selectedId === id) {
         this.transformControls.detach();
-      } else if (patch.visible && this.selectedId === id && this.transformMode !== 'select') {
+      } else if (
+        patch.visible &&
+        this.selectedId === id &&
+        this.transformMode !== 'select' &&
+        this.transformMode !== 'surface'
+      ) {
         this.transformControls.attach(mesh);
       }
       this.updateSeamlessTouchFaces();
@@ -935,7 +1162,7 @@ export class StudioEngine {
     const current = this.serializeObject(this.selectedId);
     if (!current) return null;
 
-    this.counters[current.kind] += 1;
+    this.counters[current.kind] = (this.counters[current.kind] ?? 0) + 1;
     const newId = `${current.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const copyData: SceneObjectData = {
       ...current,
@@ -981,6 +1208,7 @@ export class StudioEngine {
     this.transformControls.detach();
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
+    this.surfaceNormalVisualizer.hide();
     this.selectedId = null;
 
     for (const mesh of this.meshMap.values()) {
@@ -988,7 +1216,7 @@ export class StudioEngine {
       this.objectGroup.remove(mesh);
     }
     this.meshMap.clear();
-    this.counters = { cube: 0, triangle: 0, cylinder: 0 };
+    this.counters = {};
 
     this.pushHistorySnapshot();
     this.emitState();
@@ -1012,8 +1240,9 @@ export class StudioEngine {
 
   public setCameraPreset(preset: CameraPresetType): void {
     const target = this.selectedId
-      ? (this.meshMap.get(this.selectedId)?.position.clone() ?? new THREE.Vector3(0, 0.5, 0))
-      : new THREE.Vector3(0, 0.5, 0);
+      ? (this.meshMap.get(this.selectedId)?.position.clone() ??
+          new THREE.Vector3(0, this.gridSettings.elevationY + 0.5, 0))
+      : new THREE.Vector3(0, this.gridSettings.elevationY + 0.5, 0);
 
     const dist = 7.2;
     let toPos = new THREE.Vector3(4.6, 3.6, 5.2);
@@ -1177,6 +1406,7 @@ export class StudioEngine {
     this.transformControls.detach();
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
+    this.surfaceNormalVisualizer.hide();
 
     for (const mesh of this.meshMap.values()) {
       this.disposeMesh(mesh);
@@ -1205,11 +1435,15 @@ export class StudioEngine {
     active: boolean,
     extra?: { deltaAngleDeg?: number; snapLabel?: string | null }
   ): void {
+    const effectiveMode: TransformMode = this.isSurfaceDragging
+      ? 'surface'
+      : this.transformControls.getMode();
+
     if (!active || !this.selectedId) {
       this.callbacks.onDragFeedback({
         active: false,
         axis: null,
-        mode: this.transformControls.getMode(),
+        mode: effectiveMode,
         position: { x: 0, y: 0, z: 0 },
         rotation: { x: 0, y: 0, z: 0 },
         scale: { x: 1, y: 1, z: 1 },
@@ -1224,8 +1458,8 @@ export class StudioEngine {
 
     this.callbacks.onDragFeedback({
       active: true,
-      axis: this.transformControls.axis,
-      mode: this.transformControls.getMode(),
+      axis: this.isSurfaceDragging ? 'SURFACE' : this.transformControls.axis,
+      mode: effectiveMode,
       position: obj.position,
       rotation: obj.rotation,
       scale: obj.scale,
@@ -1257,14 +1491,17 @@ export class StudioEngine {
     }
     this.resizeObserver.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
+    this.renderer.domElement.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
 
     this.transformControls.detach();
     this.transformControls.dispose();
     this.orbitControls.dispose();
     this.viewHelper.dispose();
+    this.gridSystem.dispose();
     this.snapVisualizer.dispose();
     this.protractorVisualizer.dispose();
+    this.surfaceNormalVisualizer.dispose();
     this.hiddenFaceMaterial.dispose();
 
     for (const mesh of this.meshMap.values()) {

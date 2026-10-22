@@ -3,8 +3,10 @@ import { StudioEngine } from './engine/StudioEngine';
 import { CameraPresetType } from './engine/viewportHelpers';
 import { PRIMITIVE_META } from './engine/primitives';
 import {
+  DEFAULT_GRID_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
   DragFeedback,
+  GridSettings,
   PrimitiveKind,
   RotationSnapStep,
   SceneObjectData,
@@ -19,6 +21,7 @@ import { DesktopSpawnDock, MobileBottomBar } from './components/SpawnDock';
 import { InspectorPanel } from './components/InspectorPanel';
 import { HelpModal } from './components/HelpModal';
 import { RotationControlBar } from './components/RotationControlBar';
+import { SurfaceControlBar } from './components/SurfaceControlBar';
 
 export const App: React.FC = () => {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -34,7 +37,9 @@ export const App: React.FC = () => {
   const [snapSettings, setSnapSettings] = useState<SnapSettings>({
     ...DEFAULT_SNAP_SETTINGS,
   });
-  const [gridVisible, setGridVisible] = useState(true);
+  const [gridSettings, setGridSettings] = useState<GridSettings>({
+    ...DEFAULT_GRID_SETTINGS,
+  });
 
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
@@ -61,7 +66,7 @@ export const App: React.FC = () => {
     }
     toastTimerRef.current = window.setTimeout(() => {
       setToast(null);
-    }, 2200);
+    }, 2300);
   }, []);
 
   useEffect(() => {
@@ -99,12 +104,18 @@ export const App: React.FC = () => {
     [showToast]
   );
 
-  const handleChangeMode = useCallback((mode: TransformMode) => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    engine.setTransformMode(mode);
-    setTransformMode(mode);
-  }, []);
+  const handleChangeMode = useCallback(
+    (mode: TransformMode) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      engine.setTransformMode(mode);
+      setTransformMode(mode);
+      if (mode === 'surface') {
+        showToast('Mode Tempel: Seret objek terpilih di atas permukaan / terrain');
+      }
+    },
+    [showToast]
+  );
 
   const handleToggleSpace = useCallback(() => {
     const engine = engineRef.current;
@@ -120,6 +131,14 @@ export const App: React.FC = () => {
     if (!engine) return;
     const next = engine.updateSnapSettings(patch);
     setSnapSettings(next);
+  }, []);
+
+  const handleUpdateGrid = useCallback((patch: Partial<GridSettings>) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const nextGrid = engine.updateGridSettings(patch);
+    setGridSettings(nextGrid);
+    setSnapSettings(engine.getSnapSettings());
   }, []);
 
   const handleChangeRotationSnap = useCallback(
@@ -147,14 +166,6 @@ export const App: React.FC = () => {
       showToast('Rotasi ditegakkan ke 0°');
     }
   }, [showToast]);
-
-  const handleToggleGrid = useCallback(() => {
-    const engine = engineRef.current;
-    if (!engine) return;
-    const next = !gridVisible;
-    setGridVisible(next);
-    engine.setGridVisible(next);
-  }, [gridVisible]);
 
   const handleFocusCamera = useCallback(() => {
     engineRef.current?.focusSelectedOrReset();
@@ -289,6 +300,9 @@ export const App: React.FC = () => {
         case 's':
           handleChangeMode('scale');
           break;
+        case 't':
+          handleChangeMode('surface');
+          break;
         case 'f':
           handleFocusCamera();
           break;
@@ -327,6 +341,7 @@ export const App: React.FC = () => {
   ]);
 
   const formatDragAxis = (axis: string | null, mode: string) => {
+    if (mode === 'surface') return 'Surface Align';
     if (!axis) return '';
     if (mode === 'rotate') {
       if (axis === 'X') return 'Putar Sumbu X';
@@ -345,13 +360,13 @@ export const App: React.FC = () => {
         canUndo={canUndo}
         canRedo={canRedo}
         snapSettings={snapSettings}
-        gridVisible={gridVisible}
+        gridSettings={gridSettings}
         inspectorOpen={inspectorOpen}
         objectCount={objects.length}
         onUndo={() => engineRef.current?.undo()}
         onRedo={() => engineRef.current?.redo()}
         onUpdateSnap={handleUpdateSnap}
-        onToggleGrid={handleToggleGrid}
+        onUpdateGrid={handleUpdateGrid}
         onFocusCamera={handleFocusCamera}
         onCameraPreset={handleCameraPreset}
         onExport={handleExport}
@@ -375,14 +390,15 @@ export const App: React.FC = () => {
             onDelete={() => handleDeleteObject()}
           />
 
-          {/* Live Gizmo + Smart Snap Readout Pill */}
+          {/* Live Gizmo + Smart Snap + Surface Align Readout Pill */}
           {dragFeedback.active && (
             <div className="drag-hud-pill" aria-live="polite">
               <span className="drag-hud-axis">
                 {formatDragAxis(dragFeedback.axis, dragFeedback.mode)}
               </span>
 
-              {dragFeedback.mode === 'translate' && (
+              {(dragFeedback.mode === 'translate' ||
+                dragFeedback.mode === 'surface') && (
                 <span className="drag-hud-coords">
                   <b className="txt-x">X {dragFeedback.position.x.toFixed(2)}m</b>
                   <b className="txt-y">Y {dragFeedback.position.y.toFixed(2)}m</b>
@@ -423,7 +439,7 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* Controlled Rotation Quick Bar (only in Rotate mode when an object is selected) */}
+          {/* Controlled Rotation Quick Bar */}
           {transformMode === 'rotate' && selectedId && (
             <RotationControlBar
               rotationSnapDeg={snapSettings.rotationSnapDeg}
@@ -433,6 +449,25 @@ export const App: React.FC = () => {
             />
           )}
 
+          {/* Surface Alignment & Terrain Conforming Quick Bar */}
+          <SurfaceControlBar
+            visible={transformMode === 'surface' && Boolean(selectedId)}
+            conformMode={snapSettings.surfaceConformMode}
+            surfaceOffset={snapSettings.surfaceOffset}
+            onChangeConformMode={(mode) => {
+              handleUpdateSnap({ surfaceConformMode: mode });
+              showToast(
+                mode === 'align-normal'
+                  ? 'Mode: Ikuti Normal Kemiringan Permukaan'
+                  : mode === 'foundation-seat'
+                  ? 'Mode: Fondasi Menancap ke Lereng'
+                  : 'Mode: Tegak Ikuti Tinggi Kontur'
+              );
+            }}
+            onChangeOffset={(off) => handleUpdateSnap({ surfaceOffset: off })}
+            onConformNow={handleDropToFloor}
+          />
+
           <DesktopSpawnDock onSpawn={handleSpawn} />
 
           <div className="viewport-status-chip">
@@ -440,16 +475,24 @@ export const App: React.FC = () => {
             <span className="dot-sep">•</span>
             <span>
               {transformMode === 'translate'
-                ? 'Mode Geser (Panah RGB)'
+                ? 'Geser (Panah RGB)'
                 : transformMode === 'rotate'
-                ? `Mode Putar Terkendali (${
+                ? `Putar (${
                     snapSettings.rotationSnapDeg > 0
                       ? `${snapSettings.rotationSnapDeg}°`
                       : 'Bebas'
                   })`
                 : transformMode === 'scale'
-                ? 'Mode Skala'
-                : 'Mode Pilih'}
+                ? 'Skala'
+                : transformMode === 'surface'
+                ? `Tempel Permukaan (${
+                    snapSettings.surfaceConformMode === 'align-normal'
+                      ? 'Ikuti Normal'
+                      : snapSettings.surfaceConformMode === 'foundation-seat'
+                      ? 'Fondasi'
+                      : 'Tegak'
+                  })`
+                : 'Pilih'}
             </span>
           </div>
         </div>

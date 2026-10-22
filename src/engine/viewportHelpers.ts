@@ -283,3 +283,72 @@ export class RotationProtractorVisualizer {
     (this.sectorMesh.material as THREE.Material).dispose();
   }
 }
+
+/**
+ * Renders a glowing emerald contact ring + normal arrow when placing/sliding
+ * objects on 3D surfaces or sloped terrain (Surface Alignment & Align to Normal).
+ */
+export class SurfaceNormalVisualizer {
+  public readonly group = new THREE.Group();
+  private ringMesh: THREE.Mesh;
+  private shaftMesh: THREE.Mesh;
+  private coneMesh: THREE.Mesh;
+
+  constructor() {
+    this.group.name = '__surfaceNormalVisualizer';
+    this.group.visible = false;
+    this.group.renderOrder = 997;
+
+    const ringGeo = new THREE.RingGeometry(0.18, 0.24, 32);
+    ringGeo.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: '#34d399',
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false,
+      toneMapped: false,
+    });
+    this.ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    this.ringMesh.renderOrder = 997;
+    this.group.add(this.ringMesh);
+
+    const shaftGeo = new THREE.CylinderGeometry(0.014, 0.014, 0.55, 8);
+    shaftGeo.translate(0, 0.275, 0);
+    const arrowMat = new THREE.MeshBasicMaterial({
+      color: '#10b981',
+      depthTest: false,
+      toneMapped: false,
+    });
+    this.shaftMesh = new THREE.Mesh(shaftGeo, arrowMat);
+    this.shaftMesh.renderOrder = 998;
+    this.group.add(this.shaftMesh);
+
+    const coneGeo = new THREE.ConeGeometry(0.055, 0.14, 12);
+    coneGeo.translate(0, 0.6, 0);
+    this.coneMesh = new THREE.Mesh(coneGeo, arrowMat);
+    this.coneMesh.renderOrder = 998;
+    this.group.add(this.coneMesh);
+  }
+
+  public show(point: THREE.Vector3, normal: THREE.Vector3): void {
+    this.group.visible = true;
+    this.group.position.copy(point);
+    const up = new THREE.Vector3(0, 1, 0);
+    const q = new THREE.Quaternion().setFromUnitVectors(up, normal.clone().normalize());
+    this.group.quaternion.copy(q);
+  }
+
+  public hide(): void {
+    this.group.visible = false;
+  }
+
+  public dispose(): void {
+    this.ringMesh.geometry.dispose();
+    (this.ringMesh.material as THREE.Material).dispose();
+    this.shaftMesh.geometry.dispose();
+    (this.shaftMesh.material as THREE.Material).dispose();
+    this.coneMesh.geometry.dispose();
+  }
+}
+

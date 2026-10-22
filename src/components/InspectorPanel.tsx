@@ -16,11 +16,7 @@ import {
   SceneObjectData,
   Vec3,
 } from '../types/studio';
-import {
-  CubeShapeIcon,
-  CylinderShapeIcon,
-  TriangleShapeIcon,
-} from './ShapeIcons';
+import { PrimitiveShapePreview } from './ShapeIcons';
 
 interface AxisInputProps {
   axis: 'X' | 'Y' | 'Z';
@@ -92,14 +88,7 @@ const AxisInput: React.FC<AxisInputProps> = ({
 };
 
 function renderKindIcon(kind: PrimitiveKind) {
-  switch (kind) {
-    case 'cube':
-      return <CubeShapeIcon size={18} />;
-    case 'triangle':
-      return <TriangleShapeIcon size={18} />;
-    case 'cylinder':
-      return <CylinderShapeIcon size={18} />;
-  }
+  return <PrimitiveShapePreview kind={kind} size={22} />;
 }
 
 interface InspectorPanelProps {
