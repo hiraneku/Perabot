@@ -145,54 +145,54 @@ function computeProjectContentSignature(
 
   const gridSig = [
     grid.visible ? 1 : 0,
-    grid.style,
-    grid.spacing,
+    grid.style ?? 'wire',
+    grid.spacing ?? 1,
     grid.adaptive ? 1 : 0,
-    grid.worldSize,
-    grid.elevationY.toFixed(2),
+    grid.worldSize ?? 40,
+    (grid.elevationY ?? 0).toFixed(2),
     grid.showAxes ? 1 : 0,
-    grid.opacity.toFixed(2),
+    (grid.opacity ?? 0.88).toFixed(2),
     grid.showRuler ? 1 : 0,
     grid.showSelectionFootprint ? 1 : 0,
-    grid.verticalGrid,
+    grid.verticalGrid ?? 'none',
     grid.showPlotBoundary ? 1 : 0,
-    grid.plotWidth,
-    grid.plotDepth,
-    grid.terrainPreset,
-    grid.terrainAmplitude.toFixed(2),
+    grid.plotWidth ?? 8,
+    grid.plotDepth ?? 12,
+    grid.terrainPreset ?? 'hills',
+    (grid.terrainAmplitude ?? 1.4).toFixed(2),
   ].join(',');
 
   const snapSig = [
     snap.enabled ? 1 : 0,
     snap.objectMagnet ? 1 : 0,
-    snap.magnetStrength,
+    snap.magnetStrength ?? 'normal',
     snap.alignment ? 1 : 0,
     snap.grid ? 1 : 0,
-    snap.gridStep,
-    snap.rotationSnapDeg,
+    snap.gridStep ?? 0.25,
+    snap.rotationSnapDeg ?? 15,
     snap.modularSocket ? 1 : 0,
     snap.heightSnap ? 1 : 0,
-    snap.heightStep,
+    snap.heightStep ?? 0.5,
   ].join(',');
 
   const surfSig = [
     surface.enabled ? 1 : 0,
-    surface.conformMode,
-    surface.attachAxis,
+    surface.conformMode ?? 'align-normal',
+    surface.attachAxis ?? 'auto',
     surface.autoOnMove ? 1 : 0,
     surface.clickToPlace ? 1 : 0,
-    surface.spinDeg,
-    surface.offset.toFixed(2),
+    surface.spinDeg ?? 0,
+    (surface.offset ?? 0).toFixed(2),
     surface.surfaceAware ? 1 : 0,
-    surface.maxFlatSlopeDeg,
+    surface.maxFlatSlopeDeg ?? 14,
   ].join(',');
 
   const floorSig = (floors ?? [])
     .map(
       (f) =>
-        `${f.id}:${f.name}:${f.elevation.toFixed(2)}:${f.visible ? 1 : 0}:${
-          f.locked ? 1 : 0
-        }`
+        `${f.id}:${f.name}:${(f.elevation ?? 0).toFixed(2)}:${
+          f.visible ? 1 : 0
+        }:${f.locked ? 1 : 0}`
     )
     .join(';');
 
@@ -593,7 +593,7 @@ export const App: React.FC = () => {
           setFloors(state.floors);
           setActiveFloorId(state.activeFloorId);
           setFloorViewMode(state.floorViewMode);
-          setSculptedHeightsB64(engine.exportSculptedHeightsBase64());
+          setSculptedHeightsB64(state.sculptedHeightsB64);
         },
         onDragFeedback: (feedback) => {
           setDragFeedback(feedback);
@@ -601,7 +601,7 @@ export const App: React.FC = () => {
         onEyedropperSample: (sample, objName) => {
           setActiveBrush(sample);
           setPaintMode('bucket');
-          engine.setPaintInteraction('bucket', sample);
+          engineRef.current?.setPaintInteraction('bucket', sample);
           showToast(`${objName} — OK`);
         },
         onPaintApplied: (objName) => {

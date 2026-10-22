@@ -105,6 +105,7 @@ export interface StudioEngineCallbacks {
     floors: BuildingFloorLayer[];
     activeFloorId: string;
     floorViewMode: FloorViewMode;
+    sculptedHeightsB64: string | null;
   }) => void;
   onDragFeedback: (feedback: DragFeedback) => void;
   onEyedropperSample?: (sample: PaintBrushPayload, objectName: string) => void;
@@ -4627,6 +4628,7 @@ export class StudioEngine {
       floors: this.floors.map((f) => ({ ...f })),
       activeFloorId: this.activeFloorId,
       floorViewMode: this.floorViewMode,
+      sculptedHeightsB64: this.gridSystem.exportSculptedHeightsBase64(),
     });
   }
 

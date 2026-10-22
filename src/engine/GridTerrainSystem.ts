@@ -70,7 +70,11 @@ function makeBadgeSprite(
     ctx.strokeStyle = border;
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.roundRect(pad, pad, w, h, r);
+    if (typeof ctx.roundRect === 'function') {
+      ctx.roundRect(pad, pad, w, h, r);
+    } else {
+      ctx.rect(pad, pad, w, h);
+    }
     ctx.fill();
     ctx.stroke();
 
