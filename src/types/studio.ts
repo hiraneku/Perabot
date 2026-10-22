@@ -86,6 +86,46 @@ export type ShapeSubcategory =
   | 'curved'
   | 'architecture';
 
+export type AppScreen = 'home' | 'editor';
+
+export type StudioMode = 'modeling' | 'house';
+
+export type AppLanguage = 'id' | 'en' | 'ja';
+
+export type StudioThemeId =
+  | 'midnight'
+  | 'obsidian'
+  | 'espresso'
+  | 'daylight'
+  | 'indigo';
+
+export type LightingMood = 'morning' | 'sunset' | 'night';
+
+export type GraphicsQuality = 'light' | 'balanced' | 'ultra';
+
+export type UiDensity = 'comfortable' | 'compact';
+
+export interface GlobalAppSettings {
+  language: AppLanguage;
+  theme: StudioThemeId;
+  graphicsQuality: GraphicsQuality;
+  orbitSensitivity: number; // 0.5 .. 2.0
+  uiDensity: UiDensity;
+  lightingMood: LightingMood;
+}
+
+export type ArchitecturalRole = 'wall' | 'floor' | 'roof' | 'opening' | 'prop';
+
+export type HousePresetCategory =
+  | 'all'
+  | 'walls'
+  | 'floors'
+  | 'roofs'
+  | 'openings'
+  | 'furniture'
+  | 'lighting'
+  | 'custom';
+
 export type TransformMode = 'select' | 'translate' | 'rotate' | 'scale';
 
 export type PaintInteractionMode = 'none' | 'eyedropper' | 'bucket';
@@ -97,9 +137,9 @@ export type MagnetStrength = 'subtle' | 'normal' | 'strong';
 export type RotationSnapStep = 0 | 5 | 15 | 45 | 90;
 
 export type SurfaceConformMode =
-  | 'align-normal' // Align attach axis perpendicular to target surface/terrain normal
-  | 'upright-follow' // Keep upright (world Y) while riding surface/terrain height
-  | 'foundation-seat'; // Keep upright and seat lowest base corner into sloped terrain/surface
+  | 'align-normal'
+  | 'upright-follow'
+  | 'foundation-seat';
 
 export type SurfaceAttachAxis = 'auto' | '-y' | '-z' | '+y';
 
@@ -107,10 +147,10 @@ export interface SurfaceSettings {
   enabled: boolean;
   conformMode: SurfaceConformMode;
   attachAxis: SurfaceAttachAxis;
-  autoOnMove: boolean; // Automatically project onto surfaces/terrain while moving XZ or dragging object
-  clickToPlace: boolean; // Click any surface face on scene/terrain to place & align selected object
-  spinDeg: number; // Rotation around surface normal (-180..180)
-  offset: number; // Offset along surface normal (-0.25..0.5m)
+  autoOnMove: boolean;
+  clickToPlace: boolean;
+  spinDeg: number;
+  offset: number;
 }
 
 export type SubdivisionMode = 'smooth' | 'simple';
@@ -118,9 +158,9 @@ export type SubdivisionMode = 'smooth' | 'simple';
 export interface ObjectSubdivisionSettings {
   level: 0 | 1 | 2 | 3;
   mode: SubdivisionMode;
-  crease: number; // 0..1 (0 = full organic rounding, 1 = preserve sharp edges)
-  lockBase: boolean; // Keep bottom contact plane flat when smoothing
-  wireframe: boolean; // Show subdivided polygon mesh overlay
+  crease: number;
+  lockBase: boolean;
+  wireframe: boolean;
 }
 
 export interface SubdivisionStats {
@@ -191,6 +231,59 @@ export interface SceneObjectData {
   flatShading: boolean;
   subdivision: ObjectSubdivisionSettings;
   visible: boolean;
+  groupId?: string | null;
+  groupName?: string;
+  archRole?: ArchitecturalRole;
+}
+
+export interface SerializedProjectFile {
+  format: 'perabot-project-v1';
+  id: string;
+  name: string;
+  mode: StudioMode;
+  createdAt: number;
+  updatedAt: number;
+  objects: SceneObjectData[];
+  gridSettings?: GridSettings;
+  snapSettings?: SnapSettings;
+  surfaceSettings?: SurfaceSettings;
+  lightingMood?: LightingMood;
+}
+
+export interface SavedProjectRecord {
+  id: string;
+  name: string;
+  mode: StudioMode;
+  thumbnailDataUrl: string;
+  objectCount: number;
+  createdAt: number;
+  updatedAt: number;
+  scene: SerializedProjectFile;
+}
+
+export interface CustomAssetPart {
+  name: string;
+  kind: PrimitiveKind;
+  localPosition: Vec3;
+  rotation: Vec3;
+  scale: Vec3;
+  color: string;
+  roughness: number;
+  metalness: number;
+  opacity: number;
+  emissive: string;
+  emissiveIntensity: number;
+  flatShading: boolean;
+  subdivision: ObjectSubdivisionSettings;
+  archRole?: ArchitecturalRole;
+}
+
+export interface CustomAssetRecord {
+  id: string;
+  name: string;
+  thumbnailDataUrl: string;
+  createdAt: number;
+  parts: CustomAssetPart[];
 }
 
 export interface DragFeedback {
@@ -203,6 +296,107 @@ export interface DragFeedback {
   deltaAngleDeg?: number;
   snapLabel?: string | null;
 }
+
+export const DEFAULT_GLOBAL_SETTINGS: GlobalAppSettings = {
+  language: 'id',
+  theme: 'midnight',
+  graphicsQuality: 'balanced',
+  orbitSensitivity: 1.0,
+  uiDensity: 'comfortable',
+  lightingMood: 'morning',
+};
+
+export const STUDIO_THEMES: Array<{
+  id: StudioThemeId;
+  name: Record<AppLanguage, string>;
+  desc: Record<AppLanguage, string>;
+  canvasBg: string;
+  panelPreview: string;
+  accentPreview: string;
+  isLight?: boolean;
+}> = [
+  {
+    id: 'midnight',
+    name: {
+      id: 'Midnight Slate',
+      en: 'Midnight Slate',
+      ja: 'ミッドナイト・スレート',
+    },
+    desc: {
+      id: 'Gelap biru-abu khas studio 3D modern',
+      en: 'Classic dark slate 3D studio look',
+      ja: '定番のダークブルー系3Dスタジオ',
+    },
+    canvasBg: '#151821',
+    panelPreview: '#191d26',
+    accentPreview: '#3b82f6',
+  },
+  {
+    id: 'obsidian',
+    name: {
+      id: 'Obsidian OLED',
+      en: 'Obsidian OLED',
+      ja: 'オブシディアン・OLED',
+    },
+    desc: {
+      id: 'Hitam pekat kontras tinggi dengan aksen zamrud',
+      en: 'Deep pitch black with emerald highlights',
+      ja: '有機EL向けの漆黒＆エメラルド配色',
+    },
+    canvasBg: '#090b10',
+    panelPreview: '#0e1117',
+    accentPreview: '#10b981',
+  },
+  {
+    id: 'espresso',
+    name: {
+      id: 'Warm Espresso',
+      en: 'Warm Espresso',
+      ja: 'ウォーム・エスプレッソ',
+    },
+    desc: {
+      id: 'Gelap hangat bernuansa kayu & interior',
+      en: 'Cozy warm dark tone for interior design',
+      ja: '建築・インテリアに馴染む暖色ダーク',
+    },
+    canvasBg: '#1c1815',
+    panelPreview: '#241e1a',
+    accentPreview: '#f59e0b',
+  },
+  {
+    id: 'indigo',
+    name: {
+      id: 'Indigo Creative',
+      en: 'Indigo Creative',
+      ja: 'インディゴ・クリエイティブ',
+    },
+    desc: {
+      id: 'Ungu-nila elegan bergaya aplikasi desain',
+      en: 'Sleek violet-indigo creative workspace',
+      ja: '洗練されたバイオレット系ワークスペース',
+    },
+    canvasBg: '#161426',
+    panelPreview: '#1d1a30',
+    accentPreview: '#8b5cf6',
+  },
+  {
+    id: 'daylight',
+    name: {
+      id: 'Nordic Daylight',
+      en: 'Nordic Daylight',
+      ja: 'ノルディック・デイライト',
+    },
+    desc: {
+      id: 'Terang bersih seperti meja gambar arsitek',
+      en: 'Clean, bright architectural drafting table',
+      ja: '明るく見やすい建築スタジオ風ライトテーマ',
+    },
+    canvasBg: '#e2e8f0',
+    panelPreview: '#f8fafc',
+    accentPreview: '#2563eb',
+    isLight: true,
+  },
+];
 
 export const DEFAULT_SUBDIVISION_SETTINGS: ObjectSubdivisionSettings = {
   level: 0,

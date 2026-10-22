@@ -1,6 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import { getShapeThumbnails, PRIMITIVE_META } from '../engine/primitives';
+import { getHousePresetThumbnails } from '../engine/housePresets';
 import { PrimitiveKind } from '../types/studio';
+
+let cachedThumbs: Partial<Record<PrimitiveKind, string>> | null = null;
+let cachedHouseThumbs: Record<string, string> | null = null;
 
 export const CubeShapeIcon: React.FC<{ size?: number }> = ({ size = 24 }) => (
   <svg width={size} height={size} viewBox="0 0 28 28" fill="none" aria-hidden="true">
@@ -43,39 +47,6 @@ export const CylinderShapeIcon: React.FC<{ size?: number }> = ({ size = 24 }) =>
   </svg>
 );
 
-export const PrimitiveShapePreview: React.FC<{
-  kind: PrimitiveKind;
-  size?: number;
-  className?: string;
-}> = ({ kind, size = 36, className }) => {
-  const thumbnails = useMemo(() => getShapeThumbnails(), []);
-  const src = thumbnails[kind];
-  const meta = PRIMITIVE_META[kind];
-
-  if (src) {
-    return (
-      <img
-        src={src}
-        alt={meta.label}
-        width={size}
-        height={size}
-        draggable={false}
-        className={className}
-        style={{
-          width: size,
-          height: size,
-          objectFit: 'contain',
-          display: 'block',
-          pointerEvents: 'none',
-          userSelect: 'none',
-        }}
-      />
-    );
-  }
-
-  return <CubeShapeIcon size={size} />;
-};
-
 export const RgbGizmoIcon: React.FC<{ size?: number }> = ({ size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
     <path d="M12 3V21" stroke="#78E82C" strokeWidth="2.1" strokeLinecap="round" />
@@ -105,3 +76,92 @@ export const RgbGizmoIcon: React.FC<{ size?: number }> = ({ size = 18 }) => (
     <circle cx="12" cy="12" r="2.1" fill="#F8FAFC" />
   </svg>
 );
+
+export const PrimitiveShapePreview: React.FC<{
+  kind: PrimitiveKind;
+  size?: number;
+  className?: string;
+}> = ({ kind, size = 56, className }) => {
+  const [src, setSrc] = useState<string | null>(() =>
+    cachedThumbs ? cachedThumbs[kind] ?? null : null
+  );
+
+  useEffect(() => {
+    if (cachedThumbs && cachedThumbs[kind]) {
+      setSrc(cachedThumbs[kind]!);
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      cachedThumbs = getShapeThumbnails();
+      setSrc(cachedThumbs[kind] ?? null);
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [kind]);
+
+  if (!src) {
+    return (
+      <span
+        className="shape-thumb-skeleton"
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={PRIMITIVE_META[kind]?.label ?? kind}
+      width={size}
+      height={size}
+      decoding="async"
+      className={className ? `primitive-3d-thumb ${className}` : 'primitive-3d-thumb'}
+      style={{ width: size, height: size }}
+      draggable={false}
+    />
+  );
+};
+
+export const HousePresetPreview: React.FC<{
+  presetId: string;
+  size?: number;
+}> = ({ presetId, size = 62 }) => {
+  const [src, setSrc] = useState<string | null>(() =>
+    cachedHouseThumbs ? cachedHouseThumbs[presetId] ?? null : null
+  );
+
+  useEffect(() => {
+    if (cachedHouseThumbs && cachedHouseThumbs[presetId]) {
+      setSrc(cachedHouseThumbs[presetId]!);
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      cachedHouseThumbs = getHousePresetThumbnails();
+      setSrc(cachedHouseThumbs[presetId] ?? null);
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [presetId]);
+
+  if (!src) {
+    return (
+      <span
+        className="shape-thumb-skeleton"
+        style={{ width: size, height: size }}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      width={size}
+      height={size}
+      decoding="async"
+      className="primitive-3d-thumb"
+      style={{ width: size, height: size }}
+      draggable={false}
+    />
+  );
+};

@@ -1236,53 +1236,88 @@ export const PRIMITIVE_META: Record<PrimitiveKind, PrimitiveMetaItem> =
   ) as Record<PrimitiveKind, PrimitiveMetaItem>;
 
 /**
- * Generates and caches crisp 3D studio-lit thumbnails for all 75 shapes.
+ * Generates and caches razor-sharp HiDPI 240x240 supersampled 3D studio thumbnails
+ * for all 75 Basic Shapes with per-shape auto-framing and 4-point rim lighting.
  */
 let cachedThumbnails: Record<PrimitiveKind, string> | null = null;
+
+const FRONTAL_PREVIEW_KINDS = new Set<PrimitiveKind>([
+  'window-frame',
+  'door-frame',
+  'arch',
+  'wall-niche',
+  'cornice',
+  'molding-profile',
+]);
 
 export function getShapeThumbnails(): Record<PrimitiveKind, string> {
   if (cachedThumbnails) return cachedThumbnails;
 
   const result = {} as Record<PrimitiveKind, string>;
   try {
-    const size = 96;
+    const logicalSize = 120;
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
       preserveDrawingBuffer: true,
+      powerPreference: 'high-performance',
     });
-    renderer.setSize(size, size);
-    renderer.setPixelRatio(1);
+    renderer.setSize(logicalSize, logicalSize);
+    renderer.setPixelRatio(2); // 240x240 crisp Retina resolution!
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.15;
+    renderer.toneMappingExposure = 1.18;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 20);
-    camera.position.set(1.55, 1.32, 1.75);
-    camera.lookAt(0, -0.02, 0);
+    const camera = new THREE.PerspectiveCamera(34, 1, 0.05, 30);
 
-    const hemi = new THREE.HemisphereLight('#ffffff', '#1e293b', 1.12);
+    const hemi = new THREE.HemisphereLight('#f8fafc', '#1e293b', 1.05);
     scene.add(hemi);
-    const key = new THREE.DirectionalLight('#fffbeb', 2.1);
-    key.position.set(3, 5, 4);
+    const key = new THREE.DirectionalLight('#fffbeb', 2.35);
+    key.position.set(3.4, 5.2, 4.1);
     scene.add(key);
-    const rim = new THREE.DirectionalLight('#60a5fa', 0.85);
-    rim.position.set(-4, 2, -3);
+    const rim = new THREE.DirectionalLight('#93c5fd', 1.15);
+    rim.position.set(-4.2, 2.8, -3.4);
     scene.add(rim);
+    const bounce = new THREE.DirectionalLight('#cbd5e1', 0.45);
+    bounce.position.set(0, -3, 3);
+    scene.add(bounce);
+
+    const center = new THREE.Vector3();
+    const sizeVec = new THREE.Vector3();
+    const baseDir = new THREE.Vector3(1.5, 1.24, 1.72).normalize();
+    const frontalDir = new THREE.Vector3(1.05, 0.72, 1.96).normalize();
 
     for (const item of BASIC_SHAPES_CATALOG) {
       const geo = createPrimitiveGeometry(item.kind);
+      geo.computeBoundingBox();
+      const bb =
+        geo.boundingBox ??
+        new THREE.Box3(
+          new THREE.Vector3(-0.5, -0.5, -0.5),
+          new THREE.Vector3(0.5, 0.5, 0.5)
+        );
+      bb.getCenter(center);
+      bb.getSize(sizeVec);
+
       const mat = new THREE.MeshStandardMaterial({
         color: item.defaultColor,
-        roughness: 0.46,
-        metalness: 0.12,
+        roughness: Math.min(0.5, Math.max(0.28, item.roughness * 0.82)),
+        metalness: Math.max(0.12, item.metalness),
       });
       const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(-center.x, -center.y, -center.z);
       scene.add(mesh);
+
+      const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z, 0.55);
+      const dist = maxDim * 2.18;
+      const viewDir = FRONTAL_PREVIEW_KINDS.has(item.kind) ? frontalDir : baseDir;
+      camera.position.copy(viewDir).multiplyScalar(dist);
+      camera.lookAt(0, 0, 0);
 
       renderer.clear();
       renderer.render(scene, camera);
-      result[item.kind] = renderer.domElement.toDataURL('image/webp', 0.88);
+      result[item.kind] = renderer.domElement.toDataURL('image/png');
 
       scene.remove(mesh);
       geo.dispose();

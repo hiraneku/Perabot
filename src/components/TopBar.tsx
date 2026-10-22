@@ -17,13 +17,24 @@ import {
   Maximize,
   Minimize,
   ArrowDownToLine,
+  Home,
+  Settings,
+  Eye,
+  Footprints,
+  Sun,
+  Sunset,
+  Moon,
 } from 'lucide-react';
 import { CameraPresetType } from '../engine/viewportHelpers';
+import { TRANSLATIONS } from '../i18n/translations';
 import {
+  AppLanguage,
   GridSettings,
   GridStyle,
+  LightingMood,
   MagnetStrength,
   SnapSettings,
+  StudioMode,
   SurfaceAttachAxis,
   SurfaceConformMode,
   SurfaceSettings,
@@ -31,6 +42,13 @@ import {
 } from '../types/studio';
 
 interface TopBarProps {
+  language: AppLanguage;
+  studioMode: StudioMode;
+  projectName: string;
+  isSavingProject: boolean;
+  lightingMood: LightingMood;
+  interiorPeek: boolean;
+  walkthroughActive: boolean;
   canUndo: boolean;
   canRedo: boolean;
   snapSettings: SnapSettings;
@@ -40,6 +58,12 @@ interface TopBarProps {
   isFullscreen: boolean;
   hasSelection: boolean;
   objectCount: number;
+  onGoHome: () => void;
+  onRenameProject: (name: string) => void;
+  onCycleLightingMood: () => void;
+  onToggleInteriorPeek: () => void;
+  onToggleWalkthrough: () => void;
+  onOpenSettings: () => void;
   onUndo: () => void;
   onRedo: () => void;
   onUpdateSnap: (patch: Partial<SnapSettings>) => void;
@@ -56,6 +80,13 @@ interface TopBarProps {
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
+  language,
+  studioMode,
+  projectName,
+  isSavingProject,
+  lightingMood,
+  interiorPeek,
+  walkthroughActive,
   canUndo,
   canRedo,
   snapSettings,
@@ -65,6 +96,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   isFullscreen,
   hasSelection,
   objectCount,
+  onGoHome,
+  onRenameProject,
+  onCycleLightingMood,
+  onToggleInteriorPeek,
+  onToggleWalkthrough,
+  onOpenSettings,
   onUndo,
   onRedo,
   onUpdateSnap,
@@ -79,6 +116,13 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleFullscreen,
   onOpenHelp,
 }) => {
+  const t = TRANSLATIONS[language];
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(projectName);
+
+  useEffect(() => {
+    setTitleDraft(projectName);
+  }, [projectName]);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
   const [surfaceMenuOpen, setSurfaceMenuOpen] = useState(false);
@@ -121,16 +165,59 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <header className="topbar">
-      {/* Left: Brand + Undo/Redo */}
+      {/* Left: Home + Project Title + Undo/Redo */}
       <div className="topbar-group topbar-left">
-        <div className="brand-badge" title="Perabot 3D Studio">
-          <span className="brand-dot-group" aria-hidden="true">
-            <span className="axis-dot axis-x" />
-            <span className="axis-dot axis-y" />
-            <span className="axis-dot axis-z" />
+        <button
+          type="button"
+          className="chip-btn home-nav-btn"
+          onClick={onGoHome}
+          title={t.backHome}
+        >
+          <Home size={15} />
+          <span className="hide-xs">{t.backHome}</span>
+        </button>
+
+        <div className="project-title-pill">
+          <span
+            className={`project-mode-dot ${studioMode}`}
+            title={studioMode === 'house' ? t.modeHouseTitle : t.modeModelingTitle}
+          />
+          {editingTitle ? (
+            <input
+              type="text"
+              className="project-title-input"
+              value={titleDraft}
+              autoFocus
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onBlur={() => {
+                const v = titleDraft.trim();
+                if (v) onRenameProject(v);
+                setEditingTitle(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const v = titleDraft.trim();
+                  if (v) onRenameProject(v);
+                  setEditingTitle(false);
+                } else if (e.key === 'Escape') {
+                  setTitleDraft(projectName);
+                  setEditingTitle(false);
+                }
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className="project-title-btn"
+              onClick={() => setEditingTitle(true)}
+              title={t.rename}
+            >
+              <span className="project-title-text">{projectName}</span>
+            </button>
+          )}
+          <span className="project-save-dot" title={t.savedAuto}>
+            {isSavingProject ? '•••' : '✓'}
           </span>
-          <span className="brand-title">Perabot</span>
-          <span className="brand-tag hide-compact">3D</span>
         </div>
 
         <div className="topbar-divider hide-compact" />
@@ -141,8 +228,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             className="icon-btn"
             disabled={!canUndo}
             onClick={onUndo}
-            title="Urungkan (Ctrl+Z)"
-            aria-label="Urungkan"
+            title="Undo (Ctrl+Z)"
+            aria-label="Undo"
           >
             <Undo2 size={17} />
           </button>
@@ -151,8 +238,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             className="icon-btn"
             disabled={!canRedo}
             onClick={onRedo}
-            title="Ulangi (Ctrl+Y)"
-            aria-label="Ulangi"
+            title="Redo (Ctrl+Y)"
+            aria-label="Redo"
           >
             <Redo2 size={17} />
           </button>
@@ -921,20 +1008,70 @@ export const TopBar: React.FC<TopBarProps> = ({
             </div>
           )}
         </div>
+
+        {/* Interior Peek ("Intip Ruang") */}
+        <button
+          type="button"
+          className={`chip-btn ${interiorPeek ? 'active' : ''}`}
+          onClick={onToggleInteriorPeek}
+          title={t.peekInterior}
+        >
+          <Eye size={15} />
+          <span className="hide-md">{t.peekInterior}</span>
+        </button>
+
+        {/* First-Person Walkthrough ("Jalan Kaki") */}
+        <button
+          type="button"
+          className={`chip-btn ${walkthroughActive ? 'active' : ''}`}
+          onClick={onToggleWalkthrough}
+          title={t.walkthrough}
+        >
+          <Footprints size={15} />
+          <span className="hide-md">{t.walkthrough}</span>
+        </button>
+
+        {/* Lighting Mood Cycle */}
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={onCycleLightingMood}
+          title={
+            lightingMood === 'sunset'
+              ? t.moodSunset
+              : lightingMood === 'night'
+              ? t.moodNight
+              : t.moodMorning
+          }
+        >
+          {lightingMood === 'sunset' ? (
+            <Sunset size={16} />
+          ) : lightingMood === 'night' ? (
+            <Moon size={16} />
+          ) : (
+            <Sun size={16} />
+          )}
+        </button>
       </div>
 
-      {/* Right: Fullscreen, Clear, Help, Export, Toggle Right Sidebar */}
+      {/* Right: Settings, Fullscreen, Clear, Help, Export, Toggle Right Sidebar */}
       <div className="topbar-group topbar-right">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={onOpenSettings}
+          title={t.settingsTitle}
+          aria-label={t.settingsTitle}
+        >
+          <Settings size={17} />
+        </button>
+
         <button
           type="button"
           className={`icon-btn ${isFullscreen ? 'active' : ''}`}
           onClick={onToggleFullscreen}
-          title={
-            isFullscreen
-              ? 'Keluar Mode Layar Penuh (Esc)'
-              : 'Mode Layar Penuh (Fullscreen)'
-          }
-          aria-label="Mode Layar Penuh"
+          title="Fullscreen"
+          aria-label="Fullscreen"
         >
           {isFullscreen ? <Minimize size={17} /> : <Maximize size={17} />}
         </button>
@@ -944,8 +1081,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             type="button"
             className="icon-btn danger-hover hide-compact"
             onClick={onClearScene}
-            title="Bersihkan Semua Objek"
-            aria-label="Bersihkan Scene"
+            title={t.clearScene}
+            aria-label={t.clearScene}
           >
             <Trash2 size={16} />
           </button>
@@ -955,8 +1092,8 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           className="icon-btn"
           onClick={onOpenHelp}
-          title="Panduan Kontrol & Pintasan"
-          aria-label="Panduan"
+          title={t.help}
+          aria-label={t.help}
         >
           <HelpCircle size={17} />
         </button>
@@ -967,10 +1104,10 @@ export const TopBar: React.FC<TopBarProps> = ({
             className="primary-btn export-btn"
             onClick={() => setExportMenuOpen((v) => !v)}
             disabled={objectCount === 0}
-            title="Ekspor ke file 3D (.glb / .gltf)"
+            title="Export 3D (.glb / .gltf)"
           >
             <Download size={15} />
-            <span className="hide-compact">Ekspor</span>
+            <span className="hide-compact">{t.exportBtn}</span>
             <ChevronDown size={13} />
           </button>
 

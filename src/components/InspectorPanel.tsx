@@ -15,8 +15,13 @@ import {
   Move3d,
   RotateCw,
   Maximize2,
+  Sparkles,
+  Ungroup,
+  Boxes,
 } from 'lucide-react';
+import { TRANSLATIONS } from '../i18n/translations';
 import {
+  AppLanguage,
   DEFAULT_SUBDIVISION_SETTINGS,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
@@ -108,8 +113,10 @@ function renderKindIcon(kind: PrimitiveKind) {
 }
 
 interface InspectorPanelProps {
+  language: AppLanguage;
   objects: SceneObjectData[];
   selectedId: string | null;
+  editSinglePartMode: boolean;
   subdivStats: SubdivisionStats | null;
   paintMode: PaintInteractionMode;
   activeBrush: PaintBrushPayload;
@@ -119,6 +126,10 @@ interface InspectorPanelProps {
   onCloseMobile?: () => void;
   onCollapseDesktop?: () => void;
   onSelectObject: (id: string) => void;
+  onToggleEditSinglePart: (enabled: boolean) => void;
+  onGroupSceneObjects: () => void;
+  onUngroupSelected: () => void;
+  onSaveAsCustomAsset: (customName?: string) => void;
   onUpdateTransform: (
     id: string,
     patch: Partial<{ position: Vec3; rotation: Vec3; scale: Vec3 }>
@@ -141,8 +152,10 @@ interface InspectorPanelProps {
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
+  language,
   objects,
   selectedId,
+  editSinglePartMode,
   subdivStats,
   paintMode,
   activeBrush,
@@ -152,6 +165,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onCloseMobile,
   onCollapseDesktop,
   onSelectObject,
+  onToggleEditSinglePart,
+  onGroupSceneObjects,
+  onUngroupSelected,
+  onSaveAsCustomAsset,
   onUpdateTransform,
   onUpdateMaterial,
   onUpdateSubdivision,
@@ -161,9 +178,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onDuplicateSelected,
   onDropToFloor,
 }) => {
+  const t = TRANSLATIONS[language];
   const [mobileSection, setMobileSection] = useState<'inspector' | 'outliner'>(
     'inspector'
   );
+  const [savingAssetOpen, setSavingAssetOpen] = useState(false);
+  const [assetNameDraft, setAssetNameDraft] = useState('');
   const selectedObject = objects.find((o) => o.id === selectedId) ?? null;
   const subdiv = selectedObject?.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS;
 
@@ -360,12 +380,103 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           )}
 
           {/* TAB 1: MODERN TRANSFORM STUDIO */}
-          {inspectorSubTab === 'transform' &&
-            (!selectedObject ? (
-              <div className="empty-hint">
-                Ketuk salah satu bentuk 3D di kanvas untuk mengatur posisi, rotasi, dan ukurannya.
-              </div>
-            ) : (
+          {inspectorSubTab === 'transform' && (
+            <>
+              {/* Group / Ungroup & Custom Asset Bridge Bar */}
+              {objects.length > 0 && (
+                <div className="asset-group-bridge-card">
+                  <div className="agb-row">
+                    {selectedObject?.groupId ? (
+                      <>
+                        <button
+                          type="button"
+                          className={`agb-chip ${editSinglePartMode ? 'active' : ''}`}
+                          onClick={() => onToggleEditSinglePart(!editSinglePartMode)}
+                        >
+                          <Boxes size={13} />
+                          <span>
+                            {editSinglePartMode
+                              ? t.editingSinglePart
+                              : t.editGroupParts}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="agb-chip"
+                          onClick={onUngroupSelected}
+                        >
+                          <Ungroup size={13} />
+                          <span>{t.ungroupAction}</span>
+                        </button>
+                      </>
+                    ) : (
+                      objects.length >= 2 && (
+                        <button
+                          type="button"
+                          className="agb-chip"
+                          onClick={onGroupSceneObjects}
+                        >
+                          <Boxes size={13} />
+                          <span>{t.groupAction}</span>
+                        </button>
+                      )
+                    )}
+
+                    <button
+                      type="button"
+                      className="agb-save-asset-btn"
+                      onClick={() => {
+                        const suggested =
+                          selectedObject?.groupName ||
+                          selectedObject?.name ||
+                          objects[0]?.name ||
+                          'Properti Kustom';
+                        setAssetNameDraft(suggested);
+                        setSavingAssetOpen((v) => !v);
+                      }}
+                    >
+                      <Sparkles size={13} />
+                      <span>{t.saveToAssets}</span>
+                    </button>
+                  </div>
+
+                  {savingAssetOpen && (
+                    <div className="agb-save-inline">
+                      <input
+                        type="text"
+                        value={assetNameDraft}
+                        placeholder={t.saveToAssets}
+                        autoFocus
+                        onChange={(e) => setAssetNameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            onSaveAsCustomAsset(assetNameDraft.trim() || undefined);
+                            setSavingAssetOpen(false);
+                          } else if (e.key === 'Escape') {
+                            setSavingAssetOpen(false);
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="agb-confirm-btn"
+                        onClick={() => {
+                          onSaveAsCustomAsset(assetNameDraft.trim() || undefined);
+                          setSavingAssetOpen(false);
+                        }}
+                      >
+                        <Check size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!selectedObject ? (
+                <div className="empty-hint">
+                  Ketuk salah satu bentuk 3D di kanvas untuk mengatur posisi, rotasi, dan ukurannya.
+                </div>
+              ) : (
               <div className="transform-studio-stack">
                 {/* Object Identity & Quick Actions Card */}
                 <div className="transform-identity-card">
@@ -631,7 +742,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </div>
                 </div>
               </div>
-            ))}
+              )}
+            </>
+          )}
 
           {/* TAB 3: ADVANCED SUBDIVISION SURFACE MODIFIER */}
           {inspectorSubTab === 'subdiv' &&

@@ -4,37 +4,124 @@ import { PaintBrushPayload, StudioEngine } from './engine/StudioEngine';
 import { CameraPresetType } from './engine/viewportHelpers';
 import { PRIMITIVE_META } from './engine/primitives';
 import {
+  HousePresetItem,
+  renderPartsThumbnailDataUrl,
+} from './engine/housePresets';
+import { TRANSLATIONS } from './i18n/translations';
+import {
+  deleteCustomAssetRecord,
+  deleteProjectRecord,
+  downloadProjectBackup,
+  duplicateProjectRecord,
+  importProjectBackupFile,
+  listCustomAssets,
+  listProjects,
+  loadGlobalSettings,
+  renameProjectRecord,
+  saveCustomAssetRecord,
+  saveGlobalSettings,
+  saveProjectRecord,
+} from './services/projectStorage';
+import {
+  AppScreen,
+  CustomAssetRecord,
   DEFAULT_GRID_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
   DragFeedback,
+  GlobalAppSettings,
   GridSettings,
+  LightingMood,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PrimitiveKind,
   RotationSnapStep,
+  SavedProjectRecord,
   SceneObjectData,
   SnapSettings,
+  StudioMode,
+  STUDIO_THEMES,
   SubdivisionStats,
   SurfaceSettings,
   TransformMode,
   TransformSpace,
   Vec3,
 } from './types/studio';
+import { MainMenu } from './components/MainMenu';
+import { GlobalSettingsModal } from './components/GlobalSettingsModal';
 import { TopBar } from './components/TopBar';
 import { TransformToolbar } from './components/TransformToolbar';
 import { DesktopSpawnDock, MobileBottomBar } from './components/SpawnDock';
 import { InspectorPanel, InspectorSubTab } from './components/InspectorPanel';
 import { HelpModal } from './components/HelpModal';
 import { RotationControlBar } from './components/RotationControlBar';
+import { WalkthroughOverlay } from './components/WalkthroughOverlay';
 import { AdvancedColorMaterialPatch } from './components/ColorWheelPicker';
+
+function buildEmptyProjectRecord(
+  mode: StudioMode,
+  name: string,
+  lightingMood: LightingMood
+): SavedProjectRecord {
+  const now = Date.now();
+  const id = `proj_${now}_${Math.random().toString(36).slice(2, 7)}`;
+  const gridSettings: GridSettings =
+    mode === 'house'
+      ? {
+          ...DEFAULT_GRID_SETTINGS,
+          style: 'tile',
+          spacing: 0.5,
+          worldSize: 32,
+        }
+      : { ...DEFAULT_GRID_SETTINGS };
+
+  return {
+    id,
+    name,
+    mode,
+    thumbnailDataUrl: '',
+    objectCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    scene: {
+      format: 'perabot-project-v1',
+      id,
+      name,
+      mode,
+      createdAt: now,
+      updatedAt: now,
+      objects: [],
+      gridSettings,
+      snapSettings: { ...DEFAULT_SNAP_SETTINGS },
+      surfaceSettings: { ...DEFAULT_SURFACE_SETTINGS },
+      lightingMood,
+    },
+  };
+}
 
 export const App: React.FC = () => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<StudioEngine | null>(null);
 
+  // Global App Settings (Language, Theme, Graphics, Camera Speed, Density)
+  const [globalSettings, setGlobalSettings] = useState<GlobalAppSettings>(() =>
+    loadGlobalSettings()
+  );
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Screen & Project Library State
+  const [activeScreen, setActiveScreen] = useState<AppScreen>('home');
+  const [projects, setProjects] = useState<SavedProjectRecord[]>([]);
+  const [customAssets, setCustomAssets] = useState<CustomAssetRecord[]>([]);
+  const [activeProject, setActiveProject] = useState<SavedProjectRecord | null>(
+    null
+  );
+  const [isSavingProject, setIsSavingProject] = useState(false);
+
+  // Studio Scene State
   const [objects, setObjects] = useState<SceneObjectData[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editSinglePartMode, setEditSinglePartMode] = useState(false);
   const [selectedSubdivStats, setSelectedSubdivStats] =
     useState<SubdivisionStats | null>(null);
   const [canUndo, setCanUndo] = useState(false);
@@ -51,6 +138,13 @@ export const App: React.FC = () => {
   const [gridSettings, setGridSettings] = useState<GridSettings>({
     ...DEFAULT_GRID_SETTINGS,
   });
+
+  // House Builder & Exploration States
+  const [lightingMood, setLightingMood] = useState<LightingMood>(
+    globalSettings.lightingMood
+  );
+  const [interiorPeek, setInteriorPeek] = useState(false);
+  const [walkthroughActive, setWalkthroughActive] = useState(false);
 
   // Collapsible sidebars + Fullscreen state
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
@@ -86,6 +180,9 @@ export const App: React.FC = () => {
 
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const autoSaveTimerRef = useRef<number | null>(null);
+
+  const t = TRANSLATIONS[globalSettings.language];
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -94,8 +191,49 @@ export const App: React.FC = () => {
     }
     toastTimerRef.current = window.setTimeout(() => {
       setToast(null);
-    }, 2300);
+    }, 2400);
   }, []);
+
+  const refreshLibraries = useCallback(async () => {
+    const [projList, assetList] = await Promise.all([
+      listProjects(),
+      listCustomAssets(),
+    ]);
+    setProjects(projList);
+    setCustomAssets(assetList);
+  }, []);
+
+  useEffect(() => {
+    void refreshLibraries();
+  }, [refreshLibraries]);
+
+  // Apply theme & UI density CSS attributes to <html>
+  useEffect(() => {
+    document.documentElement.dataset.theme = globalSettings.theme;
+    document.documentElement.dataset.density = globalSettings.uiDensity;
+    document.documentElement.lang = globalSettings.language;
+
+    const themeSpec =
+      STUDIO_THEMES.find((th) => th.id === globalSettings.theme) ??
+      STUDIO_THEMES[0];
+    engineRef.current?.setThemeCanvasColor(themeSpec.canvasBg);
+    engineRef.current?.setGraphicsQuality(globalSettings.graphicsQuality);
+    engineRef.current?.setOrbitSensitivity(globalSettings.orbitSensitivity);
+  }, [globalSettings]);
+
+  const handleUpdateGlobalSettings = useCallback(
+    (patch: Partial<GlobalAppSettings>) => {
+      setGlobalSettings((prev) => {
+        const next: GlobalAppSettings = { ...prev, ...patch };
+        saveGlobalSettings(next);
+        if (patch.lightingMood && activeScreen === 'home') {
+          setLightingMood(patch.lightingMood);
+        }
+        return next;
+      });
+    },
+    [activeScreen]
+  );
 
   // Sync browser Fullscreen API events
   useEffect(() => {
@@ -140,7 +278,6 @@ export const App: React.FC = () => {
           await doc.webkitExitFullscreen();
         }
         setIsFullscreen(false);
-        showToast('Keluar mode layar penuh');
       } else {
         if (docEl.requestFullscreen) {
           await docEl.requestFullscreen();
@@ -152,61 +289,388 @@ export const App: React.FC = () => {
           docEl.classList.add('zen-fullscreen-fallback');
           setIsFullscreen(true);
         }
-        showToast('Mode Layar Penuh aktif');
       }
     } catch {
-      // Graceful fallback when sandbox/iOS blocks native Fullscreen API
       const next = !isFullscreen;
       docEl.classList.toggle('zen-fullscreen-fallback', next);
       setIsFullscreen(next);
-      showToast(next ? 'Mode Layar Penuh aktif' : 'Keluar mode layar penuh');
     }
-  }, [isFullscreen, showToast]);
+  }, [isFullscreen]);
 
+  // Flush current studio state to IndexedDB
+  const persistCurrentProjectNow = useCallback(
+    async (overrideName?: string) => {
+      if (!activeProject || !engineRef.current) return;
+      setIsSavingProject(true);
+      const currentObjects = engineRef.current.getSerializedObjects();
+      const thumb =
+        currentObjects.length > 0
+          ? engineRef.current.captureThumbnailDataUrl()
+          : '';
+      const now = Date.now();
+      const nextName = overrideName ?? activeProject.name;
+
+      const updated: SavedProjectRecord = {
+        ...activeProject,
+        name: nextName,
+        updatedAt: now,
+        objectCount: currentObjects.length,
+        thumbnailDataUrl: thumb,
+        scene: {
+          ...activeProject.scene,
+          name: nextName,
+          updatedAt: now,
+          objects: currentObjects,
+          gridSettings: engineRef.current.getGridSettings(),
+          snapSettings: engineRef.current.getSnapSettings(),
+          surfaceSettings: engineRef.current.getSurfaceSettings(),
+          lightingMood: engineRef.current.getLightingMood(),
+        },
+      };
+
+      await saveProjectRecord(updated);
+      setActiveProject(updated);
+      setIsSavingProject(false);
+    },
+    [activeProject]
+  );
+
+  // Mount StudioEngine when entering the 'editor' screen
   useEffect(() => {
+    if (activeScreen !== 'editor' || !activeProject) return;
     const container = viewportRef.current;
     if (!container) return;
 
-    const engine = new StudioEngine(container, {
-      onStateChange: (state) => {
-        setObjects(state.objects);
-        setSelectedId(state.selectedId);
-        setCanUndo(state.canUndo);
-        setCanRedo(state.canRedo);
-        setSelectedSubdivStats(state.selectedSubdivStats);
+    const engine = new StudioEngine(
+      container,
+      {
+        onStateChange: (state) => {
+          setObjects(state.objects);
+          setSelectedId(state.selectedId);
+          setCanUndo(state.canUndo);
+          setCanRedo(state.canRedo);
+          setSelectedSubdivStats(state.selectedSubdivStats);
+        },
+        onDragFeedback: (feedback) => {
+          setDragFeedback(feedback);
+        },
+        onEyedropperSample: (sample, objName) => {
+          setActiveBrush(sample);
+          setPaintMode('bucket');
+          engine.setPaintInteraction('bucket', sample);
+          showToast(`${objName} — OK`);
+        },
+        onPaintApplied: (objName) => {
+          showToast(objName);
+        },
       },
-      onDragFeedback: (feedback) => {
-        setDragFeedback(feedback);
-      },
-      onEyedropperSample: (sample, objName) => {
-        setActiveBrush(sample);
-        setPaintMode('bucket');
-        engine.setPaintInteraction('bucket', sample);
-        showToast(`Warna diambil dari ${objName} (Siap mengecat!)`);
-      },
-      onPaintApplied: (objName) => {
-        showToast(`${objName} diwarnai`);
-      },
-    });
+      activeProject.scene.objects
+    );
+
+    const themeSpec =
+      STUDIO_THEMES.find((th) => th.id === globalSettings.theme) ??
+      STUDIO_THEMES[0];
+    engine.setThemeCanvasColor(themeSpec.canvasBg);
+    engine.setGraphicsQuality(globalSettings.graphicsQuality);
+    engine.setOrbitSensitivity(globalSettings.orbitSensitivity);
+
+    const projMood = activeProject.scene.lightingMood || lightingMood;
+    engine.setLightingMood(projMood);
+
+    const restoredGrid = engine.updateGridSettings(
+      activeProject.scene.gridSettings ?? DEFAULT_GRID_SETTINGS
+    );
+    const restoredSnap = engine.updateSnapSettings(
+      activeProject.scene.snapSettings ?? DEFAULT_SNAP_SETTINGS
+    );
+    const restoredSurf = engine.updateSurfaceSettings(
+      activeProject.scene.surfaceSettings ?? DEFAULT_SURFACE_SETTINGS
+    );
+    setGridSettings(restoredGrid);
+    setSnapSettings(restoredSnap);
+    setSurfaceSettings(restoredSurf);
+    setLightingMood(projMood);
+    setInteriorPeek(false);
+    setWalkthroughActive(false);
+    setEditSinglePartMode(false);
+    setPaintMode('none');
 
     engineRef.current = engine;
 
     return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
       engine.dispose();
       engineRef.current = null;
     };
-  }, [showToast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeScreen, activeProject?.id]);
 
+  // Debounced auto-save whenever studio objects or settings change
+  useEffect(() => {
+    if (activeScreen !== 'editor' || !activeProject || !engineRef.current) return;
+
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+    setIsSavingProject(true);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      void persistCurrentProjectNow();
+    }, 1050);
+
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current);
+      }
+    };
+  }, [
+    activeScreen,
+    objects,
+    gridSettings,
+    snapSettings,
+    surfaceSettings,
+    lightingMood,
+    persistCurrentProjectNow,
+    activeProject,
+  ]);
+
+  /* =========================================================
+     Main Menu Handlers (Empty-Canvas Launch, Open, Manage)
+     ========================================================= */
+  const handleCreateNewProject = useCallback(
+    async (mode: StudioMode, pendingAssetToSpawn?: CustomAssetRecord) => {
+      const count = projects.filter((p) => p.mode === mode).length + 1;
+      const defaultTitle =
+        mode === 'house'
+          ? `${t.untitledHouse} ${count}`
+          : `${t.untitledProject} ${count}`;
+
+      const fresh = buildEmptyProjectRecord(
+        mode,
+        defaultTitle,
+        globalSettings.lightingMood
+      );
+      await saveProjectRecord(fresh);
+      setActiveProject(fresh);
+      setActiveScreen('editor');
+
+      if (pendingAssetToSpawn) {
+        window.setTimeout(() => {
+          engineRef.current?.spawnCompoundParts(
+            pendingAssetToSpawn.parts,
+            pendingAssetToSpawn.name,
+            'prop'
+          );
+        }, 120);
+      }
+    },
+    [projects, t, globalSettings.lightingMood]
+  );
+
+  const handleOpenProject = useCallback((proj: SavedProjectRecord) => {
+    setActiveProject(proj);
+    setActiveScreen('editor');
+  }, []);
+
+  const handleGoHome = useCallback(async () => {
+    if (autoSaveTimerRef.current) {
+      window.clearTimeout(autoSaveTimerRef.current);
+    }
+    await persistCurrentProjectNow();
+    await refreshLibraries();
+    setWalkthroughActive(false);
+    setInteriorPeek(false);
+    setActiveScreen('home');
+  }, [persistCurrentProjectNow, refreshLibraries]);
+
+  const handleRenameProjectInMenu = useCallback(
+    async (proj: SavedProjectRecord, newName: string) => {
+      await renameProjectRecord(proj, newName);
+      await refreshLibraries();
+    },
+    [refreshLibraries]
+  );
+
+  const handleRenameActiveProject = useCallback(
+    async (newName: string) => {
+      if (!activeProject) return;
+      setActiveProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              name: newName,
+              scene: { ...prev.scene, name: newName },
+            }
+          : prev
+      );
+      await persistCurrentProjectNow(newName);
+    },
+    [activeProject, persistCurrentProjectNow]
+  );
+
+  const handleDuplicateProject = useCallback(
+    async (proj: SavedProjectRecord) => {
+      const copySuffix =
+        globalSettings.language === 'en'
+          ? ' (Copy)'
+          : globalSettings.language === 'ja'
+          ? ' (コピー)'
+          : ' (Salinan)';
+      await duplicateProjectRecord(proj, copySuffix);
+      await refreshLibraries();
+      showToast(t.duplicate);
+    },
+    [globalSettings.language, refreshLibraries, showToast, t.duplicate]
+  );
+
+  const handleDeleteProject = useCallback(
+    async (id: string) => {
+      await deleteProjectRecord(id);
+      await refreshLibraries();
+      showToast(t.delete);
+    },
+    [refreshLibraries, showToast, t.delete]
+  );
+
+  const handleImportProjectFile = useCallback(
+    async (file: File) => {
+      try {
+        const imported = await importProjectBackupFile(file);
+        await refreshLibraries();
+        setActiveProject(imported);
+        setActiveScreen('editor');
+      } catch {
+        showToast('Invalid .perabot file');
+      }
+    },
+    [refreshLibraries, showToast]
+  );
+
+  const handleDeleteCustomAsset = useCallback(
+    async (id: string) => {
+      await deleteCustomAssetRecord(id);
+      await refreshLibraries();
+      showToast(t.delete);
+    },
+    [refreshLibraries, showToast, t.delete]
+  );
+
+  /* =========================================================
+     Studio Action Handlers
+     ========================================================= */
   const handleSpawn = useCallback(
     (kind: PrimitiveKind) => {
       const engine = engineRef.current;
       if (!engine) return;
       engine.spawnPrimitive(kind);
       setTransformMode(engine.getTransformMode());
-      showToast(`${PRIMITIVE_META[kind].label} ditambahkan`);
+      showToast(`+ ${PRIMITIVE_META[kind].label}`);
     },
     [showToast]
   );
+
+  const handleSpawnHousePreset = useCallback(
+    (preset: HousePresetItem) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const label = preset.title[globalSettings.language];
+      engine.spawnCompoundParts(preset.parts, label, preset.archRole);
+      setEditSinglePartMode(false);
+      showToast(`+ ${label}`);
+    },
+    [globalSettings.language, showToast]
+  );
+
+  const handleSpawnCustomAsset = useCallback(
+    (asset: CustomAssetRecord) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      engine.spawnCompoundParts(asset.parts, asset.name, 'prop');
+      setEditSinglePartMode(false);
+      showToast(`+ ${asset.name}`);
+    },
+    [showToast]
+  );
+
+  const handleSaveAsCustomAsset = useCallback(
+    async (customName?: string) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const extracted = engine.extractPartsForCustomAsset();
+      if (!extracted) return;
+
+      const finalName = (customName || extracted.defaultName).trim();
+      const thumb = renderPartsThumbnailDataUrl(extracted.parts);
+
+      const record: CustomAssetRecord = {
+        id: `asset_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name: finalName,
+        createdAt: Date.now(),
+        thumbnailDataUrl: thumb,
+        parts: extracted.parts,
+      };
+
+      await saveCustomAssetRecord(record);
+      await refreshLibraries();
+      showToast(t.savedToAssetsToast);
+    },
+    [refreshLibraries, showToast, t.savedToAssetsToast]
+  );
+
+  const handleToggleEditSinglePart = useCallback((enabled: boolean) => {
+    engineRef.current?.setEditSinglePartMode(enabled);
+    setEditSinglePartMode(enabled);
+  }, []);
+
+  const handleGroupSceneObjects = useCallback(() => {
+    const gid = engineRef.current?.groupAllSceneObjects(
+      activeProject?.name || 'Grup Rakitan'
+    );
+    if (gid) {
+      setEditSinglePartMode(false);
+      showToast(t.groupedToast);
+    }
+  }, [activeProject?.name, showToast, t.groupedToast]);
+
+  const handleUngroupSelected = useCallback(() => {
+    const ok = engineRef.current?.ungroupSelected();
+    if (ok) {
+      setEditSinglePartMode(false);
+      showToast(t.ungroupedToast);
+    }
+  }, [showToast, t.ungroupedToast]);
+
+  const handleCycleLightingMood = useCallback(() => {
+    const order: LightingMood[] = ['morning', 'sunset', 'night'];
+    const next = order[(order.indexOf(lightingMood) + 1) % order.length];
+    setLightingMood(next);
+    engineRef.current?.setLightingMood(next);
+    const label =
+      next === 'sunset'
+        ? t.moodSunset
+        : next === 'night'
+        ? t.moodNight
+        : t.moodMorning;
+    showToast(label);
+  }, [lightingMood, showToast, t]);
+
+  const handleToggleInteriorPeek = useCallback(() => {
+    setInteriorPeek((prev) => {
+      const next = !prev;
+      engineRef.current?.setInteriorPeek(next);
+      showToast(next ? `${t.peekInterior}: ON` : `${t.peekInterior}: OFF`);
+      return next;
+    });
+  }, [showToast, t.peekInterior]);
+
+  const handleToggleWalkthrough = useCallback(() => {
+    setWalkthroughActive((prev) => {
+      const next = !prev;
+      engineRef.current?.setWalkthroughMode(next);
+      return next;
+    });
+  }, []);
 
   const handleChangeMode = useCallback((mode: TransformMode) => {
     const engine = engineRef.current;
@@ -230,13 +694,8 @@ export const App: React.FC = () => {
     (mode: PaintInteractionMode) => {
       setPaintMode(mode);
       engineRef.current?.setPaintInteraction(mode, activeBrush);
-      if (mode === 'bucket') {
-        showToast('Mode Cat Klik aktif: Ketuk objek di kanvas untuk mewarnai');
-      } else if (mode === 'eyedropper') {
-        showToast('Pipet aktif: Ketuk objek di kanvas untuk mengambil warnanya');
-      }
     },
-    [activeBrush, showToast]
+    [activeBrush]
   );
 
   const handleToggleSpace = useCallback(() => {
@@ -245,8 +704,7 @@ export const App: React.FC = () => {
     const next: TransformSpace = transformSpace === 'world' ? 'local' : 'world';
     engine.setTransformSpace(next);
     setTransformSpace(next);
-    showToast(next === 'world' ? 'Mode Sumbu Global' : 'Mode Sumbu Lokal');
-  }, [transformSpace, showToast]);
+  }, [transformSpace]);
 
   const handleUpdateSnap = useCallback((patch: Partial<SnapSettings>) => {
     const engine = engineRef.current;
@@ -261,13 +719,6 @@ export const App: React.FC = () => {
       if (!engine) return;
       const next = engine.updateSurfaceSettings(patch);
       setSurfaceSettings(next);
-      if (patch.enabled !== undefined && !reconformNow) {
-        showToast(
-          next.enabled
-            ? 'Surface Alignment Aktif: Seret objek / panah XZ mengikuti permukaan'
-            : 'Surface Alignment Nonaktif'
-        );
-      }
       if (reconformNow && selectedId) {
         const label = engine.dropSelectedToFloor();
         if (label) showToast(label);
@@ -287,9 +738,8 @@ export const App: React.FC = () => {
   const handleChangeRotationSnap = useCallback(
     (step: RotationSnapStep) => {
       handleUpdateSnap({ rotationSnapDeg: step });
-      showToast(step > 0 ? `Kunci putaran ${step}°` : 'Putaran halus bebas');
     },
-    [handleUpdateSnap, showToast]
+    [handleUpdateSnap]
   );
 
   const handleRotateStep = useCallback(
@@ -297,18 +747,15 @@ export const App: React.FC = () => {
       const ok = engineRef.current?.rotateSelectedBy(axis, deltaDeg);
       if (ok) {
         const sign = deltaDeg > 0 ? '+' : '';
-        showToast(`Diputar ${axis.toUpperCase()} ${sign}${deltaDeg}°`);
+        showToast(`${axis.toUpperCase()} ${sign}${deltaDeg}°`);
       }
     },
     [showToast]
   );
 
   const handleResetRotation = useCallback(() => {
-    const ok = engineRef.current?.resetSelectedRotation();
-    if (ok) {
-      showToast('Rotasi ditegakkan ke 0°');
-    }
-  }, [showToast]);
+    engineRef.current?.resetSelectedRotation();
+  }, []);
 
   const handleFocusCamera = useCallback(() => {
     engineRef.current?.focusSelectedOrReset();
@@ -332,10 +779,9 @@ export const App: React.FC = () => {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        showToast(`Berhasil diekspor: ${filename}`);
+        showToast(filename);
       } catch (err) {
         console.error(err);
-        showToast('Gagal mengekspor file 3D');
       }
     },
     [showToast]
@@ -343,8 +789,8 @@ export const App: React.FC = () => {
 
   const handleClearScene = useCallback(() => {
     engineRef.current?.clearScene();
-    showToast('Scene dibersihkan');
-  }, [showToast]);
+    showToast(t.clearScene);
+  }, [showToast, t.clearScene]);
 
   const handleSelectObject = useCallback((id: string) => {
     engineRef.current?.selectObject(id);
@@ -363,7 +809,6 @@ export const App: React.FC = () => {
       patch: AdvancedColorMaterialPatch & { name?: string; visible?: boolean },
       commitHistory = true
     ) => {
-      // Keep active paint brush synced with color/PBR edits
       const brushPatch: Partial<PaintBrushPayload> = {};
       if (patch.color !== undefined) brushPatch.color = patch.color;
       if (patch.roughness !== undefined) brushPatch.roughness = patch.roughness;
@@ -408,17 +853,17 @@ export const App: React.FC = () => {
   const handleDeleteObject = useCallback(
     (id?: string) => {
       engineRef.current?.deleteObject(id);
-      showToast('Objek dihapus');
+      showToast(t.delete);
     },
-    [showToast]
+    [showToast, t.delete]
   );
 
   const handleDuplicateSelected = useCallback(() => {
     const newId = engineRef.current?.duplicateSelected();
     if (newId) {
-      showToast('Objek diduplikat');
+      showToast(t.copy);
     }
-  }, [showToast]);
+  }, [showToast, t.copy]);
 
   const handleDropToFloor = useCallback(() => {
     const msg = engineRef.current?.dropSelectedToFloor();
@@ -427,7 +872,10 @@ export const App: React.FC = () => {
     }
   }, [showToast]);
 
+  // Studio Keyboard Shortcuts
   useEffect(() => {
+    if (activeScreen !== 'editor') return;
+
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
@@ -436,6 +884,14 @@ export const App: React.FC = () => {
           target.tagName === 'TEXTAREA' ||
           target.isContentEditable)
       ) {
+        return;
+      }
+
+      if (walkthroughActive) {
+        if (e.key === 'Escape') {
+          setWalkthroughActive(false);
+          engineRef.current?.setWalkthroughMode(false);
+        }
         return;
       }
 
@@ -516,6 +972,8 @@ export const App: React.FC = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
+    activeScreen,
+    walkthroughActive,
     selectedId,
     paintMode,
     surfaceSettings.enabled,
@@ -532,19 +990,76 @@ export const App: React.FC = () => {
     if (mode === 'surface') return 'Surface Align';
     if (!axis) return '';
     if (mode === 'rotate') {
-      if (axis === 'X') return 'Putar Sumbu X';
-      if (axis === 'Y') return 'Putar Mendatar Y';
-      if (axis === 'Z') return 'Putar Sumbu Z';
+      if (axis === 'X') return 'Rotate X';
+      if (axis === 'Y') return 'Rotate Y';
+      if (axis === 'Z') return 'Rotate Z';
     }
-    if (axis === 'X') return 'Sumbu X (Merah)';
-    if (axis === 'Y') return 'Sumbu Y (Hijau)';
-    if (axis === 'Z') return 'Sumbu Z (Biru)';
-    return `Bidang ${axis}`;
+    if (axis === 'X') return 'X';
+    if (axis === 'Y') return 'Y';
+    if (axis === 'Z') return 'Z';
+    return axis;
   };
+
+  /* =========================================================
+     Render Main Menu OR Studio Workspace
+     ========================================================= */
+  if (activeScreen === 'home' || !activeProject) {
+    return (
+      <>
+        <MainMenu
+          settings={globalSettings}
+          projects={projects}
+          customAssets={customAssets}
+          isFullscreen={isFullscreen}
+          onToggleFullscreen={handleToggleFullscreen}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onChangeLanguage={(language) =>
+            handleUpdateGlobalSettings({ language })
+          }
+          onChangeLightingMood={(mood) =>
+            handleUpdateGlobalSettings({ lightingMood: mood })
+          }
+          onCreateNewProject={(mode) => void handleCreateNewProject(mode)}
+          onOpenProject={handleOpenProject}
+          onRenameProject={(proj, name) =>
+            void handleRenameProjectInMenu(proj, name)
+          }
+          onDuplicateProject={(proj) => void handleDuplicateProject(proj)}
+          onExportProjectBackup={(proj) => downloadProjectBackup(proj)}
+          onDeleteProject={(id) => void handleDeleteProject(id)}
+          onImportProjectFile={(file) => void handleImportProjectFile(file)}
+          onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
+          onUseAssetInHouseMode={(asset) =>
+            void handleCreateNewProject('house', asset)
+          }
+        />
+
+        <GlobalSettingsModal
+          open={settingsOpen}
+          settings={globalSettings}
+          onUpdateSettings={handleUpdateGlobalSettings}
+          onClose={() => setSettingsOpen(false)}
+        />
+
+        {toast && (
+          <div className="toast-pill global-toast" role="status">
+            {toast}
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div className={`studio-shell ${isFullscreen ? 'is-fullscreen' : ''}`}>
       <TopBar
+        language={globalSettings.language}
+        studioMode={activeProject.mode}
+        projectName={activeProject.name}
+        isSavingProject={isSavingProject}
+        lightingMood={lightingMood}
+        interiorPeek={interiorPeek}
+        walkthroughActive={walkthroughActive}
         canUndo={canUndo}
         canRedo={canRedo}
         snapSettings={snapSettings}
@@ -554,6 +1069,12 @@ export const App: React.FC = () => {
         isFullscreen={isFullscreen}
         hasSelection={Boolean(selectedId)}
         objectCount={objects.length}
+        onGoHome={() => void handleGoHome()}
+        onRenameProject={(name) => void handleRenameActiveProject(name)}
+        onCycleLightingMood={handleCycleLightingMood}
+        onToggleInteriorPeek={handleToggleInteriorPeek}
+        onToggleWalkthrough={handleToggleWalkthrough}
+        onOpenSettings={() => setSettingsOpen(true)}
         onUndo={() => engineRef.current?.undo()}
         onRedo={() => engineRef.current?.redo()}
         onUpdateSnap={handleUpdateSnap}
@@ -577,57 +1098,71 @@ export const App: React.FC = () => {
         >
           <div ref={viewportRef} className="viewport-canvas-host" />
 
-          <TransformToolbar
-            mode={transformMode}
-            space={transformSpace}
-            hasSelection={Boolean(selectedId)}
-            collapsed={leftSidebarCollapsed}
-            onToggleCollapse={() => setLeftSidebarCollapsed((v) => !v)}
-            onChangeMode={handleChangeMode}
-            onToggleSpace={handleToggleSpace}
-            onOpenColorStudio={handleOpenColorStudio}
-            onDropToFloor={handleDropToFloor}
-            onDuplicate={handleDuplicateSelected}
-            onDelete={() => handleDeleteObject()}
+          {!walkthroughActive && (
+            <TransformToolbar
+              mode={transformMode}
+              space={transformSpace}
+              hasSelection={Boolean(selectedId)}
+              collapsed={leftSidebarCollapsed}
+              onToggleCollapse={() => setLeftSidebarCollapsed((v) => !v)}
+              onChangeMode={handleChangeMode}
+              onToggleSpace={handleToggleSpace}
+              onOpenColorStudio={handleOpenColorStudio}
+              onDropToFloor={handleDropToFloor}
+              onDuplicate={handleDuplicateSelected}
+              onDelete={() => handleDeleteObject()}
+            />
+          )}
+
+          {/* First-Person Walkthrough HUD + Mobile Virtual Joystick */}
+          <WalkthroughOverlay
+            active={walkthroughActive}
+            language={globalSettings.language}
+            onJoystickChange={(x, y) => engineRef.current?.setWalkJoystick(x, y)}
+            onExit={() => {
+              setWalkthroughActive(false);
+              engineRef.current?.setWalkthroughMode(false);
+            }}
           />
 
           {/* Right-edge Expand Tab when Desktop Inspector Sidebar is hidden */}
-          {!inspectorOpen && (
+          {!inspectorOpen && !walkthroughActive && (
             <button
               type="button"
               className="right-inspector-expand-tab desktop-only"
               onClick={() => setInspectorOpen(true)}
-              title="Tampilkan Sidebar Properti (<)"
-              aria-label="Tampilkan Sidebar Properti"
+              title={t.properties}
+              aria-label={t.properties}
             >
               <ChevronLeft size={18} />
             </button>
           )}
 
           {/* Active Paint / Click-to-Place Floating Pill */}
-          {(paintMode !== 'none' ||
-            (surfaceSettings.enabled && surfaceSettings.clickToPlace)) &&
+          {!walkthroughActive &&
+            (paintMode !== 'none' ||
+              (surfaceSettings.enabled && surfaceSettings.clickToPlace)) &&
             !dragFeedback.active && (
               <div className="interactive-mode-banner">
                 {paintMode === 'bucket' && (
                   <>
-                    <span>🎨 Mode Cat Klik Aktif — Ketuk objek untuk mewarnai</span>
+                    <span>🎨 {t.paint}</span>
                     <button
                       type="button"
                       onClick={() => handleChangePaintMode('none')}
                     >
-                      Selesai
+                      {t.done}
                     </button>
                   </>
                 )}
                 {paintMode === 'eyedropper' && (
                   <>
-                    <span>💧 Mode Pipet — Ketuk objek untuk menyalin warna</span>
+                    <span>💧 Eyedropper</span>
                     <button
                       type="button"
                       onClick={() => handleChangePaintMode('none')}
                     >
-                      Batal
+                      {t.done}
                     </button>
                   </>
                 )}
@@ -635,16 +1170,14 @@ export const App: React.FC = () => {
                   surfaceSettings.enabled &&
                   surfaceSettings.clickToPlace && (
                     <>
-                      <span>
-                        🧲 Klik Permukaan Aktif — Ketuk atap/dinding/bukit tujuan
-                      </span>
+                      <span>🧲 {t.stickSurface}</span>
                       <button
                         type="button"
                         onClick={() =>
                           handleUpdateSurface({ clickToPlace: false })
                         }
                       >
-                        Matikan
+                        {t.done}
                       </button>
                     </>
                   )}
@@ -701,7 +1234,7 @@ export const App: React.FC = () => {
           )}
 
           {/* Controlled Rotation Quick Bar */}
-          {transformMode === 'rotate' && selectedId && (
+          {!walkthroughActive && transformMode === 'rotate' && selectedId && (
             <RotationControlBar
               rotationSnapDeg={snapSettings.rotationSnapDeg}
               onChangeRotationSnap={handleChangeRotationSnap}
@@ -710,24 +1243,42 @@ export const App: React.FC = () => {
             />
           )}
 
-          <DesktopSpawnDock onSpawn={handleSpawn} />
+          {!walkthroughActive && (
+            <DesktopSpawnDock
+              studioMode={activeProject.mode}
+              language={globalSettings.language}
+              customAssets={customAssets}
+              onSpawn={handleSpawn}
+              onSpawnHousePreset={handleSpawnHousePreset}
+              onSpawnCustomAsset={handleSpawnCustomAsset}
+              onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
+            />
+          )}
 
           <div className="viewport-status-chip">
-            <span>{objects.length} Objek</span>
+            <span>
+              {objects.length} {t.objectsUnit}
+            </span>
             <span className="dot-sep">•</span>
             <span>
               {transformMode === 'translate'
-                ? 'Geser (RGB)'
+                ? t.move
                 : transformMode === 'rotate'
-                ? `Putar (${
+                ? `${t.rotate} (${
                     snapSettings.rotationSnapDeg > 0
                       ? `${snapSettings.rotationSnapDeg}°`
-                      : 'Bebas'
+                      : 'Free'
                   })`
                 : transformMode === 'scale'
-                ? 'Skala'
-                : 'Pilih'}
+                ? t.scale
+                : t.select}
             </span>
+            {interiorPeek && (
+              <>
+                <span className="dot-sep">•</span>
+                <span className="status-emerald">{t.peekInterior}</span>
+              </>
+            )}
             {surfaceSettings.enabled && (
               <>
                 <span className="dot-sep">•</span>
@@ -737,10 +1288,12 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {inspectorOpen && (
+        {inspectorOpen && !walkthroughActive && (
           <InspectorPanel
+            language={globalSettings.language}
             objects={objects}
             selectedId={selectedId}
+            editSinglePartMode={editSinglePartMode}
             subdivStats={selectedSubdivStats}
             paintMode={paintMode}
             activeBrush={activeBrush}
@@ -748,6 +1301,10 @@ export const App: React.FC = () => {
             onChangeSubTab={setInspectorSubTab}
             onCollapseDesktop={() => setInspectorOpen(false)}
             onSelectObject={handleSelectObject}
+            onToggleEditSinglePart={handleToggleEditSinglePart}
+            onGroupSceneObjects={handleGroupSceneObjects}
+            onUngroupSelected={handleUngroupSelected}
+            onSaveAsCustomAsset={(name) => void handleSaveAsCustomAsset(name)}
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
@@ -759,10 +1316,12 @@ export const App: React.FC = () => {
           />
         )}
 
-        {mobileDrawerOpen && (
+        {mobileDrawerOpen && !walkthroughActive && (
           <InspectorPanel
+            language={globalSettings.language}
             objects={objects}
             selectedId={selectedId}
+            editSinglePartMode={editSinglePartMode}
             subdivStats={selectedSubdivStats}
             paintMode={paintMode}
             activeBrush={activeBrush}
@@ -771,6 +1330,10 @@ export const App: React.FC = () => {
             isMobileDrawer
             onCloseMobile={() => setMobileDrawerOpen(false)}
             onSelectObject={handleSelectObject}
+            onToggleEditSinglePart={handleToggleEditSinglePart}
+            onGroupSceneObjects={handleGroupSceneObjects}
+            onUngroupSelected={handleUngroupSelected}
+            onSaveAsCustomAsset={(name) => void handleSaveAsCustomAsset(name)}
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
@@ -783,11 +1346,26 @@ export const App: React.FC = () => {
         )}
       </main>
 
-      <MobileBottomBar
-        onSpawn={handleSpawn}
-        objectCount={objects.length}
-        drawerOpen={mobileDrawerOpen}
-        onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}
+      {!walkthroughActive && (
+        <MobileBottomBar
+          studioMode={activeProject.mode}
+          language={globalSettings.language}
+          customAssets={customAssets}
+          onSpawn={handleSpawn}
+          onSpawnHousePreset={handleSpawnHousePreset}
+          onSpawnCustomAsset={handleSpawnCustomAsset}
+          onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
+          objectCount={objects.length}
+          drawerOpen={mobileDrawerOpen}
+          onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}
+        />
+      )}
+
+      <GlobalSettingsModal
+        open={settingsOpen}
+        settings={globalSettings}
+        onUpdateSettings={handleUpdateGlobalSettings}
+        onClose={() => setSettingsOpen(false)}
       />
 
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
