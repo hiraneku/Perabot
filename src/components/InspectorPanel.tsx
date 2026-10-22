@@ -12,6 +12,9 @@ import {
   ChevronRight,
   Grid,
   Check,
+  Move3d,
+  RotateCw,
+  Maximize2,
 } from 'lucide-react';
 import {
   DEFAULT_SUBDIVISION_SETTINGS,
@@ -22,6 +25,7 @@ import {
   SubdivisionStats,
   Vec3,
 } from '../types/studio';
+import { PRIMITIVE_META } from '../engine/primitives';
 import { PrimitiveShapePreview } from './ShapeIcons';
 import {
   AdvancedColorMaterialPatch,
@@ -163,7 +167,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const selectedObject = objects.find((o) => o.id === selectedId) ?? null;
   const subdiv = selectedObject?.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS;
 
-  // Color source: selected object if any, otherwise active brush
   const displayColor = selectedObject?.color ?? activeBrush.color;
   const displayRoughness = selectedObject?.roughness ?? activeBrush.roughness;
   const displayMetalness = selectedObject?.metalness ?? activeBrush.metalness;
@@ -205,7 +208,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </div>
           <button
             type="button"
-            className="icon-btn"
+            className="plain-close-btn"
             onClick={onCloseMobile}
             aria-label="Tutup Panel"
           >
@@ -221,13 +224,12 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           {onCollapseDesktop && (
             <button
               type="button"
-              className="sidebar-hide-arrow-btn"
+              className="plain-close-btn"
               onClick={onCollapseDesktop}
-              title="Sembunyikan Sidebar Kanan (>)"
+              title="Sembunyikan Sidebar Kanan"
               aria-label="Sembunyikan Sidebar Kanan"
             >
-              <span>Sembunyi</span>
-              <ChevronRight size={15} />
+              <ChevronRight size={18} />
             </button>
           )}
         </div>
@@ -297,7 +299,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
       {/* Selected Object Studio: 3 Tabs (Transform | Warna RGB | Subdivision) */}
       {(!isMobileDrawer || mobileSection === 'inspector') && (
-        <section className="panel-section properties-section">
+        <section className="panel-section inspector-body">
           <div className="inspector-mode-tabs" role="tablist">
             <button
               type="button"
@@ -337,7 +339,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             </button>
           </div>
 
-          {/* TAB 2: WARNA RGB & MATERIAL (works both with selected object & Paint Bucket mode!) */}
+          {/* TAB 2: WARNA RGB & MATERIAL */}
           {inspectorSubTab === 'color' && (
             <ColorWheelPicker
               color={displayColor}
@@ -357,58 +359,70 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             />
           )}
 
-          {/* TAB 1: TRANSFORMASI */}
+          {/* TAB 1: MODERN TRANSFORM STUDIO */}
           {inspectorSubTab === 'transform' &&
             (!selectedObject ? (
               <div className="empty-hint">
                 Ketuk salah satu bentuk 3D di kanvas untuk mengatur posisi, rotasi, dan ukurannya.
               </div>
             ) : (
-              <div className="inspector-body">
-                <div className="prop-group">
-                  <label className="field-label" htmlFor="obj-name-input">
-                    Nama Objek
-                  </label>
-                  <div className="name-row">
-                    <input
-                      id="obj-name-input"
-                      type="text"
-                      className="text-input"
-                      value={selectedObject.name}
-                      onChange={(e) =>
-                        onUpdateMaterial(
-                          selectedObject.id,
-                          { name: e.target.value },
-                          true
-                        )
-                      }
-                    />
+              <div className="transform-studio-stack">
+                {/* Object Identity & Quick Actions Card */}
+                <div className="transform-identity-card">
+                  <div className="transform-identity-top">
+                    <div className="transform-thumb-box">
+                      <PrimitiveShapePreview kind={selectedObject.kind} size={34} />
+                      <span
+                        className="transform-color-pip"
+                        style={{ backgroundColor: selectedObject.color }}
+                      />
+                    </div>
+                    <div className="transform-name-col">
+                      <span className="transform-kind-caption">
+                        {PRIMITIVE_META[selectedObject.kind]?.label ?? selectedObject.kind}
+                      </span>
+                      <input
+                        id="obj-name-input"
+                        type="text"
+                        className="name-input modern-name-input"
+                        value={selectedObject.name}
+                        placeholder="Nama objek..."
+                        aria-label="Nama Objek"
+                        onChange={(e) =>
+                          onUpdateMaterial(
+                            selectedObject.id,
+                            { name: e.target.value },
+                            true
+                          )
+                        }
+                      />
+                    </div>
                   </div>
 
-                  <div className="quick-action-row">
+                  <div className="transform-quick-actions">
                     <button
                       type="button"
-                      className="quick-btn"
+                      className="tf-action-btn emerald-hover"
                       onClick={onDropToFloor}
-                      title="Tempelkan ke permukaan atau lantai di bawahnya"
+                      title="Pasang rapat ke permukaan miring, dinding, atau lantai terdekat"
                     >
                       <ArrowDownToLine size={14} />
                       <span>Tempel</span>
                     </button>
                     <button
                       type="button"
-                      className="quick-btn"
+                      className="tf-action-btn"
                       onClick={onDuplicateSelected}
-                      title="Duplikat Objek"
+                      title="Duplikat Objek (Shift+D)"
                     >
                       <Copy size={14} />
                       <span>Salin</span>
                     </button>
                     <button
                       type="button"
-                      className="quick-btn danger"
+                      className="tf-action-btn danger-hover"
                       onClick={() => onDeleteObject(selectedObject.id)}
-                      title="Hapus Objek"
+                      title="Hapus Objek (Delete)"
                     >
                       <Trash2 size={14} />
                       <span>Hapus</span>
@@ -416,11 +430,27 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </div>
                 </div>
 
-                <div className="prop-group">
-                  <div className="group-label-row">
-                    <span className="field-label">Posisi (Meter)</span>
+                {/* Position Card */}
+                <div className="transform-group-card">
+                  <div className="prop-label-row">
+                    <span className="prop-label">
+                      <Move3d size={13} />
+                      <span>Posisi (Meter)</span>
+                    </span>
+                    <button
+                      type="button"
+                      className="tf-reset-chip"
+                      onClick={() =>
+                        onUpdateTransform(selectedObject.id, {
+                          position: { x: 0, y: 0.5, z: 0 },
+                        })
+                      }
+                      title="Kembalikan posisi ke titik tengah lantai"
+                    >
+                      Reset
+                    </button>
                   </div>
-                  <div className="xyz-grid">
+                  <div className="axis-grid">
                     <AxisInput
                       axis="X"
                       value={selectedObject.position.x}
@@ -451,22 +481,27 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </div>
                 </div>
 
-                <div className="prop-group">
-                  <div className="group-label-row">
-                    <span className="field-label">Rotasi (Derajat °)</span>
+                {/* Rotation Card */}
+                <div className="transform-group-card">
+                  <div className="prop-label-row">
+                    <span className="prop-label">
+                      <RotateCw size={13} />
+                      <span>Rotasi (Derajat °)</span>
+                    </span>
                     <button
                       type="button"
-                      className="reset-link"
+                      className="tf-reset-chip"
                       onClick={() =>
                         onUpdateTransform(selectedObject.id, {
                           rotation: { x: 0, y: 0, z: 0 },
                         })
                       }
+                      title="Nolkan seluruh sudut rotasi (0°)"
                     >
                       0°
                     </button>
                   </div>
-                  <div className="xyz-grid">
+                  <div className="axis-grid">
                     <AxisInput
                       axis="X"
                       step={5}
@@ -498,24 +533,49 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       }
                     />
                   </div>
+                  <div className="tf-micro-pills">
+                    {([-90, -45, 45, 90] as const).map((deg) => (
+                      <button
+                        key={deg}
+                        type="button"
+                        className="tf-micro-pill"
+                        onClick={() =>
+                          onUpdateTransform(selectedObject.id, {
+                            rotation: {
+                              ...selectedObject.rotation,
+                              y: Math.round(selectedObject.rotation.y + deg),
+                            },
+                          })
+                        }
+                        title={`Putar Sumbu Y ${deg > 0 ? `+${deg}°` : `${deg}°`}`}
+                      >
+                        Y {deg > 0 ? `+${deg}°` : `${deg}°`}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
-                <div className="prop-group">
-                  <div className="group-label-row">
-                    <span className="field-label">Ukuran / Skala (Meter)</span>
+                {/* Scale Card */}
+                <div className="transform-group-card">
+                  <div className="prop-label-row">
+                    <span className="prop-label">
+                      <Maximize2 size={13} />
+                      <span>Ukuran / Skala (Meter)</span>
+                    </span>
                     <button
                       type="button"
-                      className="reset-link"
+                      className="tf-reset-chip"
                       onClick={() =>
                         onUpdateTransform(selectedObject.id, {
                           scale: { x: 1, y: 1, z: 1 },
                         })
                       }
+                      title="Kembalikan ke skala standar 1×1×1 meter"
                     >
                       1×1×1
                     </button>
                   </div>
-                  <div className="xyz-grid">
+                  <div className="axis-grid">
                     <AxisInput
                       axis="X"
                       min={0.05}
@@ -547,6 +607,28 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       }
                     />
                   </div>
+                  <div className="tf-micro-pills">
+                    {[
+                      { label: '0.5×', s: 0.5 },
+                      { label: '1×', s: 1 },
+                      { label: '1.5×', s: 1.5 },
+                      { label: '2×', s: 2 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className="tf-micro-pill"
+                        onClick={() =>
+                          onUpdateTransform(selectedObject.id, {
+                            scale: { x: preset.s, y: preset.s, z: preset.s },
+                          })
+                        }
+                        title={`Atur ukuran seragam ${preset.label}`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             ))}
@@ -559,7 +641,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </div>
             ) : (
               <div className="subdiv-studio-wrap">
-                {/* Live Topology Telemetry */}
                 <div className="subdiv-telemetry-card">
                   <div className="subdiv-stat-col">
                     <small>Segitiga Dasar</small>
@@ -586,14 +667,13 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </div>
                 )}
 
-                {/* Subdivision Level (0..3) */}
-                <div className="prop-group">
-                  <div className="group-label-row">
-                    <span className="field-label">Level Subdivision (0 – 3)</span>
+                <div className="transform-group-card">
+                  <div className="prop-label-row">
+                    <span className="prop-label">Level Subdivision (0 – 3)</span>
                     {subdiv.level > 0 && (
                       <button
                         type="button"
-                        className="reset-link"
+                        className="tf-reset-chip"
                         onClick={() =>
                           onUpdateSubdivision(
                             selectedObject.id,
@@ -629,9 +709,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </div>
                 </div>
 
-                {/* Algorithm Mode: Smooth Loop vs Simple Planar */}
-                <div className="prop-group">
-                  <span className="field-label">Algoritma Subdivision</span>
+                <div className="transform-group-card">
+                  <span className="prop-label">Algoritma Subdivision</span>
                   <div className="subdiv-mode-cards">
                     <button
                       type="button"
@@ -675,11 +754,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </div>
                 </div>
 
-                {/* Edge Crease / Sharpness Control */}
                 {subdiv.mode === 'smooth' && (
-                  <div className="prop-group">
+                  <div className="transform-group-card">
                     <div className="slider-head">
-                      <span className="field-label">
+                      <span className="prop-label">
                         Ketajaman Rusuk (Edge Crease)
                       </span>
                       <span>{Math.round(subdiv.crease * 100)}%</span>
@@ -734,8 +812,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </div>
                 )}
 
-                {/* Boundary Lock & Wireframe Overlay Toggles */}
-                <div className="prop-group">
+                <div className="transform-group-card">
                   <button
                     type="button"
                     className={`snap-option-row compact ${

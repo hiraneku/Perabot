@@ -101,7 +101,7 @@ export type SurfaceConformMode =
   | 'upright-follow' // Keep upright (world Y) while riding surface/terrain height
   | 'foundation-seat'; // Keep upright and seat lowest base corner into sloped terrain/surface
 
-export type SurfaceAttachAxis = '-y' | '-z' | '+y';
+export type SurfaceAttachAxis = 'auto' | '-y' | '-z' | '+y';
 
 export interface SurfaceSettings {
   enabled: boolean;
@@ -215,7 +215,7 @@ export const DEFAULT_SUBDIVISION_SETTINGS: ObjectSubdivisionSettings = {
 export const DEFAULT_SURFACE_SETTINGS: SurfaceSettings = {
   enabled: false,
   conformMode: 'align-normal',
-  attachAxis: '-y',
+  attachAxis: 'auto',
   autoOnMove: true,
   clickToPlace: false,
   spinDeg: 0,

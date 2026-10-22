@@ -122,7 +122,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   return (
     <header className="topbar">
       {/* Left: Brand + Undo/Redo */}
-      <div className="topbar-group">
+      <div className="topbar-group topbar-left">
         <div className="brand-badge" title="Perabot 3D Studio">
           <span className="brand-dot-group" aria-hidden="true">
             <span className="axis-dot axis-x" />
@@ -130,10 +130,10 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span className="axis-dot axis-z" />
           </span>
           <span className="brand-title">Perabot</span>
-          <span className="brand-tag hide-xs">3D</span>
+          <span className="brand-tag hide-compact">3D</span>
         </div>
 
-        <div className="topbar-divider hide-xs" />
+        <div className="topbar-divider hide-compact" />
 
         <div className="btn-cluster">
           <button
@@ -414,9 +414,10 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <div className="segmented-pills">
                     {(
                       [
+                        { id: 'auto', label: 'Pintar' },
                         { id: '-y', label: 'Alas (-Y)' },
-                        { id: '-z', label: 'Belakang (-Z Dinding)' },
-                        { id: '+y', label: 'Atas (+Y Plafon)' },
+                        { id: '-z', label: 'Belakang (-Z)' },
+                        { id: '+y', label: 'Atas (+Y)' },
                       ] as Array<{ id: SurfaceAttachAxis; label: string }>
                     ).map((ax) => (
                       <button
@@ -923,7 +924,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Right: Fullscreen, Clear, Help, Export, Toggle Right Sidebar */}
-      <div className="topbar-group">
+      <div className="topbar-group topbar-right">
         <button
           type="button"
           className={`icon-btn ${isFullscreen ? 'active' : ''}`}
@@ -941,7 +942,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {objectCount > 0 && (
           <button
             type="button"
-            className="icon-btn danger-hover hide-sm"
+            className="icon-btn danger-hover hide-compact"
             onClick={onClearScene}
             title="Bersihkan Semua Objek"
             aria-label="Bersihkan Scene"
@@ -963,13 +964,13 @@ export const TopBar: React.FC<TopBarProps> = ({
         <div className="dropdown-wrap" ref={exportRef}>
           <button
             type="button"
-            className="primary-btn"
+            className="primary-btn export-btn"
             onClick={() => setExportMenuOpen((v) => !v)}
             disabled={objectCount === 0}
             title="Ekspor ke file 3D (.glb / .gltf)"
           >
             <Download size={15} />
-            <span className="hide-xs">Ekspor</span>
+            <span className="hide-compact">Ekspor</span>
             <ChevronDown size={13} />
           </button>
 
@@ -1008,7 +1009,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className={`icon-btn desktop-only ${inspectorOpen ? 'active' : ''}`}
+          className={`icon-btn desktop-only hide-compact ${inspectorOpen ? 'active' : ''}`}
           onClick={onToggleInspector}
           title="Buka / Tutup Sidebar Properti"
           aria-label="Panel Properti"

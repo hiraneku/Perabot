@@ -570,7 +570,11 @@ export const App: React.FC = () => {
       />
 
       <main className="workspace-main">
-        <div className="viewport-area">
+        <div
+          className={`viewport-area ${
+            !leftSidebarCollapsed ? 'sidebar-left-open' : ''
+          }`}
+        >
           <div ref={viewportRef} className="viewport-canvas-host" />
 
           <TransformToolbar
@@ -596,8 +600,7 @@ export const App: React.FC = () => {
               title="Tampilkan Sidebar Properti (<)"
               aria-label="Tampilkan Sidebar Properti"
             >
-              <ChevronLeft size={17} />
-              <span>Properti</span>
+              <ChevronLeft size={18} />
             </button>
           )}
 

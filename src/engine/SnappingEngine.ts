@@ -35,6 +35,33 @@ interface ObjectSnapProfile {
 
 function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
   const kind = (mesh.userData.kind as PrimitiveKind) || 'cube';
+  const posAttr = mesh.geometry.getAttribute('position');
+
+  // For faceted architectural shapes (wedges, pyramids, prisms, frames, L/T blocks),
+  // extract ACTUAL unique geometry vertices so we NEVER snap to phantom AABB air corners!
+  if (posAttr && posAttr.count > 0 && posAttr.count <= 144) {
+    const uniqueMap = new Map<string, THREE.Vector3>();
+    for (let i = 0; i < posAttr.count; i++) {
+      const x = posAttr.getX(i);
+      const y = posAttr.getY(i);
+      const z = posAttr.getZ(i);
+      const key = `${Math.round(x * 100)},${Math.round(y * 100)},${Math.round(z * 100)}`;
+      if (!uniqueMap.has(key)) {
+        uniqueMap.set(key, new THREE.Vector3(x, y, z));
+      }
+      if (uniqueMap.size >= 28) break;
+    }
+    const pts = Array.from(uniqueMap.values());
+    // Add edge midpoints of bottom/top extremes for easy centered roof/block placement
+    mesh.geometry.computeBoundingBox();
+    if (mesh.geometry.boundingBox) {
+      const mid = new THREE.Vector3();
+      mesh.geometry.boundingBox.getCenter(mid);
+      pts.push(mid);
+    }
+    return pts;
+  }
+
   mesh.geometry.computeBoundingBox();
   const bb =
     mesh.geometry.boundingBox ??
@@ -45,7 +72,6 @@ function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
   const mid = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
 
   const pts: THREE.Vector3[] = [];
-  // 8 bounding corners
   for (const x of [min.x, max.x]) {
     for (const y of [min.y, max.y]) {
       for (const z of [min.z, max.z]) {
@@ -53,7 +79,6 @@ function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
       }
     }
   }
-  // 6 face centers
   pts.push(
     new THREE.Vector3(mid.x, min.y, mid.z),
     new THREE.Vector3(mid.x, max.y, mid.z),
@@ -62,19 +87,7 @@ function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
     new THREE.Vector3(mid.x, mid.y, min.z),
     new THREE.Vector3(mid.x, mid.y, max.z)
   );
-  // Key top/bottom edge midpoints for roof ridges, wedges, pyramids
-  pts.push(
-    new THREE.Vector3(mid.x, max.y, min.z),
-    new THREE.Vector3(mid.x, max.y, max.z),
-    new THREE.Vector3(min.x, max.y, mid.z),
-    new THREE.Vector3(max.x, max.y, mid.z),
-    new THREE.Vector3(mid.x, min.y, min.z),
-    new THREE.Vector3(mid.x, min.y, max.z),
-    new THREE.Vector3(min.x, min.y, mid.z),
-    new THREE.Vector3(max.x, min.y, mid.z)
-  );
-
-  if (kind === 'pyramid' || kind === 'cone') {
+  if (kind === 'pyramid' || kind === 'cone' || kind === 'dome') {
     pts.push(new THREE.Vector3(0, max.y, 0));
   }
   return pts;

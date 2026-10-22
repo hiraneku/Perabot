@@ -127,9 +127,10 @@ export class StudioEngine {
   private surfaceNormalVisualizer = new SurfaceNormalVisualizer();
   private isApplyingCustomTransform = false;
 
-  // Direct surface-sliding drag state (when Surface Alignment is enabled)
+  // Direct surface-sliding & gizmo probe offset state
   private isSurfaceSliding = false;
   private didMoveDuringSurfaceSlide = false;
+  private gizmoSurfaceProbeOffset = new THREE.Vector3(0, -0.5, 0);
 
   private counters: Partial<Record<PrimitiveKind, number>> = {};
 
@@ -223,6 +224,33 @@ export class StudioEngine {
       this.orbitControls.enabled = !isDragging;
       if (isDragging) {
         this.wasGizmoDragging = true;
+        if (this.selectedId && this.transformControls.getMode() === 'translate') {
+          const selMesh = this.meshMap.get(this.selectedId);
+          if (selMesh) {
+            const halfDiag = this.getMeshHalfDiagonal(selMesh);
+            const others = Array.from(this.meshMap.values());
+            const startHit = this.surfaceEngine.findClosestSurface3D(
+              selMesh.position,
+              selMesh.position,
+              selMesh,
+              others,
+              this.gridSystem,
+              this.gridSettings.style === 'terrain',
+              Math.max(0.65, halfDiag * 1.2)
+            );
+            if (startHit) {
+              this.gizmoSurfaceProbeOffset
+                .copy(startHit.point)
+                .sub(selMesh.position);
+            } else {
+              this.gizmoSurfaceProbeOffset.set(
+                0,
+                -Math.max(0.25, selMesh.scale.y * 0.5),
+                0
+              );
+            }
+          }
+        }
       } else {
         this.snapVisualizer.clear();
         this.protractorVisualizer.hide();
@@ -304,6 +332,20 @@ export class StudioEngine {
     mesh.add(wireMesh);
   }
 
+  private getMeshHalfDiagonal(mesh: THREE.Mesh): number {
+    mesh.geometry.computeBoundingBox();
+    const bb = mesh.geometry.boundingBox;
+    if (!bb) return 0.75;
+    return (
+      0.5 *
+      Math.hypot(
+        (bb.max.x - bb.min.x) * mesh.scale.x,
+        (bb.max.y - bb.min.y) * mesh.scale.y,
+        (bb.max.z - bb.min.z) * mesh.scale.z
+      )
+    );
+  }
+
   private handleGizmoObjectChange(): void {
     if (!this.selectedId) return;
     const mesh = this.meshMap.get(this.selectedId);
@@ -319,55 +361,69 @@ export class StudioEngine {
         const others = Array.from(this.meshMap.values());
         const groundY = this.gridSystem.sampleHeight(rawPos.x, rawPos.z);
 
-        const snapRes = this.snappingEngine.computeSnap(
-          mesh,
-          rawPos,
-          axis,
-          others,
-          this.snapSettings,
-          groundY
-        );
-        mesh.position.copy(snapRes.snappedPosition);
+        let conformedToSurface = false;
+        let finalLabel: string | null = null;
 
-        let finalLabel = snapRes.snapLabel;
+        // 1. Smart Omni-Directional 3D Surface Adaptation (works on ALL gizmo axes X, Y, Z, planes!)
+        if (this.surfaceSettings.enabled && this.surfaceSettings.autoOnMove) {
+          const halfDiag = this.getMeshHalfDiagonal(mesh);
+          const probePt = rawPos.clone().add(this.gizmoSurfaceProbeOffset);
+          const captureRadius = Math.max(0.72, halfDiag * 1.18);
 
-        // Standalone Surface Alignment during horizontal Gizmo movement (X, Z, XZ, XYZ — not pure vertical Y!)
-        const isPureVertical = axis === 'Y';
-        if (
-          this.surfaceSettings.enabled &&
-          this.surfaceSettings.autoOnMove &&
-          !isPureVertical
-        ) {
-          const movBounds = this.computeWorldBounds(mesh);
-          const surfHit = this.surfaceEngine.projectVerticalAtXZ(
-            mesh.position.x,
-            mesh.position.z,
-            movBounds.max.y,
+          const surfHit = this.surfaceEngine.findClosestSurface3D(
+            probePt,
+            rawPos,
             mesh,
             others,
             this.gridSystem,
-            this.gridSettings.style === 'terrain'
+            this.gridSettings.style === 'terrain',
+            captureRadius
           );
-          const applied = this.surfaceEngine.applySurfaceHit(
-            mesh,
-            surfHit,
-            this.surfaceSettings,
-            this.gridSystem,
-            others,
-            true,
-            0
-          );
-          this.surfaceNormalVisualizer.show(
-            applied.contactPoint,
-            applied.contactNormal
-          );
-          finalLabel = applied.label;
-        } else {
+
+          if (surfHit) {
+            const gridStep =
+              surfHit.isGround &&
+              this.snapSettings.enabled &&
+              this.snapSettings.grid
+                ? this.snapSettings.gridStep
+                : 0;
+
+            const applied = this.surfaceEngine.applySurfaceHit(
+              mesh,
+              surfHit,
+              this.surfaceSettings,
+              this.gridSystem,
+              others,
+              true,
+              gridStep
+            );
+            this.surfaceNormalVisualizer.show(
+              applied.contactPoint,
+              applied.contactNormal
+            );
+            this.snapVisualizer.clear();
+            finalLabel = applied.label;
+            conformedToSurface = true;
+          }
+        }
+
+        // 2. Standard Smart Snapping when Surface is off OR when object is lifted far into the air
+        if (!conformedToSurface) {
           this.surfaceNormalVisualizer.hide();
+          const snapRes = this.snappingEngine.computeSnap(
+            mesh,
+            rawPos,
+            axis,
+            others,
+            this.snapSettings,
+            groundY
+          );
+          mesh.position.copy(snapRes.snappedPosition);
+          this.snapVisualizer.update(snapRes);
+          finalLabel = snapRes.snapLabel;
         }
 
         this.updateSeamlessTouchFaces();
-        this.snapVisualizer.update(snapRes);
         this.protractorVisualizer.hide();
         this.emitDragFeedback(true, { snapLabel: finalLabel });
       } else if (mode === 'rotate') {
@@ -1082,12 +1138,45 @@ export class StudioEngine {
   }
 
   public updateSurfaceSettings(patch: Partial<SurfaceSettings>): SurfaceSettings {
+    const wasEnabled = this.surfaceSettings.enabled;
     this.surfaceSettings = {
       ...this.surfaceSettings,
       ...patch,
     };
-    // If spinDeg, attachAxis, offset, or conformMode changed while Surface is active & an object is selected,
-    // immediately preview/re-conform if explicitly requested via spin/offset!
+
+    // When toggling Surface ON while an object is selected near another 3D surface,
+    // immediately adapt & seat it flush so the user sees instant precision!
+    if (!wasEnabled && this.surfaceSettings.enabled && this.selectedId) {
+      const selMesh = this.meshMap.get(this.selectedId);
+      if (selMesh && selMesh.visible) {
+        const halfDiag = this.getMeshHalfDiagonal(selMesh);
+        const others = Array.from(this.meshMap.values());
+        const nearHit = this.surfaceEngine.findClosestSurface3D(
+          selMesh.position,
+          selMesh.position,
+          selMesh,
+          others,
+          this.gridSystem,
+          this.gridSettings.style === 'terrain',
+          Math.max(0.85, halfDiag * 1.35)
+        );
+        if (nearHit && !nearHit.isGround) {
+          this.surfaceEngine.applySurfaceHit(
+            selMesh,
+            nearHit,
+            this.surfaceSettings,
+            this.gridSystem,
+            others,
+            true,
+            0
+          );
+          this.updateSeamlessTouchFaces();
+          this.pushHistorySnapshot();
+          this.emitState();
+        }
+      }
+    }
+
     return { ...this.surfaceSettings };
   }
 
@@ -1282,12 +1371,8 @@ export class StudioEngine {
     const mesh = this.meshMap.get(this.selectedId);
     if (!mesh) return '';
 
-    const movBounds = this.computeWorldBounds(mesh);
     const others = Array.from(this.meshMap.values());
-    const hit = this.surfaceEngine.projectVerticalAtXZ(
-      mesh.position.x,
-      mesh.position.z,
-      movBounds.max.y,
+    const hit = this.surfaceEngine.findBestConformTarget(
       mesh,
       others,
       this.gridSystem,

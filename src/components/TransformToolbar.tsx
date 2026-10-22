@@ -51,8 +51,7 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
         title="Tampilkan Sidebar Utility"
         aria-label="Tampilkan Sidebar Utility"
       >
-        <ChevronRight size={17} />
-        <span>Alat</span>
+        <ChevronRight size={18} />
       </button>
     );
   }
@@ -61,13 +60,12 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
     <aside className="left-toolbar" aria-label="Sidebar Utility & Transformasi">
       <button
         type="button"
-        className="toolbar-collapse-btn"
+        className="toolbar-collapse-icon-btn"
         onClick={onToggleCollapse}
         title="Sembunyikan Sidebar Utility"
         aria-label="Sembunyikan Sidebar Utility"
       >
-        <ChevronLeft size={16} />
-        <span>Tutup</span>
+        <ChevronLeft size={18} />
       </button>
 
       <div className="toolbar-sep" />
