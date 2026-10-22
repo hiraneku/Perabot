@@ -1,16 +1,22 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { StudioEngine } from './engine/StudioEngine';
+import { ChevronLeft } from 'lucide-react';
+import { PaintBrushPayload, StudioEngine } from './engine/StudioEngine';
 import { CameraPresetType } from './engine/viewportHelpers';
 import { PRIMITIVE_META } from './engine/primitives';
 import {
   DEFAULT_GRID_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
+  DEFAULT_SURFACE_SETTINGS,
   DragFeedback,
   GridSettings,
+  ObjectSubdivisionSettings,
+  PaintInteractionMode,
   PrimitiveKind,
   RotationSnapStep,
   SceneObjectData,
   SnapSettings,
+  SubdivisionStats,
+  SurfaceSettings,
   TransformMode,
   TransformSpace,
   Vec3,
@@ -18,10 +24,10 @@ import {
 import { TopBar } from './components/TopBar';
 import { TransformToolbar } from './components/TransformToolbar';
 import { DesktopSpawnDock, MobileBottomBar } from './components/SpawnDock';
-import { InspectorPanel } from './components/InspectorPanel';
+import { InspectorPanel, InspectorSubTab } from './components/InspectorPanel';
 import { HelpModal } from './components/HelpModal';
 import { RotationControlBar } from './components/RotationControlBar';
-import { SurfaceControlBar } from './components/SurfaceControlBar';
+import { AdvancedColorMaterialPatch } from './components/ColorWheelPicker';
 
 export const App: React.FC = () => {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -29,6 +35,8 @@ export const App: React.FC = () => {
 
   const [objects, setObjects] = useState<SceneObjectData[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedSubdivStats, setSelectedSubdivStats] =
+    useState<SubdivisionStats | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
 
@@ -37,13 +45,33 @@ export const App: React.FC = () => {
   const [snapSettings, setSnapSettings] = useState<SnapSettings>({
     ...DEFAULT_SNAP_SETTINGS,
   });
+  const [surfaceSettings, setSurfaceSettings] = useState<SurfaceSettings>({
+    ...DEFAULT_SURFACE_SETTINGS,
+  });
   const [gridSettings, setGridSettings] = useState<GridSettings>({
     ...DEFAULT_GRID_SETTINGS,
   });
 
+  // Collapsible sidebars + Fullscreen state
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [inspectorSubTab, setInspectorSubTab] =
+    useState<InspectorSubTab>('transform');
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+
+  // Paint / Eyedropper state
+  const [paintMode, setPaintMode] = useState<PaintInteractionMode>('none');
+  const [activeBrush, setActiveBrush] = useState<PaintBrushPayload>({
+    color: '#3b82f6',
+    roughness: 0.55,
+    metalness: 0.1,
+    opacity: 1,
+    emissive: '#000000',
+    emissiveIntensity: 0,
+    flatShading: false,
+  });
 
   const [dragFeedback, setDragFeedback] = useState<DragFeedback>({
     active: false,
@@ -69,6 +97,72 @@ export const App: React.FC = () => {
     }, 2300);
   }, []);
 
+  // Sync browser Fullscreen API events
+  useEffect(() => {
+    const syncFs = () => {
+      const doc = document as Document & { webkitFullscreenElement?: Element };
+      const nativeFs = Boolean(
+        document.fullscreenElement || doc.webkitFullscreenElement
+      );
+      setIsFullscreen((prev) =>
+        document.documentElement.classList.contains('zen-fullscreen-fallback')
+          ? prev
+          : nativeFs
+      );
+    };
+    document.addEventListener('fullscreenchange', syncFs);
+    document.addEventListener('webkitfullscreenchange', syncFs);
+    return () => {
+      document.removeEventListener('fullscreenchange', syncFs);
+      document.removeEventListener('webkitfullscreenchange', syncFs);
+    };
+  }, []);
+
+  const handleToggleFullscreen = useCallback(async () => {
+    const docEl = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+    };
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element;
+      webkitExitFullscreen?: () => Promise<void>;
+    };
+
+    try {
+      if (
+        document.fullscreenElement ||
+        doc.webkitFullscreenElement ||
+        docEl.classList.contains('zen-fullscreen-fallback')
+      ) {
+        docEl.classList.remove('zen-fullscreen-fallback');
+        if (document.fullscreenElement) {
+          await document.exitFullscreen();
+        } else if (doc.webkitExitFullscreen) {
+          await doc.webkitExitFullscreen();
+        }
+        setIsFullscreen(false);
+        showToast('Keluar mode layar penuh');
+      } else {
+        if (docEl.requestFullscreen) {
+          await docEl.requestFullscreen();
+          setIsFullscreen(true);
+        } else if (docEl.webkitRequestFullscreen) {
+          await docEl.webkitRequestFullscreen();
+          setIsFullscreen(true);
+        } else {
+          docEl.classList.add('zen-fullscreen-fallback');
+          setIsFullscreen(true);
+        }
+        showToast('Mode Layar Penuh aktif');
+      }
+    } catch {
+      // Graceful fallback when sandbox/iOS blocks native Fullscreen API
+      const next = !isFullscreen;
+      docEl.classList.toggle('zen-fullscreen-fallback', next);
+      setIsFullscreen(next);
+      showToast(next ? 'Mode Layar Penuh aktif' : 'Keluar mode layar penuh');
+    }
+  }, [isFullscreen, showToast]);
+
   useEffect(() => {
     const container = viewportRef.current;
     if (!container) return;
@@ -79,9 +173,19 @@ export const App: React.FC = () => {
         setSelectedId(state.selectedId);
         setCanUndo(state.canUndo);
         setCanRedo(state.canRedo);
+        setSelectedSubdivStats(state.selectedSubdivStats);
       },
       onDragFeedback: (feedback) => {
         setDragFeedback(feedback);
+      },
+      onEyedropperSample: (sample, objName) => {
+        setActiveBrush(sample);
+        setPaintMode('bucket');
+        engine.setPaintInteraction('bucket', sample);
+        showToast(`Warna diambil dari ${objName} (Siap mengecat!)`);
+      },
+      onPaintApplied: (objName) => {
+        showToast(`${objName} diwarnai`);
       },
     });
 
@@ -91,7 +195,7 @@ export const App: React.FC = () => {
       engine.dispose();
       engineRef.current = null;
     };
-  }, []);
+  }, [showToast]);
 
   const handleSpawn = useCallback(
     (kind: PrimitiveKind) => {
@@ -104,17 +208,35 @@ export const App: React.FC = () => {
     [showToast]
   );
 
-  const handleChangeMode = useCallback(
-    (mode: TransformMode) => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      engine.setTransformMode(mode);
-      setTransformMode(mode);
-      if (mode === 'surface') {
-        showToast('Mode Tempel: Seret objek terpilih di atas permukaan / terrain');
+  const handleChangeMode = useCallback((mode: TransformMode) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    setPaintMode('none');
+    engine.setPaintInteraction('none');
+    engine.setTransformMode(mode);
+    setTransformMode(mode);
+  }, []);
+
+  const handleOpenColorStudio = useCallback(() => {
+    setInspectorSubTab('color');
+    if (window.innerWidth < 768) {
+      setMobileDrawerOpen(true);
+    } else {
+      setInspectorOpen(true);
+    }
+  }, []);
+
+  const handleChangePaintMode = useCallback(
+    (mode: PaintInteractionMode) => {
+      setPaintMode(mode);
+      engineRef.current?.setPaintInteraction(mode, activeBrush);
+      if (mode === 'bucket') {
+        showToast('Mode Cat Klik aktif: Ketuk objek di kanvas untuk mewarnai');
+      } else if (mode === 'eyedropper') {
+        showToast('Pipet aktif: Ketuk objek di kanvas untuk mengambil warnanya');
       }
     },
-    [showToast]
+    [activeBrush, showToast]
   );
 
   const handleToggleSpace = useCallback(() => {
@@ -132,6 +254,27 @@ export const App: React.FC = () => {
     const next = engine.updateSnapSettings(patch);
     setSnapSettings(next);
   }, []);
+
+  const handleUpdateSurface = useCallback(
+    (patch: Partial<SurfaceSettings>, reconformNow = false) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const next = engine.updateSurfaceSettings(patch);
+      setSurfaceSettings(next);
+      if (patch.enabled !== undefined && !reconformNow) {
+        showToast(
+          next.enabled
+            ? 'Surface Alignment Aktif: Seret objek / panah XZ mengikuti permukaan'
+            : 'Surface Alignment Nonaktif'
+        );
+      }
+      if (reconformNow && selectedId) {
+        const label = engine.dropSelectedToFloor();
+        if (label) showToast(label);
+      }
+    },
+    [selectedId, showToast]
+  );
 
   const handleUpdateGrid = useCallback((patch: Partial<GridSettings>) => {
     const engine = engineRef.current;
@@ -216,19 +359,51 @@ export const App: React.FC = () => {
 
   const handleUpdateMaterial = useCallback(
     (
-      id: string,
-      patch: Partial<{
-        name: string;
-        color: string;
-        roughness: number;
-        metalness: number;
-        visible: boolean;
-      }>
+      id: string | null,
+      patch: AdvancedColorMaterialPatch & { name?: string; visible?: boolean },
+      commitHistory = true
     ) => {
-      engineRef.current?.updateObjectMaterial(id, patch);
+      // Keep active paint brush synced with color/PBR edits
+      const brushPatch: Partial<PaintBrushPayload> = {};
+      if (patch.color !== undefined) brushPatch.color = patch.color;
+      if (patch.roughness !== undefined) brushPatch.roughness = patch.roughness;
+      if (patch.metalness !== undefined) brushPatch.metalness = patch.metalness;
+      if (patch.opacity !== undefined) brushPatch.opacity = patch.opacity;
+      if (patch.emissive !== undefined) brushPatch.emissive = patch.emissive;
+      if (patch.emissiveIntensity !== undefined)
+        brushPatch.emissiveIntensity = patch.emissiveIntensity;
+      if (patch.flatShading !== undefined)
+        brushPatch.flatShading = patch.flatShading;
+
+      if (Object.keys(brushPatch).length > 0) {
+        setActiveBrush((prev) => {
+          const next = { ...prev, ...brushPatch };
+          engineRef.current?.updatePaintBrush(next);
+          return next;
+        });
+      }
+
+      if (id) {
+        engineRef.current?.updateObjectMaterial(id, patch, commitHistory);
+      }
     },
     []
   );
+
+  const handleUpdateSubdivision = useCallback(
+    (
+      id: string,
+      patch: Partial<ObjectSubdivisionSettings>,
+      commitHistory = true
+    ) => {
+      engineRef.current?.updateObjectSubdivision(id, patch, commitHistory);
+    },
+    []
+  );
+
+  const handleCommitHistory = useCallback(() => {
+    engineRef.current?.pushHistoryFromUI();
+  }, []);
 
   const handleDeleteObject = useCallback(
     (id?: string) => {
@@ -301,10 +476,19 @@ export const App: React.FC = () => {
           handleChangeMode('scale');
           break;
         case 't':
-          handleChangeMode('surface');
+          handleUpdateSurface({ enabled: !surfaceSettings.enabled });
+          break;
+        case 'c':
+          handleOpenColorStudio();
           break;
         case 'f':
           handleFocusCamera();
+          break;
+        case 'escape':
+          if (paintMode !== 'none') {
+            setPaintMode('none');
+            engineRef.current?.setPaintInteraction('none');
+          }
           break;
         case 'delete':
         case 'backspace':
@@ -333,7 +517,11 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     selectedId,
+    paintMode,
+    surfaceSettings.enabled,
     handleChangeMode,
+    handleUpdateSurface,
+    handleOpenColorStudio,
     handleFocusCamera,
     handleDeleteObject,
     handleDuplicateSelected,
@@ -355,23 +543,29 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="studio-shell">
+    <div className={`studio-shell ${isFullscreen ? 'is-fullscreen' : ''}`}>
       <TopBar
         canUndo={canUndo}
         canRedo={canRedo}
         snapSettings={snapSettings}
+        surfaceSettings={surfaceSettings}
         gridSettings={gridSettings}
         inspectorOpen={inspectorOpen}
+        isFullscreen={isFullscreen}
+        hasSelection={Boolean(selectedId)}
         objectCount={objects.length}
         onUndo={() => engineRef.current?.undo()}
         onRedo={() => engineRef.current?.redo()}
         onUpdateSnap={handleUpdateSnap}
+        onUpdateSurface={handleUpdateSurface}
+        onConformNow={handleDropToFloor}
         onUpdateGrid={handleUpdateGrid}
         onFocusCamera={handleFocusCamera}
         onCameraPreset={handleCameraPreset}
         onExport={handleExport}
         onClearScene={handleClearScene}
         onToggleInspector={() => setInspectorOpen((v) => !v)}
+        onToggleFullscreen={handleToggleFullscreen}
         onOpenHelp={() => setHelpOpen(true)}
       />
 
@@ -383,12 +577,76 @@ export const App: React.FC = () => {
             mode={transformMode}
             space={transformSpace}
             hasSelection={Boolean(selectedId)}
+            collapsed={leftSidebarCollapsed}
+            onToggleCollapse={() => setLeftSidebarCollapsed((v) => !v)}
             onChangeMode={handleChangeMode}
             onToggleSpace={handleToggleSpace}
+            onOpenColorStudio={handleOpenColorStudio}
             onDropToFloor={handleDropToFloor}
             onDuplicate={handleDuplicateSelected}
             onDelete={() => handleDeleteObject()}
           />
+
+          {/* Right-edge Expand Tab when Desktop Inspector Sidebar is hidden */}
+          {!inspectorOpen && (
+            <button
+              type="button"
+              className="right-inspector-expand-tab desktop-only"
+              onClick={() => setInspectorOpen(true)}
+              title="Tampilkan Sidebar Properti (<)"
+              aria-label="Tampilkan Sidebar Properti"
+            >
+              <ChevronLeft size={17} />
+              <span>Properti</span>
+            </button>
+          )}
+
+          {/* Active Paint / Click-to-Place Floating Pill */}
+          {(paintMode !== 'none' ||
+            (surfaceSettings.enabled && surfaceSettings.clickToPlace)) &&
+            !dragFeedback.active && (
+              <div className="interactive-mode-banner">
+                {paintMode === 'bucket' && (
+                  <>
+                    <span>🎨 Mode Cat Klik Aktif — Ketuk objek untuk mewarnai</span>
+                    <button
+                      type="button"
+                      onClick={() => handleChangePaintMode('none')}
+                    >
+                      Selesai
+                    </button>
+                  </>
+                )}
+                {paintMode === 'eyedropper' && (
+                  <>
+                    <span>💧 Mode Pipet — Ketuk objek untuk menyalin warna</span>
+                    <button
+                      type="button"
+                      onClick={() => handleChangePaintMode('none')}
+                    >
+                      Batal
+                    </button>
+                  </>
+                )}
+                {paintMode === 'none' &&
+                  surfaceSettings.enabled &&
+                  surfaceSettings.clickToPlace && (
+                    <>
+                      <span>
+                        🧲 Klik Permukaan Aktif — Ketuk atap/dinding/bukit tujuan
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleUpdateSurface({ clickToPlace: false })
+                        }
+                      >
+                        Matikan
+                      </button>
+                    </>
+                  )}
+              </div>
+            )}
 
           {/* Live Gizmo + Smart Snap + Surface Align Readout Pill */}
           {dragFeedback.active && (
@@ -449,25 +707,6 @@ export const App: React.FC = () => {
             />
           )}
 
-          {/* Surface Alignment & Terrain Conforming Quick Bar */}
-          <SurfaceControlBar
-            visible={transformMode === 'surface' && Boolean(selectedId)}
-            conformMode={snapSettings.surfaceConformMode}
-            surfaceOffset={snapSettings.surfaceOffset}
-            onChangeConformMode={(mode) => {
-              handleUpdateSnap({ surfaceConformMode: mode });
-              showToast(
-                mode === 'align-normal'
-                  ? 'Mode: Ikuti Normal Kemiringan Permukaan'
-                  : mode === 'foundation-seat'
-                  ? 'Mode: Fondasi Menancap ke Lereng'
-                  : 'Mode: Tegak Ikuti Tinggi Kontur'
-              );
-            }}
-            onChangeOffset={(off) => handleUpdateSnap({ surfaceOffset: off })}
-            onConformNow={handleDropToFloor}
-          />
-
           <DesktopSpawnDock onSpawn={handleSpawn} />
 
           <div className="viewport-status-chip">
@@ -475,7 +714,7 @@ export const App: React.FC = () => {
             <span className="dot-sep">•</span>
             <span>
               {transformMode === 'translate'
-                ? 'Geser (Panah RGB)'
+                ? 'Geser (RGB)'
                 : transformMode === 'rotate'
                 ? `Putar (${
                     snapSettings.rotationSnapDeg > 0
@@ -484,16 +723,14 @@ export const App: React.FC = () => {
                   })`
                 : transformMode === 'scale'
                 ? 'Skala'
-                : transformMode === 'surface'
-                ? `Tempel Permukaan (${
-                    snapSettings.surfaceConformMode === 'align-normal'
-                      ? 'Ikuti Normal'
-                      : snapSettings.surfaceConformMode === 'foundation-seat'
-                      ? 'Fondasi'
-                      : 'Tegak'
-                  })`
                 : 'Pilih'}
             </span>
+            {surfaceSettings.enabled && (
+              <>
+                <span className="dot-sep">•</span>
+                <span className="status-emerald">Surface ON</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -501,9 +738,18 @@ export const App: React.FC = () => {
           <InspectorPanel
             objects={objects}
             selectedId={selectedId}
+            subdivStats={selectedSubdivStats}
+            paintMode={paintMode}
+            activeBrush={activeBrush}
+            inspectorSubTab={inspectorSubTab}
+            onChangeSubTab={setInspectorSubTab}
+            onCollapseDesktop={() => setInspectorOpen(false)}
             onSelectObject={handleSelectObject}
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
+            onUpdateSubdivision={handleUpdateSubdivision}
+            onChangePaintMode={handleChangePaintMode}
+            onCommitHistory={handleCommitHistory}
             onDeleteObject={(id) => handleDeleteObject(id)}
             onDuplicateSelected={handleDuplicateSelected}
             onDropToFloor={handleDropToFloor}
@@ -514,11 +760,19 @@ export const App: React.FC = () => {
           <InspectorPanel
             objects={objects}
             selectedId={selectedId}
+            subdivStats={selectedSubdivStats}
+            paintMode={paintMode}
+            activeBrush={activeBrush}
+            inspectorSubTab={inspectorSubTab}
+            onChangeSubTab={setInspectorSubTab}
             isMobileDrawer
             onCloseMobile={() => setMobileDrawerOpen(false)}
             onSelectObject={handleSelectObject}
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
+            onUpdateSubdivision={handleUpdateSubdivision}
+            onChangePaintMode={handleChangePaintMode}
+            onCommitHistory={handleCommitHistory}
             onDeleteObject={(id) => handleDeleteObject(id)}
             onDuplicateSelected={handleDuplicateSelected}
             onDropToFloor={handleDropToFloor}

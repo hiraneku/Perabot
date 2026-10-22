@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { PrimitiveKind, ShapeSubcategory } from '../types/studio';
+import {
+  ARCHITECTURAL_SHAPES_CATALOG,
+  createNewArchitecturalGeometry,
+} from './architecturalPrimitives';
 
 export interface PrimitiveMetaItem {
   kind: PrimitiveKind;
@@ -943,6 +947,11 @@ export function createPrimitiveGeometry(kind: PrimitiveKind): THREE.BufferGeomet
       return new THREE.SphereGeometry(0.5, 36, 24);
     case 'half-sphere':
       return createHalfSphereGeometry();
+    default: {
+      const archGeo = createNewArchitecturalGeometry(kind);
+      if (archGeo) return archGeo;
+      return new THREE.BoxGeometry(1, 1, 1);
+    }
   }
 }
 
@@ -1218,6 +1227,7 @@ export const BASIC_SHAPES_CATALOG: PrimitiveMetaItem[] = [
     roughness: 0.46,
     metalness: 0.1,
   },
+  ...ARCHITECTURAL_SHAPES_CATALOG,
 ];
 
 export const PRIMITIVE_META: Record<PrimitiveKind, PrimitiveMetaItem> =
@@ -1226,8 +1236,7 @@ export const PRIMITIVE_META: Record<PrimitiveKind, PrimitiveMetaItem> =
   ) as Record<PrimitiveKind, PrimitiveMetaItem>;
 
 /**
- * Generates and caches crisp 3D studio-lit PNG data-URL thumbnails for all 24 shapes
- * using a temporary 112x112 offscreen renderer that is immediately disposed after rendering.
+ * Generates and caches crisp 3D studio-lit thumbnails for all 75 shapes.
  */
 let cachedThumbnails: Record<PrimitiveKind, string> | null = null;
 
@@ -1236,7 +1245,7 @@ export function getShapeThumbnails(): Record<PrimitiveKind, string> {
 
   const result = {} as Record<PrimitiveKind, string>;
   try {
-    const size = 112;
+    const size = 96;
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
@@ -1250,9 +1259,9 @@ export function getShapeThumbnails(): Record<PrimitiveKind, string> {
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 20);
     camera.position.set(1.55, 1.32, 1.75);
-    camera.lookAt(0, -0.03, 0);
+    camera.lookAt(0, -0.02, 0);
 
-    const hemi = new THREE.HemisphereLight('#ffffff', '#1e293b', 1.1);
+    const hemi = new THREE.HemisphereLight('#ffffff', '#1e293b', 1.12);
     scene.add(hemi);
     const key = new THREE.DirectionalLight('#fffbeb', 2.1);
     key.position.set(3, 5, 4);
@@ -1273,7 +1282,7 @@ export function getShapeThumbnails(): Record<PrimitiveKind, string> {
 
       renderer.clear();
       renderer.render(scene, camera);
-      result[item.kind] = renderer.domElement.toDataURL('image/png');
+      result[item.kind] = renderer.domElement.toDataURL('image/webp', 0.88);
 
       scene.remove(mesh);
       geo.dispose();

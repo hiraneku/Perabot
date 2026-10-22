@@ -13,6 +13,10 @@ import {
   Camera,
   Check,
   Mountain,
+  Layers,
+  Maximize,
+  Minimize,
+  ArrowDownToLine,
 } from 'lucide-react';
 import { CameraPresetType } from '../engine/viewportHelpers';
 import {
@@ -20,7 +24,9 @@ import {
   GridStyle,
   MagnetStrength,
   SnapSettings,
+  SurfaceAttachAxis,
   SurfaceConformMode,
+  SurfaceSettings,
   TerrainPreset,
 } from '../types/studio';
 
@@ -28,18 +34,24 @@ interface TopBarProps {
   canUndo: boolean;
   canRedo: boolean;
   snapSettings: SnapSettings;
+  surfaceSettings: SurfaceSettings;
   gridSettings: GridSettings;
   inspectorOpen: boolean;
+  isFullscreen: boolean;
+  hasSelection: boolean;
   objectCount: number;
   onUndo: () => void;
   onRedo: () => void;
   onUpdateSnap: (patch: Partial<SnapSettings>) => void;
+  onUpdateSurface: (patch: Partial<SurfaceSettings>, reconformNow?: boolean) => void;
+  onConformNow: () => void;
   onUpdateGrid: (patch: Partial<GridSettings>) => void;
   onFocusCamera: () => void;
   onCameraPreset: (preset: CameraPresetType) => void;
   onExport: (format: 'glb' | 'gltf') => void;
   onClearScene: () => void;
   onToggleInspector: () => void;
+  onToggleFullscreen: () => void;
   onOpenHelp: () => void;
 }
 
@@ -47,27 +59,35 @@ export const TopBar: React.FC<TopBarProps> = ({
   canUndo,
   canRedo,
   snapSettings,
+  surfaceSettings,
   gridSettings,
   inspectorOpen,
+  isFullscreen,
+  hasSelection,
   objectCount,
   onUndo,
   onRedo,
   onUpdateSnap,
+  onUpdateSurface,
+  onConformNow,
   onUpdateGrid,
   onFocusCamera,
   onCameraPreset,
   onExport,
   onClearScene,
   onToggleInspector,
+  onToggleFullscreen,
   onOpenHelp,
 }) => {
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
+  const [surfaceMenuOpen, setSurfaceMenuOpen] = useState(false);
   const [gridMenuOpen, setGridMenuOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
 
   const exportRef = useRef<HTMLDivElement>(null);
   const snapRef = useRef<HTMLDivElement>(null);
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
 
@@ -78,6 +98,9 @@ export const TopBar: React.FC<TopBarProps> = ({
       }
       if (snapRef.current && !snapRef.current.contains(e.target as Node)) {
         setSnapMenuOpen(false);
+      }
+      if (surfaceRef.current && !surfaceRef.current.contains(e.target as Node)) {
+        setSurfaceMenuOpen(false);
       }
       if (gridRef.current && !gridRef.current.contains(e.target as Node)) {
         setGridMenuOpen(false);
@@ -136,9 +159,9 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </div>
 
-      {/* Center: Smart Snapping, Advanced Grid & Terrain, Focus, Camera Views */}
+      {/* Center: Snap, Surface Alignment, World/Terrain Grid, Focus, Camera */}
       <div className="topbar-group topbar-center">
-        {/* 1. Smart Snapping + Surface Conform Split Button */}
+        {/* 1. Smart Snapping Split Button */}
         <div className="dropdown-wrap" ref={snapRef}>
           <div className="split-btn">
             <button
@@ -157,8 +180,8 @@ export const TopBar: React.FC<TopBarProps> = ({
               type="button"
               className={`chip-caret ${snapSettings.enabled ? 'active' : ''}`}
               onClick={() => setSnapMenuOpen((v) => !v)}
-              aria-label="Pengaturan Snap & Surface Alignment"
-              title="Atur Snap Pintar & Surface Conforming"
+              aria-label="Pengaturan Snap Pintar"
+              title="Atur Magnet Blok, Garis Sejajar & Snap Grid"
             >
               <ChevronDown size={13} />
             </button>
@@ -167,7 +190,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           {snapMenuOpen && (
             <div className="dropdown-menu snap-popover">
               <div className="snap-popover-head">
-                <span>Snap Pintar & Permukaan</span>
+                <span>Sistem Snap Pintar</span>
                 <button
                   type="button"
                   className={`mini-toggle-pill ${snapSettings.enabled ? 'on' : ''}`}
@@ -177,7 +200,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </button>
               </div>
 
-              {/* 1. Unified Magnet Blok & Sudut */}
               <div className="snap-subblock">
                 <button
                   type="button"
@@ -230,7 +252,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 )}
               </div>
 
-              {/* 2. Garis Sejajar */}
               <button
                 type="button"
                 className={`snap-option-row ${snapSettings.alignment ? 'checked' : ''}`}
@@ -247,7 +268,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </span>
               </button>
 
-              {/* 3. Snap Grid */}
               <div className="snap-subblock">
                 <button
                   type="button"
@@ -285,38 +305,269 @@ export const TopBar: React.FC<TopBarProps> = ({
                   </div>
                 )}
               </div>
-
-              {/* Surface Alignment & Terrain Conforming Quick Preset */}
-              <div className="snap-subblock">
-                <div className="grid-section-title">
-                  Mode Tempel Permukaan & Terrain (Alat Tempel / Conform)
-                </div>
-                <div className="segmented-pills">
-                  {(
-                    [
-                      { id: 'align-normal', label: 'Ikuti Normal' },
-                      { id: 'upright-follow', label: 'Tegak Kontur' },
-                      { id: 'foundation-seat', label: 'Fondasi' },
-                    ] as Array<{ id: SurfaceConformMode; label: string }>
-                  ).map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className={`seg-pill ${
-                        snapSettings.surfaceConformMode === m.id ? 'active' : ''
-                      }`}
-                      onClick={() => onUpdateSnap({ surfaceConformMode: m.id })}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
           )}
         </div>
 
-        {/* 2. Advanced World / Tile / Terrain Grid Split Button */}
+        {/* 2. Standalone Surface Alignment & Terrain Conforming Split Button */}
+        <div className="dropdown-wrap" ref={surfaceRef}>
+          <div className="split-btn">
+            <button
+              type="button"
+              className={`chip-btn ${surfaceSettings.enabled ? 'active-emerald' : ''}`}
+              onClick={() =>
+                onUpdateSurface({ enabled: !surfaceSettings.enabled }, false)
+              }
+              title="Aktifkan / Matikan Fitur Surface Alignment & Terrain Conforming (T)"
+            >
+              <Layers size={15} />
+              <span className="hide-xs">Surface</span>
+            </button>
+            <button
+              type="button"
+              className={`chip-caret ${
+                surfaceSettings.enabled ? 'active-emerald' : ''
+              }`}
+              onClick={() => setSurfaceMenuOpen((v) => !v)}
+              aria-label="Pengaturan Surface Alignment & Terrain Conforming"
+              title="Atur Align to Surface Normal, Sisi Tempel & Terrain Conforming"
+            >
+              <ChevronDown size={13} />
+            </button>
+          </div>
+
+          {surfaceMenuOpen && (
+            <div className="dropdown-menu surface-popover">
+              <div className="snap-popover-head">
+                <span>Surface Alignment & Terrain</span>
+                <button
+                  type="button"
+                  className={`mini-toggle-pill emerald ${
+                    surfaceSettings.enabled ? 'on' : ''
+                  }`}
+                  onClick={() =>
+                    onUpdateSurface({ enabled: !surfaceSettings.enabled }, false)
+                  }
+                >
+                  {surfaceSettings.enabled ? 'Aktif' : 'Nonaktif'}
+                </button>
+              </div>
+
+              {/* Orientation / Conform Mode */}
+              <div className="snap-subblock">
+                <div className="grid-section-title">Mode Orientasi Permukaan</div>
+                <div className="surface-mode-cards">
+                  {(
+                    [
+                      {
+                        id: 'align-normal',
+                        title: 'Ikuti Normal (Align Normal)',
+                        sub: 'Miring presisi mengikuti kemiringan atap, dinding, kubah & bukit',
+                      },
+                      {
+                        id: 'upright-follow',
+                        title: 'Tegak Ikuti Kontur',
+                        sub: 'Tetap berdiri tegak lurus sambil mengikuti tinggi permukaan / tanah',
+                      },
+                      {
+                        id: 'foundation-seat',
+                        title: 'Fondasi Lereng (Anti-Melayang)',
+                        sub: 'Tanam sudut tapak terendah bangunan ke lereng miring',
+                      },
+                    ] as Array<{
+                      id: SurfaceConformMode;
+                      title: string;
+                      sub: string;
+                    }>
+                  ).map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`surface-mode-card ${
+                        surfaceSettings.conformMode === item.id ? 'active' : ''
+                      }`}
+                      onClick={() =>
+                        onUpdateSurface(
+                          { enabled: true, conformMode: item.id },
+                          true
+                        )
+                      }
+                    >
+                      <div className="surface-card-head">
+                        <strong>{item.title}</strong>
+                        {surfaceSettings.conformMode === item.id && (
+                          <Check size={13} />
+                        )}
+                      </div>
+                      <small>{item.sub}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Attach Face Selector (for Align to Normal) */}
+              {surfaceSettings.conformMode === 'align-normal' && (
+                <div className="snap-subblock">
+                  <div className="grid-section-title">
+                    Sisi Objek yang Menempel ke Permukaan
+                  </div>
+                  <div className="segmented-pills">
+                    {(
+                      [
+                        { id: '-y', label: 'Alas (-Y)' },
+                        { id: '-z', label: 'Belakang (-Z Dinding)' },
+                        { id: '+y', label: 'Atas (+Y Plafon)' },
+                      ] as Array<{ id: SurfaceAttachAxis; label: string }>
+                    ).map((ax) => (
+                      <button
+                        key={ax.id}
+                        type="button"
+                        className={`seg-pill ${
+                          surfaceSettings.attachAxis === ax.id ? 'active' : ''
+                        }`}
+                        onClick={() =>
+                          onUpdateSurface(
+                            { enabled: true, attachAxis: ax.id },
+                            true
+                          )
+                        }
+                      >
+                        {ax.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Interaction Toggles */}
+              <div className="snap-subblock">
+                <button
+                  type="button"
+                  className={`snap-option-row compact ${
+                    surfaceSettings.autoOnMove ? 'checked' : ''
+                  }`}
+                  onClick={() =>
+                    onUpdateSurface({
+                      enabled: true,
+                      autoOnMove: !surfaceSettings.autoOnMove,
+                    })
+                  }
+                >
+                  <div className="snap-option-text">
+                    <strong>Ikuti Otomatis saat Geser</strong>
+                    <span>
+                      Seret objek terpilih atau panah XZ untuk meluncur mengikuti permukaan
+                    </span>
+                  </div>
+                  <span className="snap-check-box">
+                    {surfaceSettings.autoOnMove && <Check size={13} />}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`snap-option-row compact ${
+                    surfaceSettings.clickToPlace ? 'checked' : ''
+                  }`}
+                  onClick={() =>
+                    onUpdateSurface({
+                      enabled: true,
+                      clickToPlace: !surfaceSettings.clickToPlace,
+                    })
+                  }
+                >
+                  <div className="snap-option-text">
+                    <strong>Klik Target Permukaan (1-Tap Place)</strong>
+                    <span>
+                      Ketuk bidang atap/dinding/bukit mana saja untuk memindahkan objek terpilih ke sana
+                    </span>
+                  </div>
+                  <span className="snap-check-box">
+                    {surfaceSettings.clickToPlace && <Check size={13} />}
+                  </span>
+                </button>
+              </div>
+
+              {/* Spin around normal & Normal offset */}
+              <div className="snap-subblock">
+                <div className="grid-row-between">
+                  <span className="grid-section-title">
+                    Putar di Permukaan: <b>{surfaceSettings.spinDeg}°</b>
+                  </span>
+                  <div className="mini-preset-btns">
+                    {[0, 90, 180, -90].map((deg) => (
+                      <button
+                        key={deg}
+                        type="button"
+                        className={`mini-floor-btn ${
+                          surfaceSettings.spinDeg === deg ? 'active' : ''
+                        }`}
+                        onClick={() =>
+                          onUpdateSurface({ spinDeg: deg }, true)
+                        }
+                      >
+                        {deg}°
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  className="studio-range"
+                  min={-180}
+                  max={180}
+                  step={15}
+                  value={surfaceSettings.spinDeg}
+                  onChange={(e) =>
+                    onUpdateSurface(
+                      { spinDeg: parseInt(e.target.value, 10) },
+                      true
+                    )
+                  }
+                />
+
+                <div className="grid-row-between" style={{ marginTop: 8 }}>
+                  <span className="grid-section-title">
+                    Offset Jarak Normal: <b>{surfaceSettings.offset.toFixed(2)}m</b>
+                  </span>
+                  <button
+                    type="button"
+                    className="mini-floor-btn"
+                    onClick={() => onUpdateSurface({ offset: 0 }, true)}
+                  >
+                    Reset 0m
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  className="studio-range"
+                  min={-0.2}
+                  max={0.3}
+                  step={0.02}
+                  value={surfaceSettings.offset}
+                  onChange={(e) =>
+                    onUpdateSurface(
+                      { offset: parseFloat(e.target.value) },
+                      true
+                    )
+                  }
+                />
+              </div>
+
+              <button
+                type="button"
+                className="surface-conform-cta"
+                disabled={!hasSelection}
+                onClick={onConformNow}
+              >
+                <ArrowDownToLine size={15} />
+                <span>Tempel Objek Terpilih ke Bawah Sekarang</span>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 3. Advanced World / Tile / Terrain Grid Split Button */}
         <div className="dropdown-wrap" ref={gridRef}>
           <div className="split-btn">
             <button
@@ -375,7 +626,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </button>
               </div>
 
-              {/* Grid Style Selector */}
               <div className="snap-subblock">
                 <div className="grid-section-title">Gaya Lantai & Grid</div>
                 <div className="grid-style-cards">
@@ -404,7 +654,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </div>
               </div>
 
-              {/* Adjustable Grid Spacing */}
               <div className="snap-subblock">
                 <div className="grid-row-between">
                   <span className="grid-section-title">
@@ -448,7 +697,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 />
               </div>
 
-              {/* 3D Terrain Specific Controls */}
               {gridSettings.style === 'terrain' && (
                 <div className="snap-subblock terrain-highlight-block">
                   <div className="grid-section-title">Bentuk Kontur Terrain 3D</div>
@@ -495,7 +743,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </div>
               )}
 
-              {/* Subdivisions & World Size */}
               <div className="snap-subblock">
                 <div className="grid-two-col">
                   <div>
@@ -536,7 +783,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </div>
               </div>
 
-              {/* Workplane Elevation & Axes / Opacity */}
               <div className="snap-subblock">
                 <div className="grid-row-between">
                   <span className="grid-section-title">
@@ -604,7 +850,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         <button
           type="button"
-          className="chip-btn"
+          className="chip-btn hide-xs"
           onClick={onFocusCamera}
           title="Fokus ke Objek / Reset Kamera (F)"
         >
@@ -676,8 +922,22 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       </div>
 
-      {/* Right: Clear, Help, Export (.glb/.gltf), Toggle Inspector */}
+      {/* Right: Fullscreen, Clear, Help, Export, Toggle Right Sidebar */}
       <div className="topbar-group">
+        <button
+          type="button"
+          className={`icon-btn ${isFullscreen ? 'active' : ''}`}
+          onClick={onToggleFullscreen}
+          title={
+            isFullscreen
+              ? 'Keluar Mode Layar Penuh (Esc)'
+              : 'Mode Layar Penuh (Fullscreen)'
+          }
+          aria-label="Mode Layar Penuh"
+        >
+          {isFullscreen ? <Minimize size={17} /> : <Maximize size={17} />}
+        </button>
+
         {objectCount > 0 && (
           <button
             type="button"
@@ -750,7 +1010,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           className={`icon-btn desktop-only ${inspectorOpen ? 'active' : ''}`}
           onClick={onToggleInspector}
-          title="Buka / Tutup Panel Properti"
+          title="Buka / Tutup Sidebar Properti"
           aria-label="Panel Properti"
         >
           <PanelRight size={17} />

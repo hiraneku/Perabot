@@ -8,7 +8,9 @@ import {
   ArrowDownToLine,
   Copy,
   Trash2,
-  Layers,
+  ChevronLeft,
+  ChevronRight,
+  Palette,
 } from 'lucide-react';
 import { TransformMode, TransformSpace } from '../types/studio';
 import { RgbGizmoIcon } from './ShapeIcons';
@@ -17,8 +19,11 @@ interface TransformToolbarProps {
   mode: TransformMode;
   space: TransformSpace;
   hasSelection: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   onChangeMode: (mode: TransformMode) => void;
   onToggleSpace: () => void;
+  onOpenColorStudio: () => void;
   onDropToFloor: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
@@ -28,14 +33,45 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
   mode,
   space,
   hasSelection,
+  collapsed,
+  onToggleCollapse,
   onChangeMode,
   onToggleSpace,
+  onOpenColorStudio,
   onDropToFloor,
   onDuplicate,
   onDelete,
 }) => {
+  if (collapsed) {
+    return (
+      <button
+        type="button"
+        className="left-toolbar-expand-tab"
+        onClick={onToggleCollapse}
+        title="Tampilkan Sidebar Utility"
+        aria-label="Tampilkan Sidebar Utility"
+      >
+        <ChevronRight size={17} />
+        <span>Alat</span>
+      </button>
+    );
+  }
+
   return (
-    <aside className="left-toolbar" aria-label="Alat Transformasi">
+    <aside className="left-toolbar" aria-label="Sidebar Utility & Transformasi">
+      <button
+        type="button"
+        className="toolbar-collapse-btn"
+        onClick={onToggleCollapse}
+        title="Sembunyikan Sidebar Utility"
+        aria-label="Sembunyikan Sidebar Utility"
+      >
+        <ChevronLeft size={16} />
+        <span>Tutup</span>
+      </button>
+
+      <div className="toolbar-sep" />
+
       <button
         type="button"
         className={`tool-btn ${mode === 'select' ? 'active' : ''}`}
@@ -76,17 +112,17 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
         <span className="tool-label">Skala</span>
       </button>
 
+      <div className="toolbar-sep" />
+
       <button
         type="button"
-        className={`tool-btn surface-tool ${mode === 'surface' ? 'active' : ''}`}
-        onClick={() => onChangeMode('surface')}
-        title="Surface Alignment & Terrain Conforming — Seret objek mengikuti permukaan / kemiringan (T)"
+        className="tool-btn color-shortcut-btn"
+        onClick={onOpenColorStudio}
+        title="Buka Roda Warna RGB & Material (C)"
       >
-        <Layers size={17} />
-        <span className="tool-label">Tempel</span>
+        <Palette size={17} />
+        <span className="tool-label">Warna</span>
       </button>
-
-      <div className="toolbar-sep" />
 
       <button
         type="button"
@@ -107,10 +143,10 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
         className="tool-btn"
         disabled={!hasSelection}
         onClick={onDropToFloor}
-        title="Turunkan & Sesuaikan ke Permukaan / Terrain di Bawahnya"
+        title="Tempelkan / Turunkan Objek ke Permukaan atau Terrain di Bawahnya"
       >
         <ArrowDownToLine size={17} />
-        <span className="tool-label">Conform</span>
+        <span className="tool-label">Tempel</span>
       </button>
 
       <button

@@ -17,18 +17,22 @@ import { PrimitiveKind, ShapeSubcategory } from '../types/studio';
 import { PrimitiveShapePreview } from './ShapeIcons';
 
 const SHAPE_SUBCATEGORY_LABELS: Record<Exclude<ShapeSubcategory, 'all'>, string> = {
-  blocks: 'Kubus & Bevel',
-  wedges: 'Wedge & Atap',
-  cylinders: 'Silinder, Cone & Bola',
+  blocks: 'Balok, Pelat & Sambungan',
+  'prisms-pyramids': 'Prisma & Limas',
+  wedges: 'Wedge, Tangga & Atap',
+  cylinders: 'Silinder, Pipa & Kubah',
   curved: 'Lengkung Cekung / Cembung',
+  architecture: 'Arsitektur, Kolom & Kusen',
 };
 
 const SUBCATEGORY_TABS: Array<{ id: ShapeSubcategory; label: string }> = [
-  { id: 'all', label: 'Semua (24)' },
-  { id: 'blocks', label: 'Kubus & Bevel' },
-  { id: 'wedges', label: 'Wedge & Atap' },
-  { id: 'cylinders', label: 'Silinder & Bola' },
+  { id: 'all', label: `Semua (${BASIC_SHAPES_CATALOG.length})` },
+  { id: 'blocks', label: 'Balok & Pelat' },
+  { id: 'prisms-pyramids', label: 'Prisma & Limas' },
+  { id: 'wedges', label: 'Wedge & Tangga' },
+  { id: 'cylinders', label: 'Silinder & Kubah' },
   { id: 'curved', label: 'Lengkung' },
+  { id: 'architecture', label: 'Arsitektur & Kusen' },
 ];
 
 const LONG_PRESS_MS = 380;
@@ -368,16 +372,16 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({ onSpawn }) => {
           type="button"
           className={`spawn-category-trigger ${menuOpen ? 'active' : ''}`}
           onClick={() => setMenuOpen((prev) => !prev)}
-          title="Buka menu kategori Basic Shapes (24 Bentuk 3D)"
+          title={`Buka menu kategori Basic Shapes (${BASIC_SHAPES_CATALOG.length} Bentuk 3D)`}
         >
           <span className="spawn-cat-icon-wrap">
             <Shapes size={20} />
           </span>
           <span className="spawn-card-text">
             <strong>Basic Shapes</strong>
-            <small>24 Bentuk • Tekan lama info</small>
+            <small>{BASIC_SHAPES_CATALOG.length} Bentuk • Tekan lama info</small>
           </span>
-          <span className="spawn-cat-pill">24</span>
+          <span className="spawn-cat-pill">{BASIC_SHAPES_CATALOG.length}</span>
           <ChevronUp
             size={15}
             className={`spawn-cat-chevron ${menuOpen ? 'open' : ''}`}
@@ -448,7 +452,7 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
         >
           <div className="mobile-cat-row">
             <Shapes size={18} />
-            <span className="mobile-cat-count">24</span>
+            <span className="mobile-cat-count">{BASIC_SHAPES_CATALOG.length}</span>
           </div>
           <span>Basic Shapes</span>
         </button>
