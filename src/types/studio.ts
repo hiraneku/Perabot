@@ -313,6 +313,161 @@ export interface MaterialPreset {
   emissiveIntensity?: number;
 }
 
+export interface ObjectPointLightConfig {
+  enabled: boolean;
+  color: string;
+  intensity: number; // 0.3 .. 6.0
+  distance: number; // 2 .. 20m
+}
+
+export type ArchBuildPhase =
+  | 'none'
+  | 'walls'
+  | 'openings'
+  | 'roofs'
+  | 'finishing'
+  | 'environment';
+
+export type ArchSubTool =
+  | 'select'
+  | 'draw-wall'
+  | 'place-opening'
+  | 'measure';
+
+export type ArchWallStyle = 'full' | 'half' | 'railing';
+
+export type ArchOpeningKind =
+  | 'door-single'
+  | 'door-double'
+  | 'window-std'
+  | 'window-wide'
+  | 'window-tall'
+  | 'archway';
+
+export type ArchStairKind = 'straight' | 'l-shape';
+
+export type ArchRoofStyle = 'gable' | 'hip' | 'shed' | 'flat';
+
+export interface Vec2XZ {
+  x: number;
+  z: number;
+}
+
+export interface ArchWallSegment {
+  id: string;
+  floorId: string;
+  start: Vec2XZ;
+  end: Vec2XZ;
+  height: number; // default 3.0m
+  thickness: number; // default 0.15m
+  style: ArchWallStyle;
+  curveBulge: number; // 0 = straight, -3..+3m sagitta offset for curved walls
+  exteriorColor: string;
+  interiorColor: string;
+  roughness: number;
+  hasBaseboard: boolean;
+}
+
+export interface ArchOpeningItem {
+  id: string;
+  wallId: string;
+  floorId: string;
+  kind: ArchOpeningKind;
+  offsetRatio: number; // 0.08 .. 0.92 along wall centerline
+  width: number;
+  height: number;
+  sillHeight: number;
+  frameColor: string;
+  flipSwing?: boolean;
+}
+
+export interface ArchRoomMeta {
+  id: string;
+  floorId: string;
+  centroid: Vec2XZ;
+  name: string;
+  floorColor: string;
+  ceilingVisible: boolean;
+}
+
+export interface ArchDetectedRoom {
+  id: string;
+  floorId: string;
+  name: string;
+  polygon: Vec2XZ[];
+  centroid: Vec2XZ;
+  areaSqm: number;
+  perimeterM: number;
+  floorColor: string;
+  ceilingVisible: boolean;
+}
+
+export interface ArchStairItem {
+  id: string;
+  floorId: string;
+  kind: ArchStairKind;
+  position: Vec3;
+  rotationY: number; // degrees
+  width: number; // default 1.1m
+  height: number; // default 3.0m (story height)
+  runLength: number; // default 2.8m
+  color: string;
+  autoCutoutUpper: boolean;
+}
+
+export interface ArchRoofItem {
+  id: string;
+  floorId: string;
+  name: string;
+  style: ArchRoofStyle;
+  center: Vec2XZ;
+  width: number;
+  depth: number;
+  baseY: number;
+  pitchDeg: number; // 12 .. 50
+  overhang: number; // 0 .. 1.0m
+  ridgeAxis: 'x' | 'z';
+  color: string;
+  fasciaColor: string;
+  rotationY: number;
+}
+
+export interface SunEnvironmentSettings {
+  sunOverride: boolean;
+  hour: number; // 5.5 .. 20.5 (e.g. 9.5 = 09:30)
+  northDeg: number; // 0 .. 360 compass azimuth
+  cameraFov: number; // 46 (standard) | 64 (wide) | 78 (ultra interior)
+}
+
+export interface ArchHouseData {
+  walls: ArchWallSegment[];
+  openings: ArchOpeningItem[];
+  roomMetas: ArchRoomMeta[];
+  stairs: ArchStairItem[];
+  roofs: ArchRoofItem[];
+  sun: SunEnvironmentSettings;
+}
+
+export type ArchSelection =
+  | { kind: 'wall'; id: string }
+  | { kind: 'opening'; id: string }
+  | { kind: 'room'; id: string }
+  | { kind: 'stair'; id: string }
+  | { kind: 'roof'; id: string }
+  | null;
+
+export interface WallDrawDefaults {
+  height: number; // default 3.00m
+  thickness: number; // default 0.15m
+  lengthTemplate: number; // default 3.00m
+  style: ArchWallStyle;
+  curveBulge: number;
+  angleSnap: boolean;
+  exteriorColor: string;
+  interiorColor: string;
+  hasBaseboard: boolean;
+}
+
 export interface SceneObjectData {
   id: string;
   name: string;
@@ -335,6 +490,7 @@ export interface SceneObjectData {
   modularId?: string;
   surfaceRule?: SurfacePlacementRule;
   floorId?: string;
+  pointLight?: ObjectPointLightConfig;
   modelAssetId?: string;
   modelFormat?: string;
   modelThumbUrl?: string;
@@ -367,6 +523,7 @@ export interface SerializedProjectFile {
   activeFloorId?: string;
   floorViewMode?: FloorViewMode;
   placementValidation?: boolean;
+  archData?: ArchHouseData;
   embeddedModels?: Record<
     string,
     { name: string; format: string; thumbDataUrl: string; base64Glb: string }
@@ -581,17 +738,17 @@ export const DEFAULT_SURFACE_SETTINGS: SurfaceSettings = {
 
 export const DEFAULT_GRID_SETTINGS: GridSettings = {
   visible: true,
-  adaptive: true,
+  adaptive: false,
   style: 'wire',
   spacing: 1.0,
   subdivisions: 4,
   worldSize: 40,
   elevationY: 0,
   opacity: 0.88,
-  showAxes: true,
-  syncSnap: true,
-  showRuler: true,
-  showSelectionFootprint: true,
+  showAxes: false,
+  syncSnap: false,
+  showRuler: false,
+  showSelectionFootprint: false,
   verticalGrid: 'none',
   showPlotBoundary: false,
   plotWidth: 8,
@@ -599,6 +756,36 @@ export const DEFAULT_GRID_SETTINGS: GridSettings = {
   terrainPreset: 'hills',
   terrainAmplitude: 1.4,
 };
+
+export const DEFAULT_WALL_DRAW: WallDrawDefaults = {
+  height: 3.0,
+  thickness: 0.15,
+  lengthTemplate: 3.0,
+  style: 'full',
+  curveBulge: 0,
+  angleSnap: true,
+  exteriorColor: '#f1f5f9',
+  interiorColor: '#f8efe2',
+  hasBaseboard: true,
+};
+
+export const DEFAULT_SUN_ENVIRONMENT: SunEnvironmentSettings = {
+  sunOverride: false,
+  hour: 9.5,
+  northDeg: 35,
+  cameraFov: 46,
+};
+
+export function createEmptyArchHouseData(): ArchHouseData {
+  return {
+    walls: [],
+    openings: [],
+    roomMetas: [],
+    stairs: [],
+    roofs: [],
+    sun: { ...DEFAULT_SUN_ENVIRONMENT },
+  };
+}
 
 export const DEFAULT_SNAP_SETTINGS: SnapSettings = {
   enabled: true,

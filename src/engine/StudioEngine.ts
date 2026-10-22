@@ -24,10 +24,24 @@ import {
   PlacementValidator,
 } from './PlacementValidator';
 import { ModularConstructionItem } from './modularConstruction';
+import { ArchBuilderEngine } from './ArchBuilderEngine';
 import {
+  ArchDetectedRoom,
+  ArchHouseData,
+  ArchOpeningItem,
+  ArchOpeningKind,
+  ArchRoofItem,
+  ArchRoofStyle,
+  ArchRoomMeta,
+  ArchSelection,
+  ArchStairItem,
+  ArchStairKind,
+  ArchSubTool,
+  ArchWallSegment,
   ArchitecturalRole,
   AxisLockMode,
   BuildingFloorLayer,
+  createEmptyArchHouseData,
   CustomAssetPart,
   DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
@@ -35,6 +49,7 @@ import {
   DEFAULT_SUBDIVISION_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
   DEFAULT_TERRAIN_SCULPT_SETTINGS,
+  DEFAULT_WALL_DRAW,
   DragFeedback,
   FloorViewMode,
   GraphicsQuality,
@@ -42,6 +57,7 @@ import {
   isSubdivisionActive,
   LightingMood,
   normalizeSubdivisionSettings,
+  ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PlacementValidationStatus,
@@ -52,12 +68,15 @@ import {
   SnapSettings,
   StudioMode,
   SubdivisionStats,
+  SunEnvironmentSettings,
   SurfacePlacementRule,
   SurfaceSettings,
   TerrainSculptSettings,
   TransformMode,
   TransformSpace,
+  Vec2XZ,
   Vec3,
+  WallDrawDefaults,
 } from '../types/studio';
 
 interface HistorySnapshot {
@@ -67,6 +86,8 @@ interface HistorySnapshot {
   sculptedHeightsB64?: string | null;
   floors?: BuildingFloorLayer[];
   activeFloorId?: string;
+  archData?: ArchHouseData;
+  archSelection?: ArchSelection;
 }
 
 interface InternalTransformControls {
@@ -106,6 +127,12 @@ export interface StudioEngineCallbacks {
     activeFloorId: string;
     floorViewMode: FloorViewMode;
     sculptedHeightsB64: string | null;
+    archData: ArchHouseData;
+    detectedRooms: ArchDetectedRoom[];
+    archSelection: ArchSelection;
+    archTool: ArchSubTool;
+    isBlueprint2D: boolean;
+    cameraLensFov: number;
   }) => void;
   onDragFeedback: (feedback: DragFeedback) => void;
   onEyedropperSample?: (sample: PaintBrushPayload, objectName: string) => void;
@@ -178,6 +205,23 @@ export class StudioEngine {
   private activeFloorId = 'floor_1';
   private floorViewMode: FloorViewMode = 'all';
   private floorGhostedIds = new Set<string>();
+
+  // Architect Life × Blender Smart Architecture System (`house` mode only)
+  private archEngine = new ArchBuilderEngine(createEmptyArchHouseData());
+  private archTool: ArchSubTool = 'select';
+  private wallDrawDefaults: WallDrawDefaults = { ...DEFAULT_WALL_DRAW };
+  private activeOpeningKind: ArchOpeningKind = 'door-single';
+  private wallChainStart: Vec2XZ | null = null;
+  private measureStart: THREE.Vector3 | null = null;
+  private measureEnd: THREE.Vector3 | null = null;
+  private isBlueprint2D = false;
+  private cameraLensFov = 46;
+  private savedPre2DCamera: {
+    pos: THREE.Vector3;
+    target: THREE.Vector3;
+    fov: number;
+  } | null = null;
+  private defaultRoomPrefix = 'Ruang';
 
   // Group & Multi-Selection rigid-transform state
   private editSinglePartMode = false;
@@ -297,6 +341,8 @@ export class StudioEngine {
 
     this.objectGroup.name = 'PerabotSceneObjects';
     this.repeatPreviewGroup.name = '__repeatPreviewGroup';
+    this.scene.add(this.archEngine.structuralGroup);
+    this.scene.add(this.archEngine.overlayGroup);
     this.scene.add(this.objectGroup);
     this.scene.add(this.repeatPreviewGroup);
     this.scene.add(this.snapVisualizer.group);
@@ -591,16 +637,27 @@ export class StudioEngine {
   public setStudioMode(mode: StudioMode): void {
     this.studioMode = mode;
     if (mode !== 'house') {
-      // Ensure house-exclusive modes (Terrain Sculpt, Cutaway Floors) gracefully pause in Modeling mode
+      // Ensure house-exclusive modes (Terrain Sculpt, Arch Tools, 2D Blueprint, Cutaway Floors) pause in Modeling mode
       if (this.terrainSculpt.active) {
         this.terrainSculpt.active = false;
         this.gridSystem.updateSculptCursor(null);
         this.renderer.domElement.style.cursor = 'default';
       }
+      if (this.isBlueprint2D) {
+        this.setBlueprint2DView(false);
+      }
+      this.archTool = 'select';
+      this.wallChainStart = null;
+      this.archEngine.clearPreview();
+      this.archEngine.structuralGroup.visible = false;
+      this.archEngine.overlayGroup.visible = false;
       this.applyFloorVisibilityAndGhosting();
     } else {
+      this.archEngine.structuralGroup.visible = true;
+      this.archEngine.overlayGroup.visible = true;
       this.applyFloorVisibilityAndGhosting();
     }
+    this.applyAtmosphereColors();
     this.emitState();
   }
 
@@ -1005,6 +1062,405 @@ export class StudioEngine {
         this.floorGhostedIds.add(id);
       }
     }
+
+    this.rebuildArchitecture();
+  }
+
+  /* =========================================================
+     Architect Life × Blender Smart Architecture API (`house` mode)
+     ========================================================= */
+  private rebuildArchitecture(): void {
+    const isHouse = this.studioMode === 'house';
+    this.archEngine.structuralGroup.visible = isHouse;
+    this.archEngine.overlayGroup.visible = isHouse;
+    this.archEngine.rebuildAll(
+      this.floors,
+      this.activeFloorId,
+      this.floorViewMode,
+      isHouse,
+      this.defaultRoomPrefix
+    );
+  }
+
+  public setDefaultRoomPrefix(prefix: string): void {
+    this.defaultRoomPrefix = prefix || 'Ruang';
+  }
+
+  public loadArchData(data?: ArchHouseData, resetHistorySnapshot = false): void {
+    this.archEngine.setData(data ?? createEmptyArchHouseData());
+    this.archEngine.setSelection(null);
+    this.wallChainStart = null;
+    this.measureStart = null;
+    this.measureEnd = null;
+    this.archEngine.clearPreview();
+    this.archEngine.updateMeasureOverlay(null, null);
+    this.rebuildArchitecture();
+    this.applyAtmosphereColors();
+    if (resetHistorySnapshot && this.history.length > 0) {
+      this.history[this.historyIndex] = {
+        ...this.history[this.historyIndex],
+        archData: this.archEngine.getData(),
+        archSelection: null,
+      };
+    }
+    this.emitState();
+  }
+
+  public getArchData(): ArchHouseData {
+    return this.archEngine.getData();
+  }
+
+  public setArchTool(tool: ArchSubTool): void {
+    this.archTool = tool;
+    this.wallChainStart = null;
+    this.archEngine.clearPreview();
+    if (tool !== 'measure') {
+      this.measureStart = null;
+      this.measureEnd = null;
+      this.archEngine.updateMeasureOverlay(null, null);
+    }
+    if (tool !== 'select') {
+      if (this.terrainSculpt.active) {
+        this.terrainSculpt.active = false;
+        this.gridSystem.updateSculptCursor(null);
+      }
+      this.selectObject(null, false);
+      this.renderer.domElement.style.cursor = 'crosshair';
+    } else {
+      this.renderer.domElement.style.cursor = 'default';
+    }
+    this.emitState();
+  }
+
+  public cancelArchChain(): void {
+    if (this.wallChainStart) {
+      this.wallChainStart = null;
+      this.archEngine.clearPreview();
+    } else if (this.archTool !== 'select') {
+      this.setArchTool('select');
+    }
+  }
+
+  public setWallDrawDefaults(patch: Partial<WallDrawDefaults>): void {
+    this.wallDrawDefaults = { ...this.wallDrawDefaults, ...patch };
+  }
+
+  public getWallDrawDefaults(): WallDrawDefaults {
+    return { ...this.wallDrawDefaults };
+  }
+
+  public setActiveOpeningKind(kind: ArchOpeningKind): void {
+    this.activeOpeningKind = kind;
+  }
+
+  public selectArchItem(sel: ArchSelection): void {
+    if (sel) {
+      this.selectObject(null, false);
+    }
+    this.archEngine.setSelection(sel);
+    this.rebuildArchitecture();
+    this.emitState();
+  }
+
+  public spawnStandardWallTemplate(customDefaults?: Partial<WallDrawDefaults>): ArchWallSegment | null {
+    if (this.studioMode !== 'house') return null;
+    const merged: WallDrawDefaults = {
+      ...this.wallDrawDefaults,
+      ...(customDefaults ?? {}),
+    };
+    const [sx, sz] = this.findCleanSpawnXZ(merged.lengthTemplate * 0.5);
+    const created = this.archEngine.spawnWallTemplate(
+      this.activeFloorId,
+      { x: sx, z: sz },
+      merged
+    );
+    if (created) {
+      this.selectObject(null, false);
+      this.rebuildArchitecture();
+      this.pushHistorySnapshot();
+      this.emitState();
+    }
+    return created;
+  }
+
+  public updateArchWall(
+    wallId: string,
+    patch: Partial<ArchWallSegment>,
+    commitHistory = true
+  ): void {
+    if (!this.archEngine.updateWall(wallId, patch)) return;
+    this.rebuildArchitecture();
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public applyFloorWallsDualColor(
+    exteriorColor: string,
+    interiorColor: string
+  ): number {
+    const updated = this.archEngine.applyWallColorsOnFloor(
+      this.activeFloorId,
+      exteriorColor,
+      interiorColor
+    );
+    this.wallDrawDefaults.exteriorColor = exteriorColor;
+    this.wallDrawDefaults.interiorColor = interiorColor;
+    if (updated > 0) {
+      this.rebuildArchitecture();
+      this.pushHistorySnapshot();
+      this.emitState();
+    }
+    return updated;
+  }
+
+  public updateArchOpening(
+    openingId: string,
+    patch: Partial<ArchOpeningItem>,
+    commitHistory = true
+  ): void {
+    if (!this.archEngine.updateOpening(openingId, patch)) return;
+    this.rebuildArchitecture();
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public updateArchRoomMeta(
+    roomId: string,
+    patch: Partial<Pick<ArchRoomMeta, 'name' | 'floorColor' | 'ceilingVisible'>>,
+    commitHistory = true
+  ): void {
+    if (!this.archEngine.updateRoomMeta(roomId, patch)) return;
+    this.rebuildArchitecture();
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public addArchStaircase(kind: ArchStairKind): ArchStairItem | null {
+    if (this.studioMode !== 'house') return null;
+    const activeFl =
+      this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+    const [sx, sz] = this.findCleanSpawnXZ(1.4);
+    const created = this.archEngine.addStaircase(
+      activeFl.id,
+      kind,
+      { x: sx, y: activeFl.elevation, z: sz },
+      activeFl.height
+    );
+    this.selectObject(null, false);
+    this.rebuildArchitecture();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return created;
+  }
+
+  public updateArchStair(
+    stairId: string,
+    patch: Partial<ArchStairItem>,
+    commitHistory = true
+  ): void {
+    if (!this.archEngine.updateStair(stairId, patch)) return;
+    this.rebuildArchitecture();
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public generateSmartAutoRoof(
+    style: ArchRoofStyle = 'gable',
+    roofName = 'Atap Pintar'
+  ): ArchRoofItem | null {
+    if (this.studioMode !== 'house') return null;
+    const created = this.archEngine.generateAutoRoof(
+      this.floors,
+      this.activeFloorId,
+      style,
+      roofName
+    );
+    this.selectObject(null, false);
+    this.rebuildArchitecture();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return created;
+  }
+
+  public updateArchRoof(
+    roofId: string,
+    patch: Partial<ArchRoofItem>,
+    commitHistory = true
+  ): void {
+    if (!this.archEngine.updateRoof(roofId, patch)) return;
+    this.rebuildArchitecture();
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public deleteSelectedArchItem(): boolean {
+    if (!this.archEngine.deleteSelectedArchElement()) return false;
+    this.rebuildArchitecture();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  public bakeSelectedWallToEditableMeshes(): boolean {
+    const extracted = this.archEngine.extractSelectedWallAsParts(this.floors);
+    if (!extracted || extracted.parts.length === 0) return false;
+
+    this.archEngine.removeWallById(extracted.wallId);
+    const gid =
+      extracted.parts.length > 1
+        ? `grp_baked_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`
+        : null;
+    const createdIds: string[] = [];
+
+    extracted.parts.forEach((p, idx) => {
+      const id = `wallmesh-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`;
+      createdIds.push(id);
+      const objData: SceneObjectData = {
+        id,
+        name:
+          extracted.parts.length === 1
+            ? extracted.name
+            : `${extracted.name} • ${idx + 1}`,
+        kind: p.kind,
+        position: {
+          x: round3(extracted.center.x + p.localPosition.x),
+          y: round3(extracted.center.y + p.localPosition.y),
+          z: round3(extracted.center.z + p.localPosition.z),
+        },
+        rotation: { ...p.rotation },
+        scale: { ...p.scale },
+        color: p.color,
+        roughness: p.roughness,
+        metalness: p.metalness,
+        opacity: p.opacity,
+        emissive: p.emissive,
+        emissiveIntensity: p.emissiveIntensity,
+        flatShading: p.flatShading,
+        subdivision: { ...p.subdivision },
+        visible: true,
+        groupId: gid,
+        groupName: gid ? extracted.name : undefined,
+        archRole: 'wall',
+        floorId: this.activeFloorId,
+      };
+      const mesh = this.buildMeshFromData(objData);
+      this.objectGroup.add(mesh);
+      this.meshMap.set(id, mesh);
+    });
+
+    this.archTool = 'select';
+    this.renderer.domElement.style.cursor = 'default';
+    this.rebuildArchitecture();
+    this.updateSeamlessTouchFaces();
+    if (createdIds.length > 0) {
+      this.selectObject(createdIds[0], false);
+    }
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  public setSunEnvironment(patch: Partial<SunEnvironmentSettings>, commitHistory = false): void {
+    const cur = this.archEngine.getData();
+    cur.sun = { ...cur.sun, ...patch };
+    this.archEngine.setData(cur);
+    this.applyAtmosphereColors();
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public setBlueprint2DView(active: boolean): void {
+    if (this.isBlueprint2D === active) return;
+    if (active && this.walkthroughEnabled) {
+      this.setWalkthroughMode(false);
+    }
+    this.isBlueprint2D = active;
+    this.archEngine.setBlueprint2DMode(active);
+
+    if (active) {
+      this.savedPre2DCamera = {
+        pos: this.camera.position.clone(),
+        target: this.orbitControls.target.clone(),
+        fov: this.cameraLensFov,
+      };
+      const focus = this.orbitControls.target.clone();
+      const activeFl =
+        this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+      focus.y = activeFl ? activeFl.elevation : 0;
+
+      // Low-FOV overhead top-down architectural projection (zero perspective distortion + smooth pan/zoom!)
+      this.camera.fov = 22;
+      this.camera.updateProjectionMatrix();
+      this.orbitControls.enableRotate = false;
+      this.orbitControls.touches = {
+        ONE: THREE.TOUCH.PAN,
+        TWO: THREE.TOUCH.DOLLY_PAN,
+      };
+      this.orbitControls.target.copy(focus);
+      this.camera.position.set(focus.x, focus.y + 34, focus.z + 0.001);
+      this.camera.lookAt(focus);
+      this.orbitControls.update();
+    } else {
+      this.orbitControls.enableRotate = true;
+      this.orbitControls.touches = {
+        ONE: THREE.TOUCH.ROTATE,
+        TWO: THREE.TOUCH.DOLLY_PAN,
+      };
+      this.camera.fov = this.savedPre2DCamera?.fov ?? this.cameraLensFov;
+      this.camera.updateProjectionMatrix();
+      if (this.savedPre2DCamera) {
+        this.camera.position.copy(this.savedPre2DCamera.pos);
+        this.orbitControls.target.copy(this.savedPre2DCamera.target);
+        this.camera.lookAt(this.orbitControls.target);
+        this.orbitControls.update();
+      }
+    }
+
+    this.rebuildArchitecture();
+    this.emitState();
+  }
+
+  public setCameraLensFov(fovDeg: number): void {
+    const clamped = Math.max(30, Math.min(86, Math.round(fovDeg)));
+    this.cameraLensFov = clamped;
+    if (!this.isBlueprint2D) {
+      this.camera.fov = clamped;
+      this.camera.updateProjectionMatrix();
+    } else if (this.savedPre2DCamera) {
+      this.savedPre2DCamera.fov = clamped;
+    }
+    this.emitState();
+  }
+
+  private raycastActiveFloorXZ(event: PointerEvent): Vec2XZ | null {
+    this.setPointerNDCFromEvent(event);
+    this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+    const activeFl =
+      this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+    const elevY = activeFl ? activeFl.elevation : 0;
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -elevY);
+    const hitPt = new THREE.Vector3();
+    const ok = this.raycaster.ray.intersectPlane(plane, hitPt);
+    return ok ? { x: hitPt.x, z: hitPt.z } : null;
+  }
+
+  private raycastAnyScenePoint(event: PointerEvent): THREE.Vector3 | null {
+    this.setPointerNDCFromEvent(event);
+    this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+    const targets: THREE.Object3D[] = [
+      ...Array.from(this.meshMap.values()).filter((m) => m.visible),
+      this.archEngine.structuralGroup,
+    ];
+    const ground = this.gridSystem.getGroundCollider();
+    if (ground) targets.push(ground);
+    const hits = this.raycaster.intersectObjects(targets, true);
+    if (hits.length > 0) return hits[0].point.clone();
+
+    const xz = this.raycastActiveFloorXZ(event);
+    if (!xz) return null;
+    const activeFl =
+      this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+    return new THREE.Vector3(xz.x, activeFl ? activeFl.elevation : 0, xz.z);
   }
 
   /* =========================================================
@@ -1353,6 +1809,66 @@ export class StudioEngine {
   private applyAtmosphereColors(): void {
     if (!this.hemiLight || !this.keyLight || !this.fillLight) return;
 
+    // Architectural Sun Path & Compass Simulator (`Buat Rumah` mode)
+    const sunCfg = this.archEngine.getData().sun;
+    if (this.studioMode === 'house' && sunCfg.sunOverride) {
+      const hour = Math.max(5.5, Math.min(20.5, sunCfg.hour));
+      // Solar arc: 06:00 East sunrise -> 12:00 zenith -> 18:00 West sunset -> 20:00 dusk
+      const dayT = (hour - 6) / 12; // 0 at 06:00, 0.5 at 12:00, 1.0 at 18:00
+      const elevRad = Math.sin(Math.max(-0.18, Math.min(1.18, dayT)) * Math.PI) * (Math.PI * 0.42);
+      const azimRad = (dayT * Math.PI) + sunCfg.northDeg * DEG2RAD;
+      const sunRadius = 26;
+      const sy = Math.max(2.2, Math.sin(Math.max(0.08, elevRad)) * sunRadius);
+      const horiz = Math.cos(Math.max(0.08, elevRad)) * sunRadius;
+      const sx = Math.cos(azimRad) * horiz;
+      const sz = Math.sin(azimRad) * horiz;
+      this.keyLight.position.set(sx, sy, sz);
+
+      if (hour >= 18.4) {
+        const duskBg = new THREE.Color('#0b1120');
+        this.scene.background = duskBg;
+        this.scene.fog = new THREE.Fog('#0b1120', 38, 120);
+        this.hemiLight.color.set('#3b82f6');
+        this.hemiLight.groundColor.set('#0f172a');
+        this.hemiLight.intensity = 0.46;
+        this.keyLight.color.set('#93c5fd');
+        this.keyLight.intensity = 0.72;
+        this.fillLight.color.set('#1e3a8a');
+        this.fillLight.intensity = 0.35;
+        this.renderer.toneMappingExposure = 1.22;
+      } else if (hour < 7.8 || hour > 16.4) {
+        // Golden hour (sunrise / sunset)
+        const goldBg = new THREE.Color(this.themeBaseBgHex).lerp(
+          new THREE.Color('#3b2130'),
+          0.48
+        );
+        this.scene.background = goldBg;
+        this.scene.fog = new THREE.Fog(goldBg.getHex(), 44, 132);
+        this.hemiLight.color.set('#fed7aa');
+        this.hemiLight.groundColor.set('#31202b');
+        this.hemiLight.intensity = 0.9;
+        this.keyLight.color.set('#fb923c');
+        this.keyLight.intensity = 2.2;
+        this.fillLight.color.set('#c084fc');
+        this.fillLight.intensity = 0.52;
+        this.renderer.toneMappingExposure = 1.09;
+      } else {
+        // Crisp architectural daylight
+        const bg = new THREE.Color(this.themeBaseBgHex);
+        this.scene.background = bg;
+        this.scene.fog = new THREE.Fog(bg.getHex(), 50, 145);
+        this.hemiLight.color.set('#e2eeff');
+        this.hemiLight.groundColor.set('#282d38');
+        this.hemiLight.intensity = 1.06;
+        this.keyLight.color.set('#fffbeb');
+        this.keyLight.intensity = 2.05;
+        this.fillLight.color.set('#9ec5ff');
+        this.fillLight.intensity = 0.56;
+        this.renderer.toneMappingExposure = 1.07;
+      }
+      return;
+    }
+
     if (this.currentLightingMood === 'sunset') {
       const sunsetBg = new THREE.Color(this.themeBaseBgHex).lerp(
         new THREE.Color('#2d1b2e'),
@@ -1555,6 +2071,10 @@ export class StudioEngine {
   }
 
   private handleWalkKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && this.studioMode === 'house') {
+      this.cancelArchChain();
+      return;
+    }
     if (!this.walkthroughEnabled) return;
     this.walkKeys.add(e.key.toLowerCase());
   };
@@ -1570,6 +2090,19 @@ export class StudioEngine {
   }
 
   private sampleWalkFloorHeight(x: number, z: number, currentEyeY: number): number {
+    const currentFootY = currentEyeY - 1.65;
+    if (this.studioMode === 'house') {
+      const archElev = this.archEngine.sampleWalkthroughFloorElevation(
+        x,
+        z,
+        currentFootY,
+        this.floors
+      );
+      if (archElev !== null) {
+        return archElev;
+      }
+    }
+
     const walkable = Array.from(this.meshMap.values()).filter((m) => {
       if (!m.visible) return false;
       const role = m.userData.archRole as ArchitecturalRole | undefined;
@@ -1662,6 +2195,7 @@ export class StudioEngine {
         rotation: { ...item.rotation },
         scale: { ...item.scale },
         subdivision: { ...(item.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
+        pointLight: item.pointLight ? { ...item.pointLight } : undefined,
       };
       const mesh = this.buildMeshFromData(cloned);
       this.objectGroup.add(mesh);
@@ -2359,6 +2893,61 @@ export class StudioEngine {
       return;
     }
 
+    // Architect Life × Blender Interactive Previews (`house` mode)
+    if (this.studioMode === 'house' && this.archTool !== 'select') {
+      const activeFl =
+        this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+      const baseY = activeFl ? activeFl.elevation : 0;
+
+      if (this.archTool === 'draw-wall') {
+        const rawXZ = this.raycastActiveFloorXZ(event);
+        if (rawXZ) {
+          const snapStep =
+            this.snapSettings.enabled && this.snapSettings.grid
+              ? Math.min(0.25, this.snapSettings.gridStep)
+              : 0.1;
+          const snapped = this.archEngine.snapWallPoint(
+            rawXZ,
+            this.activeFloorId,
+            this.wallChainStart,
+            this.wallDrawDefaults.angleSnap,
+            snapStep
+          );
+          this.archEngine.updateWallDrawPreview(
+            this.wallChainStart,
+            this.wallChainStart ? snapped.point : null,
+            baseY,
+            this.wallDrawDefaults,
+            snapped.point
+          );
+        }
+      } else if (this.archTool === 'place-opening') {
+        const rawXZ = this.raycastActiveFloorXZ(event);
+        if (rawXZ) {
+          const hit = this.archEngine.findClosestWallForOpening(
+            rawXZ,
+            this.activeFloorId,
+            0.95
+          );
+          this.archEngine.updateOpeningHoverPreview(
+            hit ? hit.wall : null,
+            hit ? hit.offsetRatio : 0.5,
+            this.activeOpeningKind,
+            baseY
+          );
+        }
+      } else if (
+        this.archTool === 'measure' &&
+        this.measureStart &&
+        !this.measureEnd
+      ) {
+        const hoverPt = this.raycastAnyScenePoint(event);
+        if (hoverPt) {
+          this.archEngine.updateMeasureOverlay(this.measureStart, hoverPt);
+        }
+      }
+    }
+
     // #6 Box Marquee Selection Drag
     if (this.isBoxSelecting) {
       const rect = this.renderer.domElement.getBoundingClientRect();
@@ -2530,8 +3119,108 @@ export class StudioEngine {
     const rect = this.renderer.domElement.getBoundingClientRect();
     const localX = event.clientX - rect.left;
     const localY = event.clientY - rect.top;
-    if (localX > rect.width - 128 && localY > rect.height - 128) {
+    if (
+      !this.isBlueprint2D &&
+      localX > rect.width - 128 &&
+      localY > rect.height - 128
+    ) {
       if (this.viewHelper.handleClick(event)) {
+        return;
+      }
+    }
+
+    // Architect Life × Blender Viewport Tool Clicks (`house` mode)
+    if (this.studioMode === 'house' && this.archTool !== 'select') {
+      if (event.button === 2) {
+        this.cancelArchChain();
+        return;
+      }
+      const activeFl =
+        this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+      const baseY = activeFl ? activeFl.elevation : 0;
+
+      if (this.archTool === 'draw-wall') {
+        const rawXZ = this.raycastActiveFloorXZ(event);
+        if (!rawXZ) return;
+        const snapStep =
+          this.snapSettings.enabled && this.snapSettings.grid
+            ? Math.min(0.25, this.snapSettings.gridStep)
+            : 0.1;
+        const snapped = this.archEngine.snapWallPoint(
+          rawXZ,
+          this.activeFloorId,
+          this.wallChainStart,
+          this.wallDrawDefaults.angleSnap,
+          snapStep
+        );
+
+        if (!this.wallChainStart) {
+          this.wallChainStart = snapped.point;
+          this.archEngine.updateWallDrawPreview(
+            snapped.point,
+            null,
+            baseY,
+            this.wallDrawDefaults,
+            snapped.point
+          );
+        } else {
+          const created = this.archEngine.addWallSegment(
+            this.activeFloorId,
+            this.wallChainStart,
+            snapped.point,
+            this.wallDrawDefaults
+          );
+          if (created) {
+            this.rebuildArchitecture();
+            this.pushHistorySnapshot();
+            this.emitState();
+            // Auto-end chain when closing onto an existing wall corner!
+            if (snapped.snappedEndpoint) {
+              this.wallChainStart = null;
+              this.archEngine.clearPreview();
+            } else {
+              this.wallChainStart = snapped.point;
+            }
+          }
+        }
+        return;
+      }
+
+      if (this.archTool === 'place-opening') {
+        const rawXZ = this.raycastActiveFloorXZ(event);
+        if (!rawXZ) return;
+        const hit = this.archEngine.findClosestWallForOpening(
+          rawXZ,
+          this.activeFloorId,
+          0.95
+        );
+        if (hit) {
+          const op = this.archEngine.addOpeningOnWall(
+            hit.wall.id,
+            this.activeOpeningKind,
+            hit.offsetRatio
+          );
+          if (op) {
+            this.archEngine.clearPreview();
+            this.rebuildArchitecture();
+            this.pushHistorySnapshot();
+            this.emitState();
+          }
+        }
+        return;
+      }
+
+      if (this.archTool === 'measure') {
+        const pt = this.raycastAnyScenePoint(event);
+        if (!pt) return;
+        if (!this.measureStart || this.measureEnd) {
+          this.measureStart = pt;
+          this.measureEnd = null;
+          this.archEngine.updateMeasureOverlay(pt, null);
+        } else {
+          this.measureEnd = pt;
+          this.archEngine.updateMeasureOverlay(this.measureStart, pt);
+        }
         return;
       }
     }
@@ -2626,24 +3315,72 @@ export class StudioEngine {
       }
     }
 
-    // 3. Normal / Multi-Select Object Selection (#6)
+    // 3. Normal / Multi-Select Object Selection (#6) + Smart Architectural Element Selection
     const isAdditiveClick =
       this.selectionSubMode === 'multi' ||
       event.shiftKey ||
       event.ctrlKey ||
       event.metaKey;
 
-    if (hits.length > 0) {
+    let archHitSel: { sel: NonNullable<ArchSelection>; dist: number } | null =
+      null;
+    if (this.studioMode === 'house' && !isAdditiveClick) {
+      const archHits = this.raycaster.intersectObjects(
+        this.archEngine.structuralGroup.children,
+        true
+      );
+      for (const ah of archHits) {
+        let cur: THREE.Object3D | null = ah.object;
+        while (cur && cur !== this.archEngine.structuralGroup) {
+          const kind = cur.userData?.archKind as string | undefined;
+          const id = cur.userData?.archId as string | undefined;
+          if (
+            id &&
+            (kind === 'wall' ||
+              kind === 'opening' ||
+              kind === 'room' ||
+              kind === 'stair' ||
+              kind === 'roof')
+          ) {
+            archHitSel = {
+              sel: { kind, id },
+              dist: ah.distance,
+            };
+            break;
+          }
+          cur = cur.parent;
+        }
+        if (archHitSel) break;
+      }
+    }
+
+    if (
+      hits.length > 0 &&
+      (!archHitSel || hits[0].distance <= archHitSel.dist + 0.02)
+    ) {
       const hitMesh = hits[0].object as THREE.Mesh;
       const hitId = hitMesh.userData.objectId as string | undefined;
       if (hitId) {
+        if (this.archEngine.getSelection()) {
+          this.archEngine.setSelection(null);
+          this.rebuildArchitecture();
+        }
         if (isAdditiveClick) {
           this.toggleSelectObject(hitId);
         } else {
           this.selectObject(hitId);
         }
       }
+    } else if (archHitSel) {
+      this.selectObject(null, false);
+      this.archEngine.setSelection(archHitSel.sel);
+      this.rebuildArchitecture();
+      this.emitState();
     } else if (!isAdditiveClick) {
+      if (this.archEngine.getSelection()) {
+        this.archEngine.setSelection(null);
+        this.rebuildArchitecture();
+      }
       this.selectObject(null);
     }
   };
@@ -2654,7 +3391,7 @@ export class StudioEngine {
 
     if (this.walkthroughEnabled) {
       this.updateWalkthroughStep(delta);
-    } else if (this.viewHelper.animating) {
+    } else if (!this.isBlueprint2D && this.viewHelper.animating) {
       this.orbitControls.enabled = false;
       this.viewHelper.update(delta);
     } else if (this.cameraTween?.active) {
@@ -2667,6 +3404,14 @@ export class StudioEngine {
     ) {
       this.orbitControls.enabled = true;
       this.orbitControls.update();
+    }
+
+    if (this.studioMode === 'house') {
+      this.archEngine.updateSmartCeilingsVisibility(
+        this.camera.position.y,
+        this.walkthroughEnabled,
+        this.interiorPeekEnabled
+      );
     }
 
     // #8 Adaptive Grid Zoom Update
@@ -3306,6 +4051,7 @@ export class StudioEngine {
       modelFormat: data.modelFormat ?? importedEntry?.format,
       modelThumbUrl: data.modelThumbUrl ?? importedEntry?.thumbDataUrl,
       useCustomMaterial: Boolean(data.useCustomMaterial),
+      pointLight: data.pointLight ? { ...data.pointLight } : undefined,
     };
 
     if (importedEntry && data.modelAssetId) {
@@ -3318,6 +4064,8 @@ export class StudioEngine {
       }
     }
 
+    this.syncMeshPointLight(mesh, data.pointLight);
+
     this.syncSubdivisionGridLines(
       mesh,
       gridLinesGeometry,
@@ -3328,6 +4076,59 @@ export class StudioEngine {
     }
 
     return mesh;
+  }
+
+  private syncMeshPointLight(
+    mesh: THREE.Mesh,
+    cfg?: ObjectPointLightConfig
+  ): void {
+    const existing = mesh.getObjectByName('__customPointLight') as
+      | THREE.PointLight
+      | undefined;
+    if (!cfg || !cfg.enabled) {
+      if (existing) {
+        mesh.remove(existing);
+        existing.dispose();
+      }
+      mesh.userData.pointLight = cfg ? { ...cfg } : undefined;
+      return;
+    }
+
+    mesh.userData.pointLight = { ...cfg };
+    if (existing) {
+      existing.color.set(cfg.color);
+      existing.intensity = cfg.intensity;
+      existing.distance = cfg.distance;
+    } else {
+      const light = new THREE.PointLight(
+        new THREE.Color(cfg.color),
+        cfg.intensity,
+        cfg.distance,
+        1.75
+      );
+      light.name = '__customPointLight';
+      light.castShadow = false;
+      mesh.add(light);
+    }
+  }
+
+  public updateObjectPointLight(
+    id: string,
+    patch: Partial<ObjectPointLightConfig>,
+    commitHistory = true
+  ): void {
+    const mesh = this.meshMap.get(id);
+    if (!mesh) return;
+    const prev = (mesh.userData.pointLight as ObjectPointLightConfig | undefined) ?? {
+      enabled: false,
+      color: '#fde68a',
+      intensity: 2.2,
+      distance: 7.5,
+    };
+    const next: ObjectPointLightConfig = { ...prev, ...patch };
+    this.syncMeshPointLight(mesh, next);
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
   }
 
   private updateSelectionHighlight(): void {
@@ -4307,6 +5108,38 @@ export class StudioEngine {
       exportScene.add(cleanMesh);
     }
 
+    // Export Architectural Structure (Smart Walls, Cutout Doors/Windows, Room Floors, Stairs, Roofs)
+    if (
+      this.studioMode === 'house' &&
+      this.archEngine.structuralGroup.children.length > 0
+    ) {
+      const archExportRoot = this.archEngine.structuralGroup.clone(true);
+      archExportRoot.visible = true;
+      archExportRoot.traverse((node) => {
+        if (node.userData?.archKind === 'ceiling') {
+          node.visible = true;
+        }
+        if ((node as THREE.Mesh).isMesh) {
+          const m = node as THREE.Mesh;
+          m.geometry = m.geometry.clone();
+          const resetArchMat = (mat: THREE.Material) => {
+            const c = mat.clone() as THREE.MeshStandardMaterial;
+            if (c.emissive) {
+              c.emissive.set('#000000');
+              c.emissiveIntensity = 0;
+            }
+            return c;
+          };
+          if (Array.isArray(m.material)) {
+            m.material = m.material.map(resetArchMat);
+          } else if (m.material) {
+            m.material = resetArchMat(m.material);
+          }
+        }
+      });
+      exportScene.add(archExportRoot);
+    }
+
     const exporter = new GLTFExporter();
     const binary = format === 'glb';
     const result = await exporter.parseAsync(exportScene, {
@@ -4394,6 +5227,9 @@ export class StudioEngine {
       useCustomMaterial: mesh.userData.modelAssetId
         ? Boolean(mesh.userData.useCustomMaterial)
         : undefined,
+      pointLight: mesh.userData.pointLight
+        ? { ...(mesh.userData.pointLight as ObjectPointLightConfig) }
+        : undefined,
     };
   }
 
@@ -4435,6 +5271,8 @@ export class StudioEngine {
       sculptedHeightsB64: this.gridSystem.exportSculptedHeightsBase64(),
       floors: this.floors.map((f) => ({ ...f })),
       activeFloorId: this.activeFloorId,
+      archData: this.archEngine.getData(),
+      archSelection: this.archEngine.getSelection(),
     };
 
     if (this.historyIndex < this.history.length - 1) {
@@ -4492,6 +5330,10 @@ export class StudioEngine {
     if (snapshot.activeFloorId) {
       this.activeFloorId = snapshot.activeFloorId;
     }
+    if (snapshot.archData) {
+      this.archEngine.setData(snapshot.archData);
+      this.archEngine.setSelection(snapshot.archSelection ?? null);
+    }
 
     for (const item of snapshot.objects) {
       const cloned: SceneObjectData = {
@@ -4500,6 +5342,7 @@ export class StudioEngine {
         rotation: { ...item.rotation },
         scale: { ...item.scale },
         subdivision: { ...(item.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
+        pointLight: item.pointLight ? { ...item.pointLight } : undefined,
       };
       const mesh = this.buildMeshFromData(cloned);
       this.objectGroup.add(mesh);
@@ -4633,10 +5476,23 @@ export class StudioEngine {
       activeFloorId: this.activeFloorId,
       floorViewMode: this.floorViewMode,
       sculptedHeightsB64: this.gridSystem.exportSculptedHeightsBase64(),
+      archData: this.archEngine.getData(),
+      detectedRooms: this.archEngine.getDetectedRooms(),
+      archSelection: this.archEngine.getSelection(),
+      archTool: this.archTool,
+      isBlueprint2D: this.isBlueprint2D,
+      cameraLensFov: this.cameraLensFov,
     });
   }
 
   private disposeMesh(mesh: THREE.Mesh): void {
+    const customLight = mesh.getObjectByName('__customPointLight') as
+      | THREE.PointLight
+      | undefined;
+    if (customLight) {
+      mesh.remove(customLight);
+      customLight.dispose();
+    }
     const gridLines = mesh.getObjectByName('__subdivGridLines') as
       | THREE.LineSegments
       | undefined;
@@ -4686,6 +5542,7 @@ export class StudioEngine {
     this.protractorVisualizer.dispose();
     this.surfaceNormalVisualizer.dispose();
     this.validationVisualizer.dispose();
+    this.archEngine.dispose();
     this.clearRepeatPreview();
     this.hiddenFaceMaterial.dispose();
 

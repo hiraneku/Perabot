@@ -23,6 +23,7 @@ import {
   Repeat,
   Building2,
   Link2,
+  Lightbulb,
 } from 'lucide-react';
 import { getLocalizedShapeMeta } from '../i18n/shapeTranslations';
 import { TRANSLATIONS } from '../i18n/translations';
@@ -32,6 +33,7 @@ import {
   DEFAULT_SUBDIVISION_SETTINGS,
   isSubdivisionActive,
   normalizeSubdivisionSettings,
+  ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PrimitiveKind,
@@ -169,6 +171,11 @@ interface InspectorPanelProps {
   onAssignFloor?: (objectId: string, floorId: string, moveY?: boolean) => void;
   onUpdateSurfaceRule?: (objectId: string, rule: SurfacePlacementRule) => void;
   onResetImportedMaterial?: (id: string) => void;
+  onUpdatePointLight?: (
+    id: string,
+    patch: Partial<ObjectPointLightConfig>,
+    commitHistory?: boolean
+  ) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -206,6 +213,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onAssignFloor,
   onUpdateSurfaceRule,
   onResetImportedMaterial,
+  onUpdatePointLight,
 }) => {
   const t = TRANSLATIONS[language];
   const [mobileSection, setMobileSection] = useState<'inspector' | 'outliner'>(
@@ -901,6 +909,137 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 onChangePaintMode={onChangePaintMode}
                 onCommitHistory={onCommitHistory}
               />
+
+              {/* Custom Lamp Real Light Source Toggle (`Sumber Cahaya Nyata`) */}
+              {selected && onUpdatePointLight && (
+                <div className="point-light-card">
+                  <label className="point-light-head">
+                    <span className="point-light-title">
+                      <Lightbulb size={15} />
+                      <span>{t.pointLightCardTitle}</span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(selected.pointLight?.enabled)}
+                      onChange={(e) =>
+                        onUpdatePointLight(
+                          selected.id,
+                          {
+                            enabled: e.target.checked,
+                            color:
+                              selected.pointLight?.color ??
+                              (selected.emissive && selected.emissive !== '#000000'
+                                ? selected.emissive
+                                : '#fde68a'),
+                            intensity: selected.pointLight?.intensity ?? 2.2,
+                            distance: selected.pointLight?.distance ?? 7.5,
+                          },
+                          true
+                        )
+                      }
+                    />
+                  </label>
+                  <p className="point-light-desc">{t.pointLightCardDesc}</p>
+
+                  {selected.pointLight?.enabled && (
+                    <div className="point-light-controls">
+                      <div className="arch-slider-group">
+                        <div className="arch-slider-head">
+                          <span>{t.pointLightIntensity}</span>
+                          <strong>
+                            {(selected.pointLight.intensity ?? 2.2).toFixed(1)}
+                          </strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={0.3}
+                          max={6.0}
+                          step={0.1}
+                          value={selected.pointLight.intensity ?? 2.2}
+                          onChange={(e) =>
+                            onUpdatePointLight(
+                              selected.id,
+                              { intensity: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onMouseUp={() =>
+                            onUpdatePointLight(selected.id, {}, true)
+                          }
+                          onTouchEnd={() =>
+                            onUpdatePointLight(selected.id, {}, true)
+                          }
+                        />
+                      </div>
+
+                      <div className="arch-slider-group">
+                        <div className="arch-slider-head">
+                          <span>{t.pointLightRange}</span>
+                          <strong>
+                            {(selected.pointLight.distance ?? 7.5).toFixed(1)} m
+                          </strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={1.5}
+                          max={20.0}
+                          step={0.5}
+                          value={selected.pointLight.distance ?? 7.5}
+                          onChange={(e) =>
+                            onUpdatePointLight(
+                              selected.id,
+                              { distance: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onMouseUp={() =>
+                            onUpdatePointLight(selected.id, {}, true)
+                          }
+                          onTouchEnd={() =>
+                            onUpdatePointLight(selected.id, {}, true)
+                          }
+                        />
+                      </div>
+
+                      <div className="arch-swatch-row">
+                        {['#fde68a', '#fef08a', '#fb923c', '#ffffff', '#bae6fd', '#f9a8d4'].map(
+                          (hex) => (
+                            <button
+                              key={hex}
+                              type="button"
+                              className={`arch-color-swatch ${
+                                (selected.pointLight?.color ?? '#fde68a') === hex
+                                  ? 'active'
+                                  : ''
+                              }`}
+                              style={{ backgroundColor: hex }}
+                              onClick={() =>
+                                onUpdatePointLight(
+                                  selected.id,
+                                  { color: hex },
+                                  true
+                                )
+                              }
+                            />
+                          )
+                        )}
+                        <input
+                          type="color"
+                          className="arch-native-color"
+                          value={selected.pointLight.color ?? '#fde68a'}
+                          onChange={(e) =>
+                            onUpdatePointLight(
+                              selected.id,
+                              { color: e.target.value },
+                              true
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

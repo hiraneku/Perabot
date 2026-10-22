@@ -40,19 +40,35 @@ import {
 } from './services/projectStorage';
 import {
   AppScreen,
+  ArchBuildPhase,
+  ArchDetectedRoom,
+  ArchHouseData,
+  ArchOpeningItem,
+  ArchOpeningKind,
+  ArchRoofItem,
+  ArchRoofStyle,
+  ArchRoomMeta,
+  ArchSelection,
+  ArchStairItem,
+  ArchStairKind,
+  ArchSubTool,
+  ArchWallSegment,
   AxisLockMode,
   BuildingFloorLayer,
+  createEmptyArchHouseData,
   CustomAssetRecord,
   DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
   DEFAULT_TERRAIN_SCULPT_SETTINGS,
+  DEFAULT_WALL_DRAW,
   DragFeedback,
   FloorViewMode,
   GlobalAppSettings,
   GridSettings,
   LightingMood,
+  ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PlacementValidationStatus,
@@ -66,12 +82,14 @@ import {
   StudioMode,
   STUDIO_THEMES,
   SubdivisionStats,
+  SunEnvironmentSettings,
   SurfacePlacementRule,
   SurfaceSettings,
   TerrainSculptSettings,
   TransformMode,
   TransformSpace,
   Vec3,
+  WallDrawDefaults,
 } from './types/studio';
 import { MainMenu } from './components/MainMenu';
 import { GlobalSettingsModal } from './components/GlobalSettingsModal';
@@ -85,6 +103,9 @@ import { WalkthroughOverlay } from './components/WalkthroughOverlay';
 import { RepeatArrayModal } from './components/RepeatArrayModal';
 import { TerrainSculptBar } from './components/TerrainSculptBar';
 import { FloorLayerWidget } from './components/FloorLayerWidget';
+import { ArchStudioBar } from './components/ArchStudioBar';
+import { ArchContextPanel } from './components/ArchContextPanel';
+import { exportFloorBlueprintPNG } from './engine/blueprintExporter';
 import { AdvancedColorMaterialPatch } from './components/ColorWheelPicker';
 
 const SMART_AUTOSAVE_IDLE_MS = 5000;
@@ -103,7 +124,8 @@ function computeProjectContentSignature(
   surface: SurfaceSettings,
   mood: LightingMood,
   sculptedHeightsB64?: string | null,
-  floors?: BuildingFloorLayer[]
+  floors?: BuildingFloorLayer[],
+  archData?: ArchHouseData
 ): string {
   const objSig = objects
     .map((o) => {
@@ -112,6 +134,11 @@ function computeProjectContentSignature(
             o.subdivision.showGridLines ? 1 : 0
           },${o.subdivision.panelGroove.toFixed(2)}`
         : '1,1,1,1,0';
+      const pl = o.pointLight
+        ? `${o.pointLight.enabled ? 1 : 0}:${o.pointLight.color}:${o.pointLight.intensity.toFixed(
+            1
+          )}:${o.pointLight.distance.toFixed(1)}`
+        : '0';
       return [
         o.id,
         o.kind,
@@ -139,6 +166,7 @@ function computeProjectContentSignature(
         (o.emissiveIntensity ?? 0).toFixed(2),
         o.flatShading ? 1 : 0,
         sub,
+        pl,
       ].join(':');
     })
     .join('|');
@@ -196,9 +224,13 @@ function computeProjectContentSignature(
     )
     .join(';');
 
+  const archSig = archData
+    ? JSON.stringify(archData)
+    : '';
+
   return `${projectName}##${mood}##${gridSig}##${snapSig}##${surfSig}##${floorSig}##${
     sculptedHeightsB64 ?? ''
-  }##${objSig}`;
+  }##${archSig}##${objSig}`;
 }
 
 function buildEmptyProjectRecord(
@@ -208,6 +240,7 @@ function buildEmptyProjectRecord(
 ): SavedProjectRecord {
   const now = Date.now();
   const id = `proj_${now}_${Math.random().toString(36).slice(2, 7)}`;
+  // All Grid feature checkboxes default to OFF (`false`) on every new project in both modes!
   const gridSettings: GridSettings =
     mode === 'house'
       ? {
@@ -215,7 +248,7 @@ function buildEmptyProjectRecord(
           style: 'tile',
           spacing: 0.5,
           worldSize: 32,
-          showPlotBoundary: true,
+          showPlotBoundary: false,
           plotWidth: 12,
           plotDepth: 12,
         }
@@ -258,6 +291,7 @@ function buildEmptyProjectRecord(
           : undefined,
       activeFloorId: mode === 'house' ? 'floor_1' : undefined,
       floorViewMode: mode === 'house' ? 'all' : undefined,
+      archData: mode === 'house' ? createEmptyArchHouseData() : undefined,
     },
   };
 }
@@ -343,6 +377,23 @@ export const App: React.FC = () => {
   const [interiorPeek, setInteriorPeek] = useState(false);
   const [walkthroughActive, setWalkthroughActive] = useState(false);
 
+  // Architect Life × Blender House Studio States (`Buat Rumah` only)
+  const [activeArchPhase, setActiveArchPhase] =
+    useState<ArchBuildPhase | null>(null);
+  const [archData, setArchData] = useState<ArchHouseData>(() =>
+    createEmptyArchHouseData()
+  );
+  const [detectedRooms, setDetectedRooms] = useState<ArchDetectedRoom[]>([]);
+  const [archSelection, setArchSelection] = useState<ArchSelection>(null);
+  const [archTool, setArchTool] = useState<ArchSubTool>('select');
+  const [isBlueprint2D, setIsBlueprint2D] = useState(false);
+  const [cameraLensFov, setCameraLensFov] = useState(46);
+  const [wallDefaults, setWallDefaults] = useState<WallDrawDefaults>({
+    ...DEFAULT_WALL_DRAW,
+  });
+  const [activeOpeningKind, setActiveOpeningKind] =
+    useState<ArchOpeningKind>('door-single');
+
   // Collapsible sidebars + Fullscreen state
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(true);
@@ -415,7 +466,31 @@ export const App: React.FC = () => {
     engineRef.current?.setThemeCanvasColor(themeSpec.canvasBg);
     engineRef.current?.setGraphicsQuality(globalSettings.graphicsQuality);
     engineRef.current?.setOrbitSensitivity(globalSettings.orbitSensitivity);
+    engineRef.current?.setDefaultRoomPrefix(
+      globalSettings.language === 'ja'
+        ? '部屋'
+        : globalSettings.language === 'en'
+        ? 'Room'
+        : 'Ruang'
+    );
   }, [globalSettings]);
+
+  // Keep open ArchContextPanel synchronized when user clicks an architectural element in 3D
+  useEffect(() => {
+    if (!archSelection || activeArchPhase === null) return;
+    if (archSelection.kind === 'wall' && activeArchPhase !== 'finishing') {
+      setActiveArchPhase('walls');
+    } else if (
+      archSelection.kind === 'opening' ||
+      archSelection.kind === 'stair'
+    ) {
+      setActiveArchPhase('openings');
+    } else if (archSelection.kind === 'roof') {
+      setActiveArchPhase('roofs');
+    } else if (archSelection.kind === 'room') {
+      setActiveArchPhase('finishing');
+    }
+  }, [archSelection]);
 
   const handleUpdateGlobalSettings = useCallback(
     (patch: Partial<GlobalAppSettings>) => {
@@ -512,6 +587,8 @@ export const App: React.FC = () => {
       const curMood = engine.getLightingMood();
       const curSculptB64 = engine.exportSculptedHeightsBase64();
       const curFloorState = engine.getFloorSystemState();
+      const curArchData =
+        proj.mode === 'house' ? engine.getArchData() : undefined;
       const nextName = options?.overrideName ?? proj.name;
 
       const nextSig = computeProjectContentSignature(
@@ -522,7 +599,8 @@ export const App: React.FC = () => {
         curSurf,
         curMood,
         curSculptB64,
-        proj.mode === 'house' ? curFloorState.floors : undefined
+        proj.mode === 'house' ? curFloorState.floors : undefined,
+        curArchData
       );
 
       if (!options?.force && nextSig === lastSavedSigRef.current) {
@@ -536,15 +614,30 @@ export const App: React.FC = () => {
       dirtySinceRef.current = null;
       setSaveState('saving');
 
+      const hasArchStructure = Boolean(
+        curArchData &&
+          (curArchData.walls.length > 0 ||
+            curArchData.stairs.length > 0 ||
+            curArchData.roofs.length > 0)
+      );
       const thumb =
-        currentObjects.length > 0 ? engine.captureThumbnailDataUrl() : '';
+        currentObjects.length > 0 || hasArchStructure
+          ? engine.captureThumbnailDataUrl()
+          : '';
+      const totalItemCount =
+        currentObjects.length +
+        (curArchData
+          ? curArchData.walls.length +
+            curArchData.stairs.length +
+            curArchData.roofs.length
+          : 0);
       const now = Date.now();
 
       const updated: SavedProjectRecord = {
         ...proj,
         name: nextName,
         updatedAt: now,
-        objectCount: currentObjects.length,
+        objectCount: totalItemCount,
         thumbnailDataUrl: thumb,
         scene: {
           ...proj.scene,
@@ -561,6 +654,7 @@ export const App: React.FC = () => {
             proj.mode === 'house' ? curFloorState.activeFloorId : undefined,
           floorViewMode:
             proj.mode === 'house' ? curFloorState.floorViewMode : undefined,
+          archData: curArchData,
         },
       };
 
@@ -594,6 +688,12 @@ export const App: React.FC = () => {
           setActiveFloorId(state.activeFloorId);
           setFloorViewMode(state.floorViewMode);
           setSculptedHeightsB64(state.sculptedHeightsB64);
+          setArchData(state.archData);
+          setDetectedRooms(state.detectedRooms);
+          setArchSelection(state.archSelection);
+          setArchTool(state.archTool);
+          setIsBlueprint2D(state.isBlueprint2D);
+          setCameraLensFov(state.cameraLensFov);
         },
         onDragFeedback: (feedback) => {
           setDragFeedback(feedback);
@@ -624,6 +724,12 @@ export const App: React.FC = () => {
         activeProject.scene.activeFloorId,
         activeProject.scene.floorViewMode
       );
+      engine.loadArchData(
+        activeProject.scene.archData ?? createEmptyArchHouseData(),
+        true
+      );
+    } else {
+      engine.loadArchData(createEmptyArchHouseData(), true);
     }
 
     const themeSpec =
@@ -648,6 +754,8 @@ export const App: React.FC = () => {
 
     const initFloors = engine.getFloorSystemState().floors;
     const initSculptB64 = engine.exportSculptedHeightsBase64();
+    const initArchData =
+      activeProject.mode === 'house' ? engine.getArchData() : undefined;
 
     // Record baseline content signature on open so opening a project triggers 0 redundant saves
     lastSavedSigRef.current = computeProjectContentSignature(
@@ -658,7 +766,8 @@ export const App: React.FC = () => {
       restoredSurf,
       projMood,
       initSculptB64,
-      activeProject.mode === 'house' ? initFloors : undefined
+      activeProject.mode === 'house' ? initFloors : undefined,
+      initArchData
     );
     dirtySinceRef.current = null;
     setSaveState('saved');
@@ -677,6 +786,11 @@ export const App: React.FC = () => {
     setTerrainSculptSettings({ ...DEFAULT_TERRAIN_SCULPT_SETTINGS });
     setRepeatModalOpen(false);
     setFloorWidgetOpen(false);
+    setActiveArchPhase(null);
+    setIsBlueprint2D(false);
+    setCameraLensFov(46);
+    setWallDefaults({ ...DEFAULT_WALL_DRAW });
+    setActiveOpeningKind('door-single');
 
     engineRef.current = engine;
 
@@ -700,7 +814,8 @@ export const App: React.FC = () => {
             engine.exportSculptedHeightsBase64(),
             activeProject.mode === 'house'
               ? engine.getFloorSystemState().floors
-              : undefined
+              : undefined,
+            activeProject.mode === 'house' ? engine.getArchData() : undefined
           );
           dirtySinceRef.current = null;
           setSaveState('saved');
@@ -731,7 +846,8 @@ export const App: React.FC = () => {
       surfaceSettings,
       lightingMood,
       sculptedHeightsB64,
-      activeProject.mode === 'house' ? floors : undefined
+      activeProject.mode === 'house' ? floors : undefined,
+      activeProject.mode === 'house' ? archData : undefined
     );
   }, [
     activeScreen,
@@ -744,6 +860,7 @@ export const App: React.FC = () => {
     lightingMood,
     sculptedHeightsB64,
     floors,
+    archData,
   ]);
 
   // Smart Auto-Save scheduler:
@@ -1390,8 +1507,180 @@ export const App: React.FC = () => {
 
   const handleClearScene = useCallback(() => {
     engineRef.current?.clearScene();
+    if (activeProjectRef.current?.mode === 'house') {
+      engineRef.current?.loadArchData(createEmptyArchHouseData(), false);
+      engineRef.current?.pushHistoryFromUI();
+    }
     showToast(t.clearScene);
   }, [showToast, t.clearScene]);
+
+  const handleUpdatePointLight = useCallback(
+    (
+      id: string,
+      patch: Partial<ObjectPointLightConfig>,
+      commitHistory = true
+    ) => {
+      engineRef.current?.updateObjectPointLight(id, patch, commitHistory);
+    },
+    []
+  );
+
+  // Architect Life × Blender Handlers (`Buat Rumah` only)
+  const handleSelectArchPhase = useCallback((phase: ArchBuildPhase | null) => {
+    setActiveArchPhase(phase);
+    if (phase !== null) {
+      setFloorWidgetOpen(false);
+      setRepeatModalOpen(false);
+    }
+  }, []);
+
+  const handleSetArchTool = useCallback((tool: ArchSubTool) => {
+    setArchTool(tool);
+    engineRef.current?.setArchTool(tool);
+  }, []);
+
+  const handleChangeWallDefaults = useCallback(
+    (patch: Partial<WallDrawDefaults>) => {
+      setWallDefaults((prev) => {
+        const next = { ...prev, ...patch };
+        engineRef.current?.setWallDrawDefaults(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const handleSpawnWallTemplate = useCallback(() => {
+    const created = engineRef.current?.spawnStandardWallTemplate(wallDefaults);
+    if (created) {
+      showToast(
+        `${t.archPhaseWalls} (${wallDefaults.lengthTemplate.toFixed(1)}m × ${wallDefaults.height.toFixed(1)}m × ${Math.round(
+          wallDefaults.thickness * 100
+        )}cm)`
+      );
+    }
+  }, [wallDefaults, showToast, t.archPhaseWalls]);
+
+  const handleUpdateArchWall = useCallback(
+    (id: string, patch: Partial<ArchWallSegment>, commit = true) => {
+      engineRef.current?.updateArchWall(id, patch, commit);
+    },
+    []
+  );
+
+  const handleBakeSelectedWall = useCallback(() => {
+    const ok = engineRef.current?.bakeSelectedWallToEditableMeshes();
+    if (ok) {
+      showToast(t.archBakeSuccessToast);
+    }
+  }, [showToast, t.archBakeSuccessToast]);
+
+  const handleSelectOpeningKind = useCallback((kind: ArchOpeningKind) => {
+    setActiveOpeningKind(kind);
+    engineRef.current?.setActiveOpeningKind(kind);
+  }, []);
+
+  const handleUpdateArchOpening = useCallback(
+    (id: string, patch: Partial<ArchOpeningItem>, commit = true) => {
+      engineRef.current?.updateArchOpening(id, patch, commit);
+    },
+    []
+  );
+
+  const handleAddArchStair = useCallback(
+    (kind: ArchStairKind) => {
+      const created = engineRef.current?.addArchStaircase(kind);
+      if (created) {
+        showToast(t.archStairPlacedToast);
+      }
+    },
+    [showToast, t.archStairPlacedToast]
+  );
+
+  const handleUpdateArchStair = useCallback(
+    (id: string, patch: Partial<ArchStairItem>, commit = true) => {
+      engineRef.current?.updateArchStair(id, patch, commit);
+    },
+    []
+  );
+
+  const handleGenerateAutoRoof = useCallback(
+    (style: ArchRoofStyle) => {
+      const created = engineRef.current?.generateSmartAutoRoof(
+        style,
+        t.archPhaseRoofs
+      );
+      if (created) {
+        showToast(t.archRoofAddedToast);
+      }
+    },
+    [showToast, t.archPhaseRoofs, t.archRoofAddedToast]
+  );
+
+  const handleUpdateArchRoof = useCallback(
+    (id: string, patch: Partial<ArchRoofItem>, commit = true) => {
+      engineRef.current?.updateArchRoof(id, patch, commit);
+    },
+    []
+  );
+
+  const handleUpdateArchRoomMeta = useCallback(
+    (
+      roomId: string,
+      patch: Partial<Pick<ArchRoomMeta, 'name' | 'floorColor' | 'ceilingVisible'>>,
+      commit = true
+    ) => {
+      engineRef.current?.updateArchRoomMeta(roomId, patch, commit);
+    },
+    []
+  );
+
+  const handleApplyAllWallsColor = useCallback(
+    (extColor: string, intColor: string) => {
+      const count =
+        engineRef.current?.applyFloorWallsDualColor(extColor, intColor) ?? 0;
+      if (count > 0) {
+        showToast(`${count} × ${t.archPhaseWalls}`);
+      }
+    },
+    [showToast, t.archPhaseWalls]
+  );
+
+  const handleDeleteSelectedArch = useCallback(() => {
+    const ok = engineRef.current?.deleteSelectedArchItem();
+    if (ok) {
+      showToast(t.delete);
+    }
+  }, [showToast, t.delete]);
+
+  const handleChangeSun = useCallback(
+    (patch: Partial<SunEnvironmentSettings>, commit = false) => {
+      engineRef.current?.setSunEnvironment(patch, commit);
+    },
+    []
+  );
+
+  const handleToggleBlueprint2D = useCallback((next: boolean) => {
+    engineRef.current?.setBlueprint2DView(next);
+  }, []);
+
+  const handleChangeLensFov = useCallback((fov: number) => {
+    engineRef.current?.setCameraLensFov(fov);
+  }, []);
+
+  const handleExportBlueprintPNG = useCallback(() => {
+    const proj = activeProjectRef.current;
+    if (!proj) return;
+    const fl = floors.find((f) => f.id === activeFloorId) ?? floors[0];
+    if (!fl) return;
+    exportFloorBlueprintPNG({
+      projectName: proj.name,
+      floor: fl,
+      archData,
+      detectedRooms,
+    });
+    showToast(t.archBlueprintExportedToast);
+  }, [floors, activeFloorId, archData, detectedRooms, showToast, t.archBlueprintExportedToast]);
 
   const handleSelectObject = useCallback((id: string) => {
     engineRef.current?.selectObject(id);
@@ -1579,6 +1868,9 @@ export const App: React.FC = () => {
           if (selectedId) {
             e.preventDefault();
             handleDeleteObject(selectedId);
+          } else if (archSelection && archSelection.kind !== 'room') {
+            e.preventDefault();
+            handleDeleteSelectedArch();
           }
           break;
         case '0':
@@ -1602,6 +1894,8 @@ export const App: React.FC = () => {
     activeScreen,
     walkthroughActive,
     selectedId,
+    archSelection,
+    handleDeleteSelectedArch,
     paintMode,
     surfaceSettings.enabled,
     handleSaveProjectManual,
@@ -1865,6 +2159,56 @@ export const App: React.FC = () => {
             onClose={() => setRepeatModalOpen(false)}
           />
 
+          {/* Architect Life × Blender Contextual Bar & Phase Panel (`Buat Rumah` ONLY) */}
+          {activeProject.mode === 'house' && !walkthroughActive && (
+            <>
+              <ArchStudioBar
+                t={t}
+                activePhase={activeArchPhase}
+                onSelectPhase={handleSelectArchPhase}
+                isBlueprint2D={isBlueprint2D}
+                onToggleBlueprint2D={handleToggleBlueprint2D}
+                archTool={archTool}
+                onResetToSelectTool={() => handleSetArchTool('select')}
+                detectedRoomCount={detectedRooms.length}
+              />
+
+              {activeArchPhase && (
+                <ArchContextPanel
+                  t={t}
+                  phase={activeArchPhase}
+                  onClose={() => setActiveArchPhase(null)}
+                  archData={archData}
+                  detectedRooms={detectedRooms}
+                  archSelection={archSelection}
+                  onSelectArch={(sel) => engineRef.current?.selectArchItem(sel)}
+                  archTool={archTool}
+                  onSetArchTool={handleSetArchTool}
+                  wallDefaults={wallDefaults}
+                  onChangeWallDefaults={handleChangeWallDefaults}
+                  onSpawnWallTemplate={handleSpawnWallTemplate}
+                  onUpdateWall={handleUpdateArchWall}
+                  onBakeSelectedWall={handleBakeSelectedWall}
+                  activeOpeningKind={activeOpeningKind}
+                  onSelectOpeningKind={handleSelectOpeningKind}
+                  onUpdateOpening={handleUpdateArchOpening}
+                  onAddStair={handleAddArchStair}
+                  onUpdateStair={handleUpdateArchStair}
+                  onGenerateAutoRoof={handleGenerateAutoRoof}
+                  onUpdateRoof={handleUpdateArchRoof}
+                  onUpdateRoomMeta={handleUpdateArchRoomMeta}
+                  onApplyAllWallsColor={handleApplyAllWallsColor}
+                  onDeleteSelectedArch={handleDeleteSelectedArch}
+                  onChangeSun={handleChangeSun}
+                  cameraLensFov={cameraLensFov}
+                  onChangeLensFov={handleChangeLensFov}
+                  onExportBlueprintPNG={handleExportBlueprintPNG}
+                  activeFloor={floors.find((f) => f.id === activeFloorId)}
+                />
+              )}
+            </>
+          )}
+
           {/* #3 Terrain Sculpting Bar — Buat Rumah ONLY */}
           {activeProject.mode === 'house' && !walkthroughActive && (
             <TerrainSculptBar
@@ -2124,6 +2468,7 @@ export const App: React.FC = () => {
             onAssignFloor={handleAssignObjectFloor}
             onUpdateSurfaceRule={handleUpdateSurfaceRule}
             onResetImportedMaterial={handleResetImportedMaterial}
+            onUpdatePointLight={handleUpdatePointLight}
           />
         )}
 
@@ -2162,6 +2507,7 @@ export const App: React.FC = () => {
             onAssignFloor={handleAssignObjectFloor}
             onUpdateSurfaceRule={handleUpdateSurfaceRule}
             onResetImportedMaterial={handleResetImportedMaterial}
+            onUpdatePointLight={handleUpdatePointLight}
           />
         )}
       </main>

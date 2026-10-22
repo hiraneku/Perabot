@@ -169,29 +169,29 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
   },
 
   /* =========================================================
-     2. COMPATIBLE WALLS (Height 3.0m, Thickness 0.20m)
+     2. COMPATIBLE WALLS (Height 3.0m, Width 3.0m, Thickness 0.15m)
      ========================================================= */
   {
     id: 'mod-wall-3m',
     category: 'walls',
     archRole: 'wall',
     surfaceRule: 'building-flat',
-    moduleSize: { x: 3.0, y: 3.0, z: 0.2 },
+    moduleSize: { x: 3.0, y: 3.0, z: 0.15 },
     name: {
-      id: 'Dinding Utuh 3×3m',
-      en: 'Solid Wall 3×3m',
-      ja: '標準壁パネル 3×3m',
+      id: 'Dinding Rumah 3×3m (15cm)',
+      en: 'House Wall 3×3m (15cm)',
+      ja: '標準住宅壁 3×3m (15cm)',
     },
     subtitle: {
-      id: 'Tinggi standar 3m • Tebal 20cm',
-      en: '3.0m story height • 20cm thick',
-      ja: '階高3.0m・厚さ20cmの標準壁',
+      id: 'Tinggi rumah 3.0m • Lebar 3.0m • Tebal 15cm',
+      en: '3.0m story height • 3.0m wide • 15cm thick',
+      ja: '階高3.0m・幅3.0m・厚さ15cmの標準住宅壁',
     },
     parts: [
       part({
         kind: 'cube',
         name: 'Wall 3m',
-        scale: { x: 3.0, y: 3.0, z: 0.2 },
+        scale: { x: 3.0, y: 3.0, z: 0.15 },
         localPosition: { x: 0, y: 1.5, z: 0 },
         color: '#f1f5f9',
         roughness: 0.78,
@@ -204,22 +204,22 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
     category: 'walls',
     archRole: 'wall',
     surfaceRule: 'building-flat',
-    moduleSize: { x: 1.5, y: 3.0, z: 0.2 },
+    moduleSize: { x: 1.5, y: 3.0, z: 0.15 },
     name: {
-      id: 'Dinding Pendek 1.5×3m',
-      en: 'Half Wall 1.5×3m',
-      ja: '半幅壁パネル 1.5×3m',
+      id: 'Dinding Sekat 1.5×3m (15cm)',
+      en: 'Partition Wall 1.5×3m (15cm)',
+      ja: '間仕切り壁 1.5×3m (15cm)',
     },
     subtitle: {
-      id: 'Modul dinding 1.5m untuk sekat ruang',
-      en: '1.5m wide partition wall module',
-      ja: '間仕切りに便利な幅1.5m壁',
+      id: 'Modul sekat 1.5m • Tinggi 3.0m • Tebal 15cm',
+      en: '1.5m wide • 3.0m high • 15cm thick',
+      ja: '幅1.5m・高さ3.0m・厚さ15cmの間仕切り壁',
     },
     parts: [
       part({
         kind: 'cube',
         name: 'Wall 1.5m',
-        scale: { x: 1.5, y: 3.0, z: 0.2 },
+        scale: { x: 1.5, y: 3.0, z: 0.15 },
         localPosition: { x: 0, y: 1.5, z: 0 },
         color: '#f1f5f9',
         roughness: 0.78,
@@ -232,7 +232,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
     category: 'walls',
     archRole: 'wall',
     surfaceRule: 'building-flat',
-    moduleSize: { x: 3.0, y: 3.0, z: 0.2 },
+    moduleSize: { x: 3.0, y: 3.0, z: 0.15 },
     name: {
       id: 'Dinding Kaca Penuh 3m',
       en: 'Curtain Glass Wall 3m',
@@ -247,7 +247,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'hollow-box',
         name: 'Mullion Frame',
-        scale: { x: 3.0, y: 3.0, z: 0.18 },
+        scale: { x: 3.0, y: 3.0, z: 0.15 },
         localPosition: { x: 0, y: 1.5, z: 0 },
         rotation: { x: 90, y: 0, z: 0 },
         color: '#1e293b',
@@ -329,29 +329,29 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
   },
 
   /* =========================================================
-     3. DOOR & WINDOW WALL MODULES (Seamless 3.0m x 3.0m x 0.20m)
+     3. DOOR & WINDOW WALL MODULES (Seamless 3.0m x 3.0m x 0.15m)
      ========================================================= */
   {
     id: 'mod-door-wall',
     category: 'openings',
     archRole: 'wall',
     surfaceRule: 'building-flat',
-    moduleSize: { x: 3.0, y: 3.0, z: 0.2 },
+    moduleSize: { x: 3.0, y: 3.0, z: 0.15 },
     name: {
       id: 'Dinding + Pintu Kayu 3m',
       en: 'Doorway Wall Module 3m',
       ja: 'ドア付き壁パネル 3m',
     },
     subtitle: {
-      id: 'Langsung klop dengan Dinding 3m & bisa dilewati',
-      en: 'Matches 3m walls flush with walk-through opening',
-      ja: '3m標準壁とピタッと繋がる出入口パネル',
+      id: 'Klop dengan Dinding 3m (15cm) & bisa dilewati',
+      en: 'Matches 3m (15cm) walls flush with walk-through doorway',
+      ja: '3m標準壁(15cm)とピタッと繋がる出入口パネル',
     },
     parts: [
       part({
         kind: 'cube',
         name: 'Left Pier',
-        scale: { x: 0.95, y: 3.0, z: 0.2 },
+        scale: { x: 0.95, y: 3.0, z: 0.15 },
         localPosition: { x: -1.025, y: 1.5, z: 0 },
         color: '#f1f5f9',
         archRole: 'wall',
@@ -359,7 +359,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'cube',
         name: 'Right Pier',
-        scale: { x: 0.95, y: 3.0, z: 0.2 },
+        scale: { x: 0.95, y: 3.0, z: 0.15 },
         localPosition: { x: 1.025, y: 1.5, z: 0 },
         color: '#f1f5f9',
         archRole: 'wall',
@@ -367,7 +367,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'cube',
         name: 'Door Header',
-        scale: { x: 1.1, y: 0.8, z: 0.2 },
+        scale: { x: 1.1, y: 0.8, z: 0.15 },
         localPosition: { x: 0, y: 2.6, z: 0 },
         color: '#f1f5f9',
         archRole: 'wall',
@@ -375,7 +375,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'door-frame',
         name: 'Timber Jamb',
-        scale: { x: 1.14, y: 2.22, z: 0.24 },
+        scale: { x: 1.14, y: 2.22, z: 0.19 },
         localPosition: { x: 0, y: 1.11, z: 0 },
         color: '#9a5b2d',
         roughness: 0.55,
@@ -388,22 +388,22 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
     category: 'openings',
     archRole: 'wall',
     surfaceRule: 'building-flat',
-    moduleSize: { x: 3.0, y: 3.0, z: 0.2 },
+    moduleSize: { x: 3.0, y: 3.0, z: 0.15 },
     name: {
       id: 'Dinding + Jendela Lebar 3m',
       en: 'Window Wall Module 3m',
       ja: '大型窓付き壁パネル 3m',
     },
     subtitle: {
-      id: 'Lubang jendela sejati + kusen & kaca bening',
-      en: 'True framed window opening with clear glass',
-      ja: '採光ガラスと窓枠付きの3m壁モジュール',
+      id: 'Lubang jendela sejati + kusen & kaca bening (15cm)',
+      en: 'True framed window opening with clear glass (15cm)',
+      ja: '採光ガラスと窓枠付きの3m壁モジュール(15cm)',
     },
     parts: [
       part({
         kind: 'cube',
         name: 'Sill Wall',
-        scale: { x: 3.0, y: 0.9, z: 0.2 },
+        scale: { x: 3.0, y: 0.9, z: 0.15 },
         localPosition: { x: 0, y: 0.45, z: 0 },
         color: '#f1f5f9',
         archRole: 'wall',
@@ -411,7 +411,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'cube',
         name: 'Lintel Wall',
-        scale: { x: 3.0, y: 0.7, z: 0.2 },
+        scale: { x: 3.0, y: 0.7, z: 0.15 },
         localPosition: { x: 0, y: 2.65, z: 0 },
         color: '#f1f5f9',
         archRole: 'wall',
@@ -419,7 +419,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'cube',
         name: 'Left Jamb Wall',
-        scale: { x: 0.6, y: 1.4, z: 0.2 },
+        scale: { x: 0.6, y: 1.4, z: 0.15 },
         localPosition: { x: -1.2, y: 1.6, z: 0 },
         color: '#f1f5f9',
         archRole: 'wall',
@@ -427,7 +427,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'cube',
         name: 'Right Jamb Wall',
-        scale: { x: 0.6, y: 1.4, z: 0.2 },
+        scale: { x: 0.6, y: 1.4, z: 0.15 },
         localPosition: { x: 1.2, y: 1.6, z: 0 },
         color: '#f1f5f9',
         archRole: 'wall',
@@ -435,7 +435,7 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
       part({
         kind: 'window-frame',
         name: 'Window Mullion',
-        scale: { x: 1.82, y: 1.42, z: 0.23 },
+        scale: { x: 1.82, y: 1.42, z: 0.18 },
         localPosition: { x: 0, y: 1.6, z: 0 },
         color: '#334155',
         roughness: 0.38,
@@ -459,22 +459,22 @@ export const MODULAR_CONSTRUCTION_CATALOG: ModularModuleItem[] = [
     category: 'openings',
     archRole: 'wall',
     surfaceRule: 'building-flat',
-    moduleSize: { x: 3.0, y: 3.0, z: 0.22 },
+    moduleSize: { x: 3.0, y: 3.0, z: 0.15 },
     name: {
       id: 'Dinding Gerbang Lengkung 3m',
       en: 'Archway Wall Module 3m',
       ja: 'アーチ開口壁 3m',
     },
     subtitle: {
-      id: 'Bukaan melengkung elegan antar ruang tamu',
-      en: 'Graceful arched pass-through wall module',
-      ja: '部屋同士を優雅につなぐアーチ開口壁',
+      id: 'Bukaan melengkung elegan antar ruang tamu (15cm)',
+      en: 'Graceful arched pass-through wall module (15cm)',
+      ja: '部屋同士を優雅につなぐアーチ開口壁(15cm)',
     },
     parts: [
       part({
         kind: 'arch',
         name: 'Archway Wall',
-        scale: { x: 3.0, y: 3.0, z: 0.22 },
+        scale: { x: 3.0, y: 3.0, z: 0.15 },
         localPosition: { x: 0, y: 1.5, z: 0 },
         color: '#f1f5f9',
         roughness: 0.76,

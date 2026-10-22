@@ -392,6 +392,101 @@ export interface StudioStrings {
   floorViewGhost: string;
   floorAssignLabel: string;
   floorMoveSelectionBtn: string;
+
+  // Architect Life x Blender House Studio
+  archPhaseWalls: string;
+  archPhaseOpenings: string;
+  archPhaseRoofs: string;
+  archPhaseFinishing: string;
+  archPhaseEnv: string;
+  archView2DBtn: string;
+  archView3DBtn: string;
+  archToolSelect: string;
+  archToolDrawWall: string;
+  archToolMeasure: string;
+  archDrawWallHint: string;
+  archPlaceOpeningHint: string;
+  archMeasureHint: string;
+
+  archWallStyleFull: string;
+  archWallStyleHalf: string;
+  archWallStyleRailing: string;
+  archWallHeightLabel: string;
+  archWallThickLabel: string;
+  archWallLenLabel: string;
+  archWallCurveLabel: string;
+  archWallAngleSnap: string;
+  archWallBaseboard: string;
+  archSpawnWallTemplateBtn: string;
+  archWallTemplateSub: string;
+  archSelectedWallTitle: string;
+  archBakeToMeshBtn: string;
+  archBakeSuccessToast: string;
+
+  archOpenDoorSingle: string;
+  archOpenDoorDouble: string;
+  archOpenWinStd: string;
+  archOpenWinWide: string;
+  archOpenWinTall: string;
+  archOpenArchway: string;
+  archOpenWidthLabel: string;
+  archOpenHeightLabel: string;
+  archOpenSillLabel: string;
+  archOpenPosLabel: string;
+  archOpenFlipSwing: string;
+  archStairSectionTitle: string;
+  archStairStraightBtn: string;
+  archStairLShapeBtn: string;
+  archStairAutoCutout: string;
+  archStairPlacedToast: string;
+
+  archRoofAutoBtn: string;
+  archRoofCustomBtn: string;
+  archRoofGable: string;
+  archRoofHip: string;
+  archRoofShed: string;
+  archRoofFlat: string;
+  archRoofPitchLabel: string;
+  archRoofOverhangLabel: string;
+  archRoofRidgeAxisLabel: string;
+  archRoofWidthLabel: string;
+  archRoofDepthLabel: string;
+  archRoofAddedToast: string;
+
+  archRoomsTitle: string;
+  archNoRoomsHint: string;
+  archRoomAreaUnit: string;
+  archRoomFloorColor: string;
+  archRoomAutoCeiling: string;
+  archDualWallTitle: string;
+  archWallExtColor: string;
+  archWallIntColor: string;
+  archApplyAllWallsBtn: string;
+  archRoomPresetLiving: string;
+  archRoomPresetBedroom: string;
+  archRoomPresetKitchen: string;
+  archRoomPresetBath: string;
+  archRoomPresetStudy: string;
+  archRoomPresetTerrace: string;
+
+  archSunToggleTitle: string;
+  archSunTimeLabel: string;
+  archCompassNorthLabel: string;
+  archLensSectionTitle: string;
+  archLensStd: string;
+  archLensWide: string;
+  archLensUltra: string;
+  archSummaryTitle: string;
+  archTotalAreaLabel: string;
+  archRoomCountLabel: string;
+  archWallTotalLenLabel: string;
+  archExportBlueprintBtn: string;
+  archBlueprintExportedToast: string;
+
+  pointLightCardTitle: string;
+  pointLightCardDesc: string;
+  pointLightIntensity: string;
+  pointLightRange: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -805,6 +900,100 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     floorViewGhost: 'Bayang Lain',
     floorAssignLabel: 'Tingkat Lantai Objek',
     floorMoveSelectionBtn: 'Pindah ke Lantai Aktif',
+
+    archPhaseWalls: 'Denah & Dinding',
+    archPhaseOpenings: 'Pintu & Tangga',
+    archPhaseRoofs: 'Atap Pintar',
+    archPhaseFinishing: 'Ruang & Cat',
+    archPhaseEnv: 'Matahari & Info',
+    archView2DBtn: '2D Denah',
+    archView3DBtn: '3D Studio',
+    archToolSelect: 'Pilih / Blender',
+    archToolDrawWall: 'Tarik Dinding',
+    archToolMeasure: 'Meteran',
+    archDrawWallHint: 'Ketuk titik awal lalu ketuk titik tujuan untuk menggambar dinding (Esc selesai rantai)',
+    archPlaceOpeningHint: 'Arahkan & ketuk pada dinding untuk melubangi pintu/jendela otomatis',
+    archMeasureHint: 'Ketuk 2 titik di kanvas untuk mengukur jarak bersih dalam meter',
+
+    archWallStyleFull: 'Dinding Penuh',
+    archWallStyleHalf: 'Dinding Setengah',
+    archWallStyleRailing: 'Pagar Balkon',
+    archWallHeightLabel: 'Tinggi Dinding',
+    archWallThickLabel: 'Tebal Dinding',
+    archWallLenLabel: 'Lebar Template',
+    archWallCurveLabel: 'Lengkung Dinding',
+    archWallAngleSnap: 'Kunci Sudut 45°/90°',
+    archWallBaseboard: 'Lis Kaki Dinding',
+    archSpawnWallTemplateBtn: '+ Taruh Template Dinding',
+    archWallTemplateSub: 'Ukuran rumah umum (Tinggi 3.0m × Lebar 3.0m × Tebal 15cm), bebas dikostum',
+    archSelectedWallTitle: 'Dinding Arsitektur Terpilih',
+    archBakeToMeshBtn: 'Ubah ke Objek 3D Bebas (Blender)',
+    archBakeSuccessToast: 'Diubah menjadi objek 3D bebas siap diedit',
+
+    archOpenDoorSingle: 'Pintu Tunggal',
+    archOpenDoorDouble: 'Pintu Ganda',
+    archOpenWinStd: 'Jendela Kamar',
+    archOpenWinWide: 'Jendela Lebar',
+    archOpenWinTall: 'Kaca Panorama',
+    archOpenArchway: 'Lubang Lengkung',
+    archOpenWidthLabel: 'Lebar Bukaan',
+    archOpenHeightLabel: 'Tinggi Bukaan',
+    archOpenSillLabel: 'Tinggi Ambang Bawah',
+    archOpenPosLabel: 'Posisi di Dinding',
+    archOpenFlipSwing: 'Balik Arah Bukaan',
+    archStairSectionTitle: 'Tangga & Lubang Lantai Otomatis',
+    archStairStraightBtn: '+ Tangga Lurus',
+    archStairLShapeBtn: '+ Tangga L',
+    archStairAutoCutout: 'Lubangi Lantai Atas Otomatis',
+    archStairPlacedToast: 'Tangga & bukaan lantai atas dipasang',
+
+    archRoofAutoBtn: 'Buat Atap Otomatis Ikuti Denah',
+    archRoofCustomBtn: '+ Tambah Atap Kustom',
+    archRoofGable: 'Pelana',
+    archRoofHip: 'Limasan',
+    archRoofShed: 'Miring Satu Sisi',
+    archRoofFlat: 'Datar Modern',
+    archRoofPitchLabel: 'Kemiringan Atap',
+    archRoofOverhangLabel: 'Teritisan (Overhang)',
+    archRoofRidgeAxisLabel: 'Arah Bubungan',
+    archRoofWidthLabel: 'Bentang X',
+    archRoofDepthLabel: 'Bentang Z',
+    archRoofAddedToast: 'Atap pintar berhasil dibuat',
+
+    archRoomsTitle: 'Ruangan Terdeteksi Otomatis',
+    archNoRoomsHint: 'Hubungkan dinding hingga menutup area untuk mendeteksi ruangan & luas m² otomatis.',
+    archRoomAreaUnit: 'm²',
+    archRoomFloorColor: 'Warna Lantai Ruang',
+    archRoomAutoCeiling: 'Plafon Pintar (Muncul saat Jalan Kaki)',
+    archDualWallTitle: 'Cat Dinding 2 Sisi (Luar vs Dalam)',
+    archWallExtColor: 'Sisi Luar (Eksterior)',
+    archWallIntColor: 'Sisi Dalam (Interior)',
+    archApplyAllWallsBtn: 'Terapkan ke Dinding Lantai Ini',
+    archRoomPresetLiving: 'Ruang Tamu',
+    archRoomPresetBedroom: 'Kamar Tidur',
+    archRoomPresetKitchen: 'Dapur',
+    archRoomPresetBath: 'Kamar Mandi',
+    archRoomPresetStudy: 'Ruang Kerja',
+    archRoomPresetTerrace: 'Teras',
+
+    archSunToggleTitle: 'Simulasi Jam Matahari & Kompas',
+    archSunTimeLabel: 'Jam Matahari',
+    archCompassNorthLabel: 'Arah Utara Kompas',
+    archLensSectionTitle: 'Lensa Kamera Ruang',
+    archLensStd: 'Standar 46°',
+    archLensWide: 'Lebar 64°',
+    archLensUltra: 'Interior 78°',
+    archSummaryTitle: 'Data Bangunan & Denah',
+    archTotalAreaLabel: 'Total Luas Ruang',
+    archRoomCountLabel: 'Jumlah Ruangan',
+    archWallTotalLenLabel: 'Total Panjang Dinding',
+    archExportBlueprintBtn: 'Unduh Gambar Denah 2D (.PNG)',
+    archBlueprintExportedToast: 'Gambar Denah 2D berhasil diunduh',
+
+    pointLightCardTitle: 'Sumber Cahaya Nyata (Lampu Kustom)',
+    pointLightCardDesc: 'Nyalakan agar objek lampu rakitanmu memancarkan cahaya hangat ke ruangan sekitar',
+    pointLightIntensity: 'Terang Cahaya',
+    pointLightRange: 'Jangkauan Meter',
   },
 
   en: {
@@ -1217,6 +1406,100 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     floorViewGhost: 'Ghost Others',
     floorAssignLabel: 'Assigned Building Floor',
     floorMoveSelectionBtn: 'Move to Active Floor',
+
+    archPhaseWalls: 'Plan & Walls',
+    archPhaseOpenings: 'Doors & Stairs',
+    archPhaseRoofs: 'Smart Roofs',
+    archPhaseFinishing: 'Rooms & Paint',
+    archPhaseEnv: 'Sun & Info',
+    archView2DBtn: '2D Plan',
+    archView3DBtn: '3D Studio',
+    archToolSelect: 'Select / Blender',
+    archToolDrawWall: 'Draw Wall',
+    archToolMeasure: 'Measure',
+    archDrawWallHint: 'Tap start point then tap end point to draw walls (Esc ends chain)',
+    archPlaceOpeningHint: 'Hover & tap on any wall to cut an automatic door or window opening',
+    archMeasureHint: 'Tap 2 points in the scene to measure exact meter clearance',
+
+    archWallStyleFull: 'Full Wall',
+    archWallStyleHalf: 'Half Wall',
+    archWallStyleRailing: 'Balcony Railing',
+    archWallHeightLabel: 'Wall Height',
+    archWallThickLabel: 'Wall Thickness',
+    archWallLenLabel: 'Template Width',
+    archWallCurveLabel: 'Wall Curve Arc',
+    archWallAngleSnap: '45°/90° Angle Lock',
+    archWallBaseboard: 'Wall Baseboard Trim',
+    archSpawnWallTemplateBtn: '+ Place Wall Template',
+    archWallTemplateSub: 'Standard house wall (3.0m High × 3.0m Wide × 15cm Thick), customizable',
+    archSelectedWallTitle: 'Selected Smart Wall',
+    archBakeToMeshBtn: 'Convert to Free 3D Mesh (Blender)',
+    archBakeSuccessToast: 'Converted to editable 3D mesh objects',
+
+    archOpenDoorSingle: 'Single Door',
+    archOpenDoorDouble: 'Double Door',
+    archOpenWinStd: 'Room Window',
+    archOpenWinWide: 'Wide Window',
+    archOpenWinTall: 'Panoramic Glass',
+    archOpenArchway: 'Archway Cutout',
+    archOpenWidthLabel: 'Opening Width',
+    archOpenHeightLabel: 'Opening Height',
+    archOpenSillLabel: 'Sill Elevation',
+    archOpenPosLabel: 'Position Along Wall',
+    archOpenFlipSwing: 'Flip Swing Side',
+    archStairSectionTitle: 'Stairs & Auto Floor Cutout',
+    archStairStraightBtn: '+ Straight Stair',
+    archStairLShapeBtn: '+ L-Stair',
+    archStairAutoCutout: 'Auto Cut Upper Floor Slab',
+    archStairPlacedToast: 'Staircase & upper stairwell cutout placed',
+
+    archRoofAutoBtn: 'Auto-Generate Roof Over Plan',
+    archRoofCustomBtn: '+ Add Custom Roof',
+    archRoofGable: 'Gable',
+    archRoofHip: 'Hipped',
+    archRoofShed: 'Mono-Slope',
+    archRoofFlat: 'Modern Flat',
+    archRoofPitchLabel: 'Roof Pitch',
+    archRoofOverhangLabel: 'Eave Overhang',
+    archRoofRidgeAxisLabel: 'Ridge Direction',
+    archRoofWidthLabel: 'Span X',
+    archRoofDepthLabel: 'Span Z',
+    archRoofAddedToast: 'Smart roof generated',
+
+    archRoomsTitle: 'Auto-Detected Rooms',
+    archNoRoomsHint: 'Connect walls into a closed loop to auto-detect rooms and calculate m² area.',
+    archRoomAreaUnit: 'm²',
+    archRoomFloorColor: 'Room Floor Color',
+    archRoomAutoCeiling: 'Smart Ceiling (Shows in Walkthrough)',
+    archDualWallTitle: 'Dual-Sided Wall Paint (Ext vs Int)',
+    archWallExtColor: 'Exterior Face',
+    archWallIntColor: 'Interior Face',
+    archApplyAllWallsBtn: 'Apply to All Walls on This Floor',
+    archRoomPresetLiving: 'Living Room',
+    archRoomPresetBedroom: 'Bedroom',
+    archRoomPresetKitchen: 'Kitchen',
+    archRoomPresetBath: 'Bathroom',
+    archRoomPresetStudy: 'Study Room',
+    archRoomPresetTerrace: 'Terrace',
+
+    archSunToggleTitle: 'Sun Time & Compass Simulator',
+    archSunTimeLabel: 'Time of Day',
+    archCompassNorthLabel: 'Compass North',
+    archLensSectionTitle: 'Interior Camera Lens',
+    archLensStd: 'Standard 46°',
+    archLensWide: 'Wide 64°',
+    archLensUltra: 'Interior 78°',
+    archSummaryTitle: 'Building Metrics & Blueprint',
+    archTotalAreaLabel: 'Total Room Area',
+    archRoomCountLabel: 'Detected Rooms',
+    archWallTotalLenLabel: 'Total Wall Length',
+    archExportBlueprintBtn: 'Download 2D Blueprint (.PNG)',
+    archBlueprintExportedToast: '2D Blueprint PNG downloaded',
+
+    pointLightCardTitle: 'Real Light Source (Custom Lamp)',
+    pointLightCardDesc: 'Enable so your custom-built lamp object illuminates nearby walls & rooms',
+    pointLightIntensity: 'Light Intensity',
+    pointLightRange: 'Light Reach (m)',
   },
 
   ja: {
@@ -1620,6 +1903,100 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     floorViewGhost: '他階を半透明',
     floorAssignLabel: '所属フロア階層',
     floorMoveSelectionBtn: '現在の階層へ移動',
+
+    archPhaseWalls: '間取り・壁',
+    archPhaseOpenings: 'ドア・階段',
+    archPhaseRoofs: 'スマート屋根',
+    archPhaseFinishing: '部屋・塗装',
+    archPhaseEnv: '太陽・図面',
+    archView2DBtn: '2D 図面',
+    archView3DBtn: '3D 視点',
+    archToolSelect: '選択 / Blender',
+    archToolDrawWall: '壁を引く',
+    archToolMeasure: 'メジャー計測',
+    archDrawWallHint: '始点と終点をタップして壁を作成（Escで連続描画を終了）',
+    archPlaceOpeningHint: '壁をタップするとドアや窓の開口部が自動でくり抜かれます',
+    archMeasureHint: '2点をタップして正確なメートル距離を計測',
+
+    archWallStyleFull: '標準壁',
+    archWallStyleHalf: '腰壁・カウンター',
+    archWallStyleRailing: 'バルコニー手すり',
+    archWallHeightLabel: '壁の高さ',
+    archWallThickLabel: '壁の厚み',
+    archWallLenLabel: 'テンプレート幅',
+    archWallCurveLabel: '曲面カーブ量',
+    archWallAngleSnap: '45°/90° 角度固定',
+    archWallBaseboard: '巾木モールディング',
+    archSpawnWallTemplateBtn: '+ 標準壁テンプレート配置',
+    archWallTemplateSub: '一般的な住宅寸法（高さ3.0m × 幅3.0m × 厚さ15cm）・自在に変更可能',
+    archSelectedWallTitle: '選択中のスマート壁',
+    archBakeToMeshBtn: '自由3Dメッシュへ変換 (Blender編集)',
+    archBakeSuccessToast: '自由編集可能な3Dオブジェクトに変換しました',
+
+    archOpenDoorSingle: '片開きドア',
+    archOpenDoorDouble: '両開きドア',
+    archOpenWinStd: '標準窓',
+    archOpenWinWide: 'ワイド窓',
+    archOpenWinTall: 'パノラマ窓',
+    archOpenArchway: 'アーチ開口',
+    archOpenWidthLabel: '開口幅',
+    archOpenHeightLabel: '開口高さ',
+    archOpenSillLabel: '窓台の高さ',
+    archOpenPosLabel: '壁上の位置',
+    archOpenFlipSwing: '開閉向き反転',
+    archStairSectionTitle: '階段＆上階スラブ自動開口',
+    archStairStraightBtn: '+ 直階段',
+    archStairLShapeBtn: '+ L字階段',
+    archStairAutoCutout: '上階の床を自動でくり抜く',
+    archStairPlacedToast: '階段と上階の吹き抜け開口を配置しました',
+
+    archRoofAutoBtn: '間取りに合わせて自動屋根生成',
+    archRoofCustomBtn: '+ カスタム屋根追加',
+    archRoofGable: '切妻屋根',
+    archRoofHip: '寄棟屋根',
+    archRoofShed: '片流れ屋根',
+    archRoofFlat: '陸屋根(フラット)',
+    archRoofPitchLabel: '屋根勾配',
+    archRoofOverhangLabel: '軒の出',
+    archRoofRidgeAxisLabel: '棟の方向',
+    archRoofWidthLabel: 'X幅',
+    archRoofDepthLabel: 'Z奥行',
+    archRoofAddedToast: 'スマート屋根を生成しました',
+
+    archRoomsTitle: '自動検出された部屋',
+    archNoRoomsHint: '壁をつなげて囲むと、部屋と面積(m²)が自動認識されます。',
+    archRoomAreaUnit: 'm²',
+    archRoomFloorColor: '部屋の床カラー',
+    archRoomAutoCeiling: 'スマート天井（ウォークスルー時に自動表示）',
+    archDualWallTitle: '壁の両面ペイント（外壁・内壁）',
+    archWallExtColor: '外側（外壁カラー）',
+    archWallIntColor: '内側（室内壁カラー）',
+    archApplyAllWallsBtn: 'この階の全壁に適用',
+    archRoomPresetLiving: 'リビング',
+    archRoomPresetBedroom: '寝室',
+    archRoomPresetKitchen: 'キッチン',
+    archRoomPresetBath: 'バス・洗面',
+    archRoomPresetStudy: '書斎',
+    archRoomPresetTerrace: 'テラス',
+
+    archSunToggleTitle: '太陽時刻＆方位シミュレーター',
+    archSunTimeLabel: '太陽の時刻',
+    archCompassNorthLabel: '北の方位角',
+    archLensSectionTitle: '室内カメラレンズ画角',
+    archLensStd: '標準 46°',
+    archLensWide: '広角 64°',
+    archLensUltra: '超広角 78°',
+    archSummaryTitle: '建築データ＆図面出力',
+    archTotalAreaLabel: '延床面積（部屋合計）',
+    archRoomCountLabel: '部屋数',
+    archWallTotalLenLabel: '壁の総延長',
+    archExportBlueprintBtn: '2D間取り図をダウンロード (.PNG)',
+    archBlueprintExportedToast: '2D間取り図(PNG)を保存しました',
+
+    pointLightCardTitle: 'リアル光源化（自作照明ライト）',
+    pointLightCardDesc: 'ONにすると自作の照明オブジェクトから周囲の部屋へ光が灯ります',
+    pointLightIntensity: '光の強さ',
+    pointLightRange: '光の届く距離(m)',
   },
 };
 
