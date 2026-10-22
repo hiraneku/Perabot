@@ -234,6 +234,19 @@ export interface SceneObjectData {
   groupId?: string | null;
   groupName?: string;
   archRole?: ArchitecturalRole;
+  modelAssetId?: string;
+  modelFormat?: string;
+  modelThumbUrl?: string;
+  useCustomMaterial?: boolean;
+}
+
+export interface ImportedModelBlobRecord {
+  id: string;
+  name: string;
+  format: string;
+  thumbDataUrl: string;
+  glbBuffer: ArrayBuffer;
+  createdAt: number;
 }
 
 export interface SerializedProjectFile {
@@ -248,6 +261,10 @@ export interface SerializedProjectFile {
   snapSettings?: SnapSettings;
   surfaceSettings?: SurfaceSettings;
   lightingMood?: LightingMood;
+  embeddedModels?: Record<
+    string,
+    { name: string; format: string; thumbDataUrl: string; base64Glb: string }
+  >;
 }
 
 export interface SavedProjectRecord {
@@ -276,6 +293,10 @@ export interface CustomAssetPart {
   flatShading: boolean;
   subdivision: ObjectSubdivisionSettings;
   archRole?: ArchitecturalRole;
+  modelAssetId?: string;
+  modelFormat?: string;
+  modelThumbUrl?: string;
+  useCustomMaterial?: boolean;
 }
 
 export interface CustomAssetRecord {

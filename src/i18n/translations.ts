@@ -63,6 +63,10 @@ export interface StudioStrings {
   walkthrough: string;
   exitWalkthrough: string;
   walkHint: string;
+  import3DBtn: string;
+  import3DHint: string;
+  importing3DToast: string;
+  restoreOriginalMaterial: string;
   exportBtn: string;
   clearScene: string;
   help: string;
@@ -129,7 +133,7 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     modeModelingBtn: '+ Proyek Baru',
     modeHouseTitle: 'Buat Rumah',
     modeHouseDesc:
-      'Bangun rumah instan memakai preset dinding, lantai, atap, pintu, jendela, tangga, sofa, kasur & lampu.',
+      'Kanvas arsitektur luas untuk merancang rumah dari nol memakai Basic Shapes, Asetku, Impor 3D (.glb/dll), Intip Ruang & Jalan Kaki.',
     modeHouseBtn: '+ Mulai Buat Rumah',
     openProjectFile: 'Buka File (.perabot)',
     globalSettings: 'Pengaturan',
@@ -181,6 +185,10 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     walkthrough: 'Jalan Kaki',
     exitWalkthrough: 'Keluar Jalan Kaki',
     walkHint: 'Gunakan joystick kiri untuk jalan & geser layar kanan untuk menengok (WASD di PC)',
+    import3DBtn: 'Impor 3D',
+    import3DHint: 'Impor satu atau banyak file 3D (.glb, .gltf, .obj, .stl, .ply, .fbx) ke domain',
+    importing3DToast: 'Memuat file 3D ke dalam domain...',
+    restoreOriginalMaterial: 'Kembalikan Tekstur / Material Asli',
     exportBtn: 'Ekspor',
     clearScene: 'Bersihkan Kanvas',
     help: 'Panduan',
@@ -243,7 +251,7 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     modeModelingBtn: '+ New Project',
     modeHouseTitle: 'House Builder',
     modeHouseDesc:
-      'Build complete homes fast with ready-to-place walls, floors, roofs, doors, windows, stairs, sofas, beds & lamps.',
+      'Spacious architectural domain to craft homes using Basic Shapes, Custom Assets, 3D Model Import (.glb & more), Peek Inside & Walkthrough.',
     modeHouseBtn: '+ Build a House',
     openProjectFile: 'Open File (.perabot)',
     globalSettings: 'Settings',
@@ -295,6 +303,10 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     walkthrough: 'Walkthrough',
     exitWalkthrough: 'Exit Walk',
     walkHint: 'Use left joystick to walk & drag screen to look around (WASD on desktop)',
+    import3DBtn: 'Import 3D',
+    import3DHint: 'Import one or multiple 3D files (.glb, .gltf, .obj, .stl, .ply, .fbx) into domain',
+    importing3DToast: 'Loading 3D files into domain...',
+    restoreOriginalMaterial: 'Restore Original Texture / Material',
     exportBtn: 'Export',
     clearScene: 'Clear Scene',
     help: 'Guide',
@@ -357,7 +369,7 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     modeModelingBtn: '+ 新規作成',
     modeHouseTitle: 'ハウス作成',
     modeHouseDesc:
-      '壁・床・屋根・ドア・窓・階段・ソファ・ベッド・照明などの豊富なプリセットで手軽に家を組み立てます。',
+      '広々とした建築ドメインで、基本シェイプ・マイアセット・3Dファイル読み込み(.glb等)・室内表示・ウォークスルーを使って家を設計します。',
     modeHouseBtn: '+ 家をつくる',
     openProjectFile: 'ファイルを開く (.perabot)',
     globalSettings: '設定',
@@ -409,6 +421,10 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     walkthrough: 'ウォークスルー',
     exitWalkthrough: '通常視点に戻る',
     walkHint: '左スティックで移動・画面ドラッグで見回す（PCはWASD対応）',
+    import3DBtn: '3D読込',
+    import3DHint: '1つまたは複数の3Dファイル (.glb, .gltf, .obj, .stl, .ply, .fbx) を配置',
+    importing3DToast: '3Dファイルをドメインに読み込み中...',
+    restoreOriginalMaterial: '元のテクスチャ・マテリアルに戻す',
     exportBtn: '書き出し',
     clearScene: '全消去',
     help: 'ガイド',

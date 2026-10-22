@@ -149,6 +149,7 @@ interface InspectorPanelProps {
   onDeleteObject: (id: string) => void;
   onDuplicateSelected: () => void;
   onDropToFloor: () => void;
+  onResetImportedMaterial?: (id: string) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -177,6 +178,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onDeleteObject,
   onDuplicateSelected,
   onDropToFloor,
+  onResetImportedMaterial,
 }) => {
   const t = TRANSLATIONS[language];
   const [mobileSection, setMobileSection] = useState<'inspector' | 'outliner'>(
@@ -280,8 +282,28 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         className="outliner-color-dot"
                         style={{ backgroundColor: obj.color }}
                       />
-                      {renderKindIcon(obj.kind)}
+                      {obj.modelAssetId ? (
+                        obj.modelThumbUrl ? (
+                          <img
+                            src={obj.modelThumbUrl}
+                            alt=""
+                            width={18}
+                            height={18}
+                            className="primitive-3d-thumb"
+                            style={{ width: 18, height: 18 }}
+                          />
+                        ) : (
+                          <Boxes size={15} />
+                        )
+                      ) : (
+                        renderKindIcon(obj.kind)
+                      )}
                       <span className="outliner-name">{obj.name}</span>
+                      {obj.modelFormat && (
+                        <span className="subdiv-mini-badge">
+                          {obj.modelFormat}
+                        </span>
+                      )}
                       {obj.subdivision?.level > 0 && (
                         <span className="subdiv-mini-badge">
                           S{obj.subdivision.level}
@@ -361,22 +383,36 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
           {/* TAB 2: WARNA RGB & MATERIAL */}
           {inspectorSubTab === 'color' && (
-            <ColorWheelPicker
-              color={displayColor}
-              roughness={displayRoughness}
-              metalness={displayMetalness}
-              opacity={displayOpacity}
-              emissive={displayEmissive}
-              emissiveIntensity={displayEmissiveInt}
-              flatShading={displayFlatShading}
-              paintMode={paintMode}
-              hasSelection={Boolean(selectedObject)}
-              onUpdateMaterial={(patch, commit) =>
-                onUpdateMaterial(selectedObject?.id ?? null, patch, commit)
-              }
-              onChangePaintMode={onChangePaintMode}
-              onCommitHistory={onCommitHistory}
-            />
+            <>
+              {selectedObject?.modelAssetId &&
+                selectedObject.useCustomMaterial &&
+                onResetImportedMaterial && (
+                  <button
+                    type="button"
+                    className="restore-orig-mat-btn"
+                    onClick={() => onResetImportedMaterial(selectedObject.id)}
+                  >
+                    <RotateCw size={13} />
+                    <span>{t.restoreOriginalMaterial}</span>
+                  </button>
+                )}
+              <ColorWheelPicker
+                color={displayColor}
+                roughness={displayRoughness}
+                metalness={displayMetalness}
+                opacity={displayOpacity}
+                emissive={displayEmissive}
+                emissiveIntensity={displayEmissiveInt}
+                flatShading={displayFlatShading}
+                paintMode={paintMode}
+                hasSelection={Boolean(selectedObject)}
+                onUpdateMaterial={(patch, commit) =>
+                  onUpdateMaterial(selectedObject?.id ?? null, patch, commit)
+                }
+                onChangePaintMode={onChangePaintMode}
+                onCommitHistory={onCommitHistory}
+              />
+            </>
           )}
 
           {/* TAB 1: MODERN TRANSFORM STUDIO */}
@@ -482,7 +518,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 <div className="transform-identity-card">
                   <div className="transform-identity-top">
                     <div className="transform-thumb-box">
-                      <PrimitiveShapePreview kind={selectedObject.kind} size={34} />
+                      {selectedObject.modelAssetId ? (
+                        selectedObject.modelThumbUrl ? (
+                          <img
+                            src={selectedObject.modelThumbUrl}
+                            alt=""
+                            width={34}
+                            height={34}
+                            className="primitive-3d-thumb"
+                            style={{ width: 34, height: 34 }}
+                          />
+                        ) : (
+                          <Boxes size={22} />
+                        )
+                      ) : (
+                        <PrimitiveShapePreview kind={selectedObject.kind} size={34} />
+                      )}
                       <span
                         className="transform-color-pip"
                         style={{ backgroundColor: selectedObject.color }}
@@ -490,7 +541,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     </div>
                     <div className="transform-name-col">
                       <span className="transform-kind-caption">
-                        {PRIMITIVE_META[selectedObject.kind]?.label ?? selectedObject.kind}
+                        {selectedObject.modelAssetId
+                          ? `Model 3D • .${selectedObject.modelFormat ?? 'GLB'}`
+                          : PRIMITIVE_META[selectedObject.kind]?.label ??
+                            selectedObject.kind}
                       </span>
                       <input
                         id="obj-name-input"

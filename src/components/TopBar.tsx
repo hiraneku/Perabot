@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Undo2,
   Redo2,
@@ -6,6 +7,7 @@ import {
   Grid3x3,
   Focus,
   Download,
+  FileUp,
   PanelRight,
   HelpCircle,
   Trash2,
@@ -24,6 +26,7 @@ import {
   Sun,
   Sunset,
   Moon,
+  Loader2,
 } from 'lucide-react';
 import { CameraPresetType } from '../engine/viewportHelpers';
 import { TRANSLATIONS } from '../i18n/translations';
@@ -41,11 +44,97 @@ import {
   TerrainPreset,
 } from '../types/studio';
 
+interface PortalDropdownProps {
+  open: boolean;
+  anchorRef: React.RefObject<HTMLElement | null>;
+  onClose: () => void;
+  className?: string;
+  align?: 'left' | 'right';
+  children: React.ReactNode;
+}
+
+const PortalDropdown: React.FC<PortalDropdownProps> = ({
+  open,
+  anchorRef,
+  onClose,
+  className = '',
+  align = 'left',
+  children,
+}) => {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number }>({
+    top: 58,
+    left: 12,
+  });
+
+  useLayoutEffect(() => {
+    if (!open) return;
+
+    const updatePosition = () => {
+      const anchor = anchorRef.current;
+      const menu = menuRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const menuWidth = menu?.offsetWidth || 280;
+      const vw = window.innerWidth;
+      const desiredLeft =
+        align === 'right' ? rect.right - menuWidth : rect.left;
+      const clampedLeft = Math.max(8, Math.min(vw - menuWidth - 8, desiredLeft));
+      setCoords({
+        top: Math.max(52, rect.bottom + 8),
+        left: clampedLeft,
+      });
+    };
+
+    updatePosition();
+    const raf = requestAnimationFrame(updatePosition);
+    window.addEventListener('resize', updatePosition);
+    window.addEventListener('scroll', updatePosition, true);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', updatePosition);
+      window.removeEventListener('scroll', updatePosition, true);
+    };
+  }, [open, align, anchorRef]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (anchorRef.current?.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      onClose();
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    return () => window.removeEventListener('pointerdown', handlePointerDown);
+  }, [open, anchorRef, onClose]);
+
+  if (!open || typeof document === 'undefined') return null;
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      className={`dropdown-menu portal-dropdown-menu ${className}`}
+      style={{
+        position: 'fixed',
+        top: `${coords.top}px`,
+        left: `${coords.left}px`,
+        right: 'auto',
+      }}
+    >
+      {children}
+    </div>,
+    document.body
+  );
+};
+
 interface TopBarProps {
   language: AppLanguage;
   studioMode: StudioMode;
   projectName: string;
   isSavingProject: boolean;
+  isImporting3D?: boolean;
   lightingMood: LightingMood;
   interiorPeek: boolean;
   walkthroughActive: boolean;
@@ -60,6 +149,7 @@ interface TopBarProps {
   objectCount: number;
   onGoHome: () => void;
   onRenameProject: (name: string) => void;
+  onTriggerImport3D: () => void;
   onCycleLightingMood: () => void;
   onToggleInteriorPeek: () => void;
   onToggleWalkthrough: () => void;
@@ -84,6 +174,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   studioMode,
   projectName,
   isSavingProject,
+  isImporting3D = false,
   lightingMood,
   interiorPeek,
   walkthroughActive,
@@ -98,6 +189,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   objectCount,
   onGoHome,
   onRenameProject,
+  onTriggerImport3D,
   onCycleLightingMood,
   onToggleInteriorPeek,
   onToggleWalkthrough,
@@ -123,11 +215,10 @@ export const TopBar: React.FC<TopBarProps> = ({
   useEffect(() => {
     setTitleDraft(projectName);
   }, [projectName]);
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
-  const [snapMenuOpen, setSnapMenuOpen] = useState(false);
-  const [surfaceMenuOpen, setSurfaceMenuOpen] = useState(false);
-  const [gridMenuOpen, setGridMenuOpen] = useState(false);
-  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+
+  const [openMenu, setOpenMenu] = useState<
+    null | 'snap' | 'surface' | 'grid' | 'view' | 'export'
+  >(null);
 
   const exportRef = useRef<HTMLDivElement>(null);
   const snapRef = useRef<HTMLDivElement>(null);
@@ -135,27 +226,9 @@ export const TopBar: React.FC<TopBarProps> = ({
   const gridRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (exportRef.current && !exportRef.current.contains(e.target as Node)) {
-        setExportMenuOpen(false);
-      }
-      if (snapRef.current && !snapRef.current.contains(e.target as Node)) {
-        setSnapMenuOpen(false);
-      }
-      if (surfaceRef.current && !surfaceRef.current.contains(e.target as Node)) {
-        setSurfaceMenuOpen(false);
-      }
-      if (gridRef.current && !gridRef.current.contains(e.target as Node)) {
-        setGridMenuOpen(false);
-      }
-      if (viewRef.current && !viewRef.current.contains(e.target as Node)) {
-        setViewMenuOpen(false);
-      }
-    };
-    window.addEventListener('pointerdown', handleClickOutside);
-    return () => window.removeEventListener('pointerdown', handleClickOutside);
-  }, []);
+  const toggleMenu = (id: 'snap' | 'surface' | 'grid' | 'view' | 'export') => {
+    setOpenMenu((prev) => (prev === id ? null : id));
+  };
 
   const activeSnapCount = [
     snapSettings.objectMagnet,
@@ -165,7 +238,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <header className="topbar">
-      {/* Left: Home + Project Title + Undo/Redo */}
+      {/* Pinned Left: Home + Compact Project Title + Undo/Redo */}
       <div className="topbar-group topbar-left">
         <button
           type="button"
@@ -174,7 +247,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           title={t.backHome}
         >
           <Home size={15} />
-          <span className="hide-xs">{t.backHome}</span>
+          <span className="hide-md">{t.backHome}</span>
         </button>
 
         <div className="project-title-pill">
@@ -216,11 +289,13 @@ export const TopBar: React.FC<TopBarProps> = ({
             </button>
           )}
           <span className="project-save-dot" title={t.savedAuto}>
-            {isSavingProject ? '•••' : '✓'}
+            {isSavingProject ? (
+              <Loader2 size={11} className="spin-icon" />
+            ) : (
+              <Check size={11} />
+            )}
           </span>
         </div>
-
-        <div className="topbar-divider hide-compact" />
 
         <div className="btn-cluster">
           <button
@@ -231,7 +306,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             title="Undo (Ctrl+Z)"
             aria-label="Undo"
           >
-            <Undo2 size={17} />
+            <Undo2 size={16} />
           </button>
           <button
             type="button"
@@ -241,41 +316,62 @@ export const TopBar: React.FC<TopBarProps> = ({
             title="Redo (Ctrl+Y)"
             aria-label="Redo"
           >
-            <Redo2 size={17} />
+            <Redo2 size={16} />
           </button>
         </div>
       </div>
 
-      {/* Center: Snap, Surface Alignment, World/Terrain Grid, Focus, Camera */}
-      <div className="topbar-group topbar-center">
-        {/* 1. Smart Snapping Split Button */}
-        <div className="dropdown-wrap" ref={snapRef}>
-          <div className="split-btn">
-            <button
-              type="button"
-              className={`chip-btn ${snapSettings.enabled ? 'active' : ''}`}
-              onClick={() => onUpdateSnap({ enabled: !snapSettings.enabled })}
-              title="Aktifkan / Matikan Sistem Snap Pintar"
-            >
-              <Magnet size={15} />
-              <span className="hide-xs">Snap</span>
-              {snapSettings.enabled && (
-                <span className="snap-badge">{activeSnapCount}</span>
-              )}
-            </button>
-            <button
-              type="button"
-              className={`chip-caret ${snapSettings.enabled ? 'active' : ''}`}
-              onClick={() => setSnapMenuOpen((v) => !v)}
-              aria-label="Pengaturan Snap Pintar"
-              title="Atur Magnet Blok, Garis Sejajar & Snap Grid"
-            >
-              <ChevronDown size={13} />
-            </button>
-          </div>
+      {/* Scrollable Middle Track: Future-proof horizontal scroll container so new mechanics NEVER clip or push right buttons off-screen! */}
+      <div className="topbar-center-scroll">
+        <div className="topbar-center-inner">
+          {/* Import 3D Model (.glb, .gltf, .obj, .stl, .ply, .fbx) */}
+          <button
+            type="button"
+            className="chip-btn import-3d-chip"
+            onClick={onTriggerImport3D}
+            disabled={isImporting3D}
+            title={t.import3DHint}
+          >
+            {isImporting3D ? (
+              <Loader2 size={15} className="spin-icon" />
+            ) : (
+              <FileUp size={15} />
+            )}
+            <span>{t.import3DBtn}</span>
+          </button>
 
-          {snapMenuOpen && (
-            <div className="dropdown-menu snap-popover">
+          {/* 1. Smart Snapping Split Button */}
+          <div className="dropdown-wrap" ref={snapRef}>
+            <div className="split-btn">
+              <button
+                type="button"
+                className={`chip-btn ${snapSettings.enabled ? 'active' : ''}`}
+                onClick={() => onUpdateSnap({ enabled: !snapSettings.enabled })}
+                title="Aktifkan / Matikan Sistem Snap Pintar"
+              >
+                <Magnet size={15} />
+                <span>{t.snap}</span>
+                {snapSettings.enabled && (
+                  <span className="snap-badge">{activeSnapCount}</span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={`chip-caret ${snapSettings.enabled ? 'active' : ''}`}
+                onClick={() => toggleMenu('snap')}
+                aria-label="Pengaturan Snap Pintar"
+                title="Atur Magnet Blok, Garis Sejajar & Snap Grid"
+              >
+                <ChevronDown size={13} />
+              </button>
+            </div>
+
+            <PortalDropdown
+              open={openMenu === 'snap'}
+              anchorRef={snapRef}
+              onClose={() => setOpenMenu(null)}
+              className="snap-popover"
+            >
               <div className="snap-popover-head">
                 <span>Sistem Snap Pintar</span>
                 <button
@@ -392,39 +488,42 @@ export const TopBar: React.FC<TopBarProps> = ({
                   </div>
                 )}
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* 2. Standalone Surface Alignment & Terrain Conforming Split Button */}
-        <div className="dropdown-wrap" ref={surfaceRef}>
-          <div className="split-btn">
-            <button
-              type="button"
-              className={`chip-btn ${surfaceSettings.enabled ? 'active-emerald' : ''}`}
-              onClick={() =>
-                onUpdateSurface({ enabled: !surfaceSettings.enabled }, false)
-              }
-              title="Aktifkan / Matikan Fitur Surface Alignment & Terrain Conforming (T)"
-            >
-              <Layers size={15} />
-              <span className="hide-xs">Surface</span>
-            </button>
-            <button
-              type="button"
-              className={`chip-caret ${
-                surfaceSettings.enabled ? 'active-emerald' : ''
-              }`}
-              onClick={() => setSurfaceMenuOpen((v) => !v)}
-              aria-label="Pengaturan Surface Alignment & Terrain Conforming"
-              title="Atur Align to Surface Normal, Sisi Tempel & Terrain Conforming"
-            >
-              <ChevronDown size={13} />
-            </button>
+            </PortalDropdown>
           </div>
 
-          {surfaceMenuOpen && (
-            <div className="dropdown-menu surface-popover">
+          {/* 2. Surface Alignment Split Button */}
+          <div className="dropdown-wrap" ref={surfaceRef}>
+            <div className="split-btn">
+              <button
+                type="button"
+                className={`chip-btn ${surfaceSettings.enabled ? 'active-emerald' : ''}`}
+                onClick={() =>
+                  onUpdateSurface({ enabled: !surfaceSettings.enabled }, false)
+                }
+                title="Aktifkan / Matikan Fitur Surface Alignment & Terrain Conforming (T)"
+              >
+                <Layers size={15} />
+                <span>{t.surface}</span>
+              </button>
+              <button
+                type="button"
+                className={`chip-caret ${
+                  surfaceSettings.enabled ? 'active-emerald' : ''
+                }`}
+                onClick={() => toggleMenu('surface')}
+                aria-label="Pengaturan Surface Alignment & Terrain Conforming"
+                title="Atur Align to Surface Normal, Sisi Tempel & Terrain Conforming"
+              >
+                <ChevronDown size={13} />
+              </button>
+            </div>
+
+            <PortalDropdown
+              open={openMenu === 'surface'}
+              anchorRef={surfaceRef}
+              onClose={() => setOpenMenu(null)}
+              className="surface-popover"
+            >
               <div className="snap-popover-head">
                 <span>Surface Alignment & Terrain</span>
                 <button
@@ -440,7 +539,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </button>
               </div>
 
-              {/* Orientation / Conform Mode */}
               <div className="snap-subblock">
                 <div className="grid-section-title">Mode Orientasi Permukaan</div>
                 <div className="surface-mode-cards">
@@ -492,7 +590,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </div>
               </div>
 
-              {/* Attach Face Selector (for Align to Normal) */}
               {surfaceSettings.conformMode === 'align-normal' && (
                 <div className="snap-subblock">
                   <div className="grid-section-title">
@@ -527,7 +624,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </div>
               )}
 
-              {/* Interaction Toggles */}
               <div className="snap-subblock">
                 <button
                   type="button"
@@ -576,7 +672,6 @@ export const TopBar: React.FC<TopBarProps> = ({
                 </button>
               </div>
 
-              {/* Spin around normal & Normal offset */}
               <div className="snap-subblock">
                 <div className="grid-row-between">
                   <span className="grid-section-title">
@@ -646,63 +741,69 @@ export const TopBar: React.FC<TopBarProps> = ({
                 type="button"
                 className="surface-conform-cta"
                 disabled={!hasSelection}
-                onClick={onConformNow}
+                onClick={() => {
+                  onConformNow();
+                  setOpenMenu(null);
+                }}
               >
                 <ArrowDownToLine size={15} />
                 <span>Tempel Objek Terpilih ke Bawah Sekarang</span>
               </button>
-            </div>
-          )}
-        </div>
-
-        {/* 3. Advanced World / Tile / Terrain Grid Split Button */}
-        <div className="dropdown-wrap" ref={gridRef}>
-          <div className="split-btn">
-            <button
-              type="button"
-              className={`chip-btn ${
-                gridSettings.visible
-                  ? gridSettings.style === 'terrain'
-                    ? 'active-emerald'
-                    : 'active-subtle'
-                  : ''
-              }`}
-              onClick={() => onUpdateGrid({ visible: !gridSettings.visible })}
-              title="Tampilkan / Sembunyikan World Grid & Terrain"
-            >
-              {gridSettings.style === 'terrain' ? (
-                <Mountain size={15} />
-              ) : (
-                <Grid3x3 size={15} />
-              )}
-              <span className="hide-sm">
-                {gridSettings.style === 'terrain'
-                  ? 'Terrain'
-                  : gridSettings.style === 'tile'
-                  ? 'Tile'
-                  : 'Grid'}
-              </span>
-              <span className="grid-step-tag hide-md">{gridSettings.spacing}m</span>
-            </button>
-            <button
-              type="button"
-              className={`chip-caret ${
-                gridSettings.visible
-                  ? gridSettings.style === 'terrain'
-                    ? 'active-emerald'
-                    : 'active-subtle'
-                  : ''
-              }`}
-              onClick={() => setGridMenuOpen((v) => !v)}
-              aria-label="Pengaturan World Grid, Tile Grid & Terrain Grid"
-              title="Atur Gaya Grid, Spasi Petak, Tile & 3D Terrain"
-            >
-              <ChevronDown size={13} />
-            </button>
+            </PortalDropdown>
           </div>
 
-          {gridMenuOpen && (
-            <div className="dropdown-menu grid-popover">
+          {/* 3. World / Tile / Terrain Grid Split Button */}
+          <div className="dropdown-wrap" ref={gridRef}>
+            <div className="split-btn">
+              <button
+                type="button"
+                className={`chip-btn ${
+                  gridSettings.visible
+                    ? gridSettings.style === 'terrain'
+                      ? 'active-emerald'
+                      : 'active-subtle'
+                    : ''
+                }`}
+                onClick={() => onUpdateGrid({ visible: !gridSettings.visible })}
+                title="Tampilkan / Sembunyikan World Grid & Terrain"
+              >
+                {gridSettings.style === 'terrain' ? (
+                  <Mountain size={15} />
+                ) : (
+                  <Grid3x3 size={15} />
+                )}
+                <span>
+                  {gridSettings.style === 'terrain'
+                    ? 'Terrain'
+                    : gridSettings.style === 'tile'
+                    ? 'Tile'
+                    : t.grid}
+                </span>
+                <span className="grid-step-tag">{gridSettings.spacing}m</span>
+              </button>
+              <button
+                type="button"
+                className={`chip-caret ${
+                  gridSettings.visible
+                    ? gridSettings.style === 'terrain'
+                      ? 'active-emerald'
+                      : 'active-subtle'
+                    : ''
+                }`}
+                onClick={() => toggleMenu('grid')}
+                aria-label="Pengaturan World Grid, Tile Grid & Terrain Grid"
+                title="Atur Gaya Grid, Spasi Petak, Tile & 3D Terrain"
+              >
+                <ChevronDown size={13} />
+              </button>
+            </div>
+
+            <PortalDropdown
+              open={openMenu === 'grid'}
+              anchorRef={gridRef}
+              onClose={() => setOpenMenu(null)}
+              className="grid-popover"
+            >
               <div className="snap-popover-head">
                 <span>World, Tile & Terrain Grid</span>
                 <button
@@ -753,7 +854,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                     onClick={() => onUpdateGrid({ syncSnap: !gridSettings.syncSnap })}
                     title="Otomatis samakan langkah Snap Grid dengan spasi petak"
                   >
-                    {gridSettings.syncSnap ? '✓ Sinkron Snap' : 'Sinkron Snap'}
+                    {gridSettings.syncSnap && <Check size={11} />}
+                    <span>Sinkron Snap</span>
                   </button>
                 </div>
 
@@ -913,7 +1015,8 @@ export const TopBar: React.FC<TopBarProps> = ({
                     className={`mini-link-pill ${gridSettings.showAxes ? 'active' : ''}`}
                     onClick={() => onUpdateGrid({ showAxes: !gridSettings.showAxes })}
                   >
-                    {gridSettings.showAxes ? '✓ Sumbu X/Z Aktif' : 'Sumbu X/Z Mati'}
+                    {gridSettings.showAxes && <Check size={11} />}
+                    <span>{gridSettings.showAxes ? 'Sumbu X/Z Aktif' : 'Sumbu X/Z Mati'}</span>
                   </button>
 
                   <label className="opacity-inline">
@@ -932,41 +1035,67 @@ export const TopBar: React.FC<TopBarProps> = ({
                   </label>
                 </div>
               </div>
-            </div>
-          )}
-        </div>
+            </PortalDropdown>
+          </div>
 
-        <button
-          type="button"
-          className="chip-btn hide-xs"
-          onClick={onFocusCamera}
-          title="Fokus ke Objek / Reset Kamera (F)"
-        >
-          <Focus size={15} />
-          <span className="hide-md">Fokus</span>
-        </button>
+          {/* Interior Peek ("Intip Ruang") */}
+          <button
+            type="button"
+            className={`chip-btn ${interiorPeek ? 'active' : ''}`}
+            onClick={onToggleInteriorPeek}
+            title={t.peekInterior}
+          >
+            <Eye size={15} />
+            <span>{t.peekInterior}</span>
+          </button>
 
-        <div className="dropdown-wrap hide-sm" ref={viewRef}>
+          {/* First-Person Walkthrough ("Jalan Kaki") */}
+          <button
+            type="button"
+            className={`chip-btn ${walkthroughActive ? 'active' : ''}`}
+            onClick={onToggleWalkthrough}
+            title={t.walkthrough}
+          >
+            <Footprints size={15} />
+            <span>{t.walkthrough}</span>
+          </button>
+
+          {/* Focus Camera */}
           <button
             type="button"
             className="chip-btn"
-            onClick={() => setViewMenuOpen((v) => !v)}
-            title="Sudut Pandang Kamera"
+            onClick={onFocusCamera}
+            title="Fokus ke Objek / Reset Kamera (F)"
           >
-            <Camera size={15} />
-            <span className="hide-md">Sudut</span>
-            <ChevronDown size={13} />
+            <Focus size={15} />
+            <span>Fokus</span>
           </button>
 
-          {viewMenuOpen && (
-            <div className="dropdown-menu">
+          {/* Quick Camera Views */}
+          <div className="dropdown-wrap" ref={viewRef}>
+            <button
+              type="button"
+              className="chip-btn"
+              onClick={() => toggleMenu('view')}
+              title="Sudut Pandang Kamera"
+            >
+              <Camera size={15} />
+              <span>Sudut</span>
+              <ChevronDown size={13} />
+            </button>
+
+            <PortalDropdown
+              open={openMenu === 'view'}
+              anchorRef={viewRef}
+              onClose={() => setOpenMenu(null)}
+            >
               <div className="dropdown-label">Kamera Cepat</div>
               <button
                 type="button"
                 className="dropdown-item"
                 onClick={() => {
                   onCameraPreset('perspective');
-                  setViewMenuOpen(false);
+                  setOpenMenu(null);
                 }}
               >
                 <span>Perspektif 3D</span>
@@ -977,7 +1106,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 className="dropdown-item"
                 onClick={() => {
                   onCameraPreset('front');
-                  setViewMenuOpen(false);
+                  setOpenMenu(null);
                 }}
               >
                 <span>Tampak Depan (Z)</span>
@@ -988,7 +1117,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 className="dropdown-item"
                 onClick={() => {
                   onCameraPreset('right');
-                  setViewMenuOpen(false);
+                  setOpenMenu(null);
                 }}
               >
                 <span>Tampak Samping (X)</span>
@@ -999,63 +1128,102 @@ export const TopBar: React.FC<TopBarProps> = ({
                 className="dropdown-item"
                 onClick={() => {
                   onCameraPreset('top');
-                  setViewMenuOpen(false);
+                  setOpenMenu(null);
                 }}
               >
                 <span>Tampak Atas (Y)</span>
                 <kbd>7</kbd>
               </button>
-            </div>
+            </PortalDropdown>
+          </div>
+
+          {/* Lighting Mood Cycle */}
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={onCycleLightingMood}
+            title={
+              lightingMood === 'sunset'
+                ? t.moodSunset
+                : lightingMood === 'night'
+                ? t.moodNight
+                : t.moodMorning
+            }
+          >
+            {lightingMood === 'sunset' ? (
+              <Sunset size={16} />
+            ) : lightingMood === 'night' ? (
+              <Moon size={16} />
+            ) : (
+              <Sun size={16} />
+            )}
+          </button>
+
+          {objectCount > 0 && (
+            <button
+              type="button"
+              className="icon-btn danger-hover"
+              onClick={onClearScene}
+              title={t.clearScene}
+              aria-label={t.clearScene}
+            >
+              <Trash2 size={16} />
+            </button>
           )}
         </div>
-
-        {/* Interior Peek ("Intip Ruang") */}
-        <button
-          type="button"
-          className={`chip-btn ${interiorPeek ? 'active' : ''}`}
-          onClick={onToggleInteriorPeek}
-          title={t.peekInterior}
-        >
-          <Eye size={15} />
-          <span className="hide-md">{t.peekInterior}</span>
-        </button>
-
-        {/* First-Person Walkthrough ("Jalan Kaki") */}
-        <button
-          type="button"
-          className={`chip-btn ${walkthroughActive ? 'active' : ''}`}
-          onClick={onToggleWalkthrough}
-          title={t.walkthrough}
-        >
-          <Footprints size={15} />
-          <span className="hide-md">{t.walkthrough}</span>
-        </button>
-
-        {/* Lighting Mood Cycle */}
-        <button
-          type="button"
-          className="icon-btn"
-          onClick={onCycleLightingMood}
-          title={
-            lightingMood === 'sunset'
-              ? t.moodSunset
-              : lightingMood === 'night'
-              ? t.moodNight
-              : t.moodMorning
-          }
-        >
-          {lightingMood === 'sunset' ? (
-            <Sunset size={16} />
-          ) : lightingMood === 'night' ? (
-            <Moon size={16} />
-          ) : (
-            <Sun size={16} />
-          )}
-        </button>
       </div>
 
-      {/* Right: Settings, Fullscreen, Clear, Help, Export, Toggle Right Sidebar */}
+      {/* Pinned Right: Compact Export + Settings + Fullscreen + Help + Sidebar */}
       <div className="topbar-group topbar-right">
+        <div className="dropdown-wrap" ref={exportRef}>
+          <button
+            type="button"
+            className="primary-btn export-btn"
+            onClick={() => toggleMenu('export')}
+            disabled={objectCount === 0}
+            title="Export 3D (.glb / .gltf)"
+          >
+            <Download size={15} />
+            <span className="hide-sm">{t.exportBtn}</span>
+            <ChevronDown size={12} />
+          </button>
+
+          <PortalDropdown
+            open={openMenu === 'export'}
+            anchorRef={exportRef}
+            onClose={() => setOpenMenu(null)}
+            align="right"
+          >
+            <div className="dropdown-label">Format File 3D</div>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                onExport('glb');
+                setOpenMenu(null);
+              }}
+            >
+              <div>
+                <strong>Ekspor .GLB</strong>
+                <div className="dropdown-sub">Biner tunggal (Blender, Godot, Unity)</div>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                onExport('gltf');
+                setOpenMenu(null);
+              }}
+            >
+              <div>
+                <strong>Ekspor .GLTF</strong>
+                <div className="dropdown-sub">Format JSON standar glTF 2.0</div>
+              </div>
+            </button>
+          </PortalDropdown>
+        </div>
+
         <button
           type="button"
           className="icon-btn"
@@ -1063,7 +1231,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           title={t.settingsTitle}
           aria-label={t.settingsTitle}
         >
-          <Settings size={17} />
+          <Settings size={16} />
         </button>
 
         <button
@@ -1073,85 +1241,27 @@ export const TopBar: React.FC<TopBarProps> = ({
           title="Fullscreen"
           aria-label="Fullscreen"
         >
-          {isFullscreen ? <Minimize size={17} /> : <Maximize size={17} />}
+          {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
         </button>
-
-        {objectCount > 0 && (
-          <button
-            type="button"
-            className="icon-btn danger-hover hide-compact"
-            onClick={onClearScene}
-            title={t.clearScene}
-            aria-label={t.clearScene}
-          >
-            <Trash2 size={16} />
-          </button>
-        )}
 
         <button
           type="button"
-          className="icon-btn"
+          className="icon-btn hide-xs"
           onClick={onOpenHelp}
           title={t.help}
           aria-label={t.help}
         >
-          <HelpCircle size={17} />
+          <HelpCircle size={16} />
         </button>
-
-        <div className="dropdown-wrap" ref={exportRef}>
-          <button
-            type="button"
-            className="primary-btn export-btn"
-            onClick={() => setExportMenuOpen((v) => !v)}
-            disabled={objectCount === 0}
-            title="Export 3D (.glb / .gltf)"
-          >
-            <Download size={15} />
-            <span className="hide-compact">{t.exportBtn}</span>
-            <ChevronDown size={13} />
-          </button>
-
-          {exportMenuOpen && (
-            <div className="dropdown-menu dropdown-right">
-              <div className="dropdown-label">Format File 3D</div>
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={() => {
-                  onExport('glb');
-                  setExportMenuOpen(false);
-                }}
-              >
-                <div>
-                  <strong>Ekspor .GLB</strong>
-                  <div className="dropdown-sub">Biner tunggal (Blender, Godot, Unity)</div>
-                </div>
-              </button>
-              <button
-                type="button"
-                className="dropdown-item"
-                onClick={() => {
-                  onExport('gltf');
-                  setExportMenuOpen(false);
-                }}
-              >
-                <div>
-                  <strong>Ekspor .GLTF</strong>
-                  <div className="dropdown-sub">Format JSON standar glTF 2.0</div>
-                </div>
-              </button>
-            </div>
-          )}
-        </div>
 
         <button
           type="button"
-          className={`icon-btn desktop-only hide-compact ${inspectorOpen ? 'active' : ''}`}
+          className={`icon-btn desktop-only ${inspectorOpen ? 'active' : ''}`}
           onClick={onToggleInspector}
           title="Buka / Tutup Sidebar Properti"
           aria-label="Panel Properti"
         >
-          <PanelRight size={17} />
+          <PanelRight size={16} />
         </button>
       </div>
     </header>

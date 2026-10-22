@@ -1,6 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import {
+  Boxes,
+  Copy,
+  Download,
+  FolderOpen,
+  Moon,
+  Pencil,
+  Sun,
+  Sunset,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { createPrimitiveGeometry } from '../engine/primitives';
 import { formatRelativeTime, TRANSLATIONS } from '../i18n/translations';
 import {
@@ -528,10 +540,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <div className="mm-showcase-mood-bar" role="group" aria-label="Lighting Mood">
               {(
                 [
-                  { id: 'morning', icon: '☀️', label: t.moodMorning },
-                  { id: 'sunset', icon: '🌇', label: t.moodSunset },
-                  { id: 'night', icon: '🌙', label: t.moodNight },
-                ] as Array<{ id: LightingMood; icon: string; label: string }>
+                  { id: 'morning', icon: <Sun size={13} />, label: t.moodMorning },
+                  { id: 'sunset', icon: <Sunset size={13} />, label: t.moodSunset },
+                  { id: 'night', icon: <Moon size={13} />, label: t.moodNight },
+                ] as Array<{ id: LightingMood; icon: React.ReactNode; label: string }>
               ).map((m) => (
                 <button
                   key={m.id}
@@ -541,7 +553,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   }`}
                   onClick={() => onChangeLightingMood(m.id)}
                 >
-                  <span>{m.icon}</span>
+                  {m.icon}
                   <span>{m.label}</span>
                 </button>
               ))}
@@ -605,7 +617,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           {libraryTab === 'projects' ? (
             projects.length === 0 ? (
               <div className="mm-empty-card">
-                <span className="mm-empty-icon">📦</span>
+                <span className="mm-empty-icon">
+                  <FolderOpen size={28} strokeWidth={1.75} />
+                </span>
                 <strong>{t.emptyProjectsTitle}</strong>
                 <p>{t.emptyProjectsDesc}</p>
               </div>
@@ -678,46 +692,61 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                             type="button"
                             className="mm-card-act"
                             title={t.rename}
+                            aria-label={t.rename}
                             onClick={(e) => startRename(proj, e)}
                           >
-                            ✎
+                            <Pencil size={13} strokeWidth={2.1} />
                           </button>
                           <button
                             type="button"
                             className="mm-card-act"
                             title={t.duplicate}
+                            aria-label={t.duplicate}
                             onClick={() => onDuplicateProject(proj)}
                           >
-                            ⧉
+                            <Copy size={13} strokeWidth={2.1} />
                           </button>
                           <button
                             type="button"
                             className="mm-card-act"
                             title={t.exportBackup}
+                            aria-label={t.exportBackup}
                             onClick={() => onExportProjectBackup(proj)}
                           >
-                            ⬇
+                            <Download size={13} strokeWidth={2.1} />
                           </button>
                           {isConfirmingDel ? (
-                            <button
-                              type="button"
-                              className="mm-card-act danger-confirm"
-                              onClick={() => {
-                                onDeleteProject(proj.id);
-                                setConfirmDeleteId(null);
-                              }}
-                              onMouseLeave={() => setConfirmDeleteId(null)}
-                            >
-                              {t.delete}?
-                            </button>
+                            <div className="mm-confirm-del-group">
+                              <button
+                                type="button"
+                                className="mm-card-act danger-confirm"
+                                onClick={() => {
+                                  onDeleteProject(proj.id);
+                                  setConfirmDeleteId(null);
+                                }}
+                              >
+                                <Trash2 size={12} strokeWidth={2.2} />
+                                <span>{t.delete}?</span>
+                              </button>
+                              <button
+                                type="button"
+                                className="mm-card-act"
+                                title="Batal"
+                                aria-label="Batal"
+                                onClick={() => setConfirmDeleteId(null)}
+                              >
+                                <X size={12} strokeWidth={2.3} />
+                              </button>
+                            </div>
                           ) : (
                             <button
                               type="button"
                               className="mm-card-act danger"
                               title={t.delete}
+                              aria-label={t.delete}
                               onClick={() => setConfirmDeleteId(proj.id)}
                             >
-                              🗑
+                              <Trash2 size={13.5} strokeWidth={2.1} />
                             </button>
                           )}
                         </div>
@@ -729,7 +758,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             )
           ) : customAssets.length === 0 ? (
             <div className="mm-empty-card">
-              <span className="mm-empty-icon">🛋️</span>
+              <span className="mm-empty-icon">
+                <Boxes size={28} strokeWidth={1.75} />
+              </span>
               <strong>{t.emptyAssetsTitle}</strong>
               <p>{t.emptyAssetsDesc}</p>
             </div>
@@ -741,7 +772,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                     {asset.thumbnailDataUrl ? (
                       <img src={asset.thumbnailDataUrl} alt={asset.name} />
                     ) : (
-                      <span>3D</span>
+                      <Boxes size={22} />
                     )}
                   </div>
                   <div className="mm-asset-info">
@@ -762,9 +793,10 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       type="button"
                       className="mm-card-act danger"
                       title={t.delete}
+                      aria-label={t.delete}
                       onClick={() => onDeleteCustomAsset(asset.id)}
                     >
-                      🗑
+                      <Trash2 size={13.5} strokeWidth={2.1} />
                     </button>
                   </div>
                 </div>

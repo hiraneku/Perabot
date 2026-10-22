@@ -1,10 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { getShapeThumbnails, PRIMITIVE_META } from '../engine/primitives';
-import { getHousePresetThumbnails } from '../engine/housePresets';
 import { PrimitiveKind } from '../types/studio';
 
 let cachedThumbs: Partial<Record<PrimitiveKind, string>> | null = null;
-let cachedHouseThumbs: Record<string, string> | null = null;
 
 export const CubeShapeIcon: React.FC<{ size?: number }> = ({ size = 24 }) => (
   <svg width={size} height={size} viewBox="0 0 28 28" fill="none" aria-hidden="true">
@@ -81,7 +79,7 @@ export const PrimitiveShapePreview: React.FC<{
   kind: PrimitiveKind;
   size?: number;
   className?: string;
-}> = ({ kind, size = 56, className }) => {
+}> = ({ kind, size = 50, className }) => {
   const [src, setSrc] = useState<string | null>(() =>
     cachedThumbs ? cachedThumbs[kind] ?? null : null
   );
@@ -116,50 +114,6 @@ export const PrimitiveShapePreview: React.FC<{
       height={size}
       decoding="async"
       className={className ? `primitive-3d-thumb ${className}` : 'primitive-3d-thumb'}
-      style={{ width: size, height: size }}
-      draggable={false}
-    />
-  );
-};
-
-export const HousePresetPreview: React.FC<{
-  presetId: string;
-  size?: number;
-}> = ({ presetId, size = 62 }) => {
-  const [src, setSrc] = useState<string | null>(() =>
-    cachedHouseThumbs ? cachedHouseThumbs[presetId] ?? null : null
-  );
-
-  useEffect(() => {
-    if (cachedHouseThumbs && cachedHouseThumbs[presetId]) {
-      setSrc(cachedHouseThumbs[presetId]!);
-      return;
-    }
-    const id = window.requestAnimationFrame(() => {
-      cachedHouseThumbs = getHousePresetThumbnails();
-      setSrc(cachedHouseThumbs[presetId] ?? null);
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [presetId]);
-
-  if (!src) {
-    return (
-      <span
-        className="shape-thumb-skeleton"
-        style={{ width: size, height: size }}
-        aria-hidden="true"
-      />
-    );
-  }
-
-  return (
-    <img
-      src={src}
-      alt=""
-      width={size}
-      height={size}
-      decoding="async"
-      className="primitive-3d-thumb"
       style={{ width: size, height: size }}
       draggable={false}
     />

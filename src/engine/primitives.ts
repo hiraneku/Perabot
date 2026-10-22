@@ -1284,9 +1284,10 @@ export function getShapeThumbnails(): Record<PrimitiveKind, string> {
     scene.add(bounce);
 
     const center = new THREE.Vector3();
-    const sizeVec = new THREE.Vector3();
-    const baseDir = new THREE.Vector3(1.5, 1.24, 1.72).normalize();
+    const vTmp = new THREE.Vector3();
+    const baseDir = new THREE.Vector3(1.48, 1.2, 1.74).normalize();
     const frontalDir = new THREE.Vector3(1.05, 0.72, 1.96).normalize();
+    const halfFovSin = Math.sin(THREE.MathUtils.degToRad(34 * 0.5));
 
     for (const item of BASIC_SHAPES_CATALOG) {
       const geo = createPrimitiveGeometry(item.kind);
@@ -1298,7 +1299,18 @@ export function getShapeThumbnails(): Record<PrimitiveKind, string> {
           new THREE.Vector3(0.5, 0.5, 0.5)
         );
       bb.getCenter(center);
-      bb.getSize(sizeVec);
+
+      // Compute exact bounding sphere radius around `center` so diagonal corners NEVER clip!
+      const posAttr = geo.getAttribute('position');
+      let maxRadiusSq = 0;
+      if (posAttr) {
+        for (let i = 0; i < posAttr.count; i++) {
+          vTmp.fromBufferAttribute(posAttr, i).sub(center);
+          const dSq = vTmp.lengthSq();
+          if (dSq > maxRadiusSq) maxRadiusSq = dSq;
+        }
+      }
+      const radius = Math.max(Math.sqrt(maxRadiusSq), 0.42);
 
       const mat = new THREE.MeshStandardMaterial({
         color: item.defaultColor,
@@ -1309,8 +1321,8 @@ export function getShapeThumbnails(): Record<PrimitiveKind, string> {
       mesh.position.set(-center.x, -center.y, -center.z);
       scene.add(mesh);
 
-      const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z, 0.55);
-      const dist = maxDim * 2.18;
+      // Guaranteed full-frustum fit with 28% breathing margin around the outermost corner
+      const dist = (radius / halfFovSin) * 1.28;
       const viewDir = FRONTAL_PREVIEW_KINDS.has(item.kind) ? frontalDir : baseDir;
       camera.position.copy(viewDir).multiplyScalar(dist);
       camera.lookAt(0, 0, 0);

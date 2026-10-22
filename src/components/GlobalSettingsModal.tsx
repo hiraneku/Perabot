@@ -1,4 +1,5 @@
 import React from 'react';
+import { Globe } from 'lucide-react';
 import { TRANSLATIONS } from '../i18n/translations';
 import {
   AppLanguage,
@@ -18,13 +19,13 @@ interface GlobalSettingsModalProps {
 
 const LANGUAGE_OPTIONS: Array<{
   id: AppLanguage;
-  flag: string;
+  code: string;
   label: string;
   sub: string;
 }> = [
-  { id: 'id', flag: '🇮🇩', label: 'Bahasa Indonesia', sub: 'Umum & santai' },
-  { id: 'en', flag: '🇺🇸', label: 'English', sub: 'Everyday UI' },
-  { id: 'ja', flag: '🇯🇵', label: '日本語', sub: '自然なアプリ表現' },
+  { id: 'id', code: 'ID', label: 'Bahasa Indonesia', sub: 'Umum & santai' },
+  { id: 'en', code: 'EN', label: 'English', sub: 'Everyday UI' },
+  { id: 'ja', code: 'JA', label: '日本語', sub: '自然なアプリ表現' },
 ];
 
 export const GlobalSettingsModal: React.FC<GlobalSettingsModalProps> = ({
@@ -63,6 +64,7 @@ export const GlobalSettingsModal: React.FC<GlobalSettingsModalProps> = ({
           {/* 1. Language Switcher */}
           <div className="gs-section">
             <div className="gs-section-head">
+              <Globe size={14} />
               <strong>{t.langSection}</strong>
             </div>
             <div className="gs-lang-grid">
@@ -75,7 +77,7 @@ export const GlobalSettingsModal: React.FC<GlobalSettingsModalProps> = ({
                   }`}
                   onClick={() => onUpdateSettings({ language: opt.id })}
                 >
-                  <span className="gs-lang-flag">{opt.flag}</span>
+                  <span className="gs-lang-code-badge">{opt.code}</span>
                   <span className="gs-lang-text">
                     <strong>{opt.label}</strong>
                     <small>{opt.sub}</small>

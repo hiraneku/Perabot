@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Magnet, PaintBucket, Pipette } from 'lucide-react';
 import { PaintBrushPayload, StudioEngine } from './engine/StudioEngine';
 import { CameraPresetType } from './engine/viewportHelpers';
 import { PRIMITIVE_META } from './engine/primitives';
+import { renderPartsThumbnailDataUrl } from './engine/housePresets';
 import {
-  HousePresetItem,
-  renderPartsThumbnailDataUrl,
-} from './engine/housePresets';
+  ACCEPTED_3D_EXTENSIONS,
+  hydrateImportedModelsForObjects,
+  importExternal3DFile,
+  LoadedImportedModelAsset,
+} from './engine/modelImporter';
 import { TRANSLATIONS } from './i18n/translations';
 import {
   deleteCustomAssetRecord,
@@ -102,6 +105,9 @@ function buildEmptyProjectRecord(
 export const App: React.FC = () => {
   const viewportRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<StudioEngine | null>(null);
+  const import3DInputRef = useRef<HTMLInputElement>(null);
+  const [isImporting3D, setIsImporting3D] = useState(false);
+  const [isDragOverViewport, setIsDragOverViewport] = useState(false);
 
   // Global App Settings (Language, Theme, Graphics, Camera Speed, Density)
   const [globalSettings, setGlobalSettings] = useState<GlobalAppSettings>(() =>
@@ -397,7 +403,22 @@ export const App: React.FC = () => {
 
     engineRef.current = engine;
 
+    // Hydrate any binary 3D models referenced in saved projects from IndexedDB
+    let cancelled = false;
+    const savedObjs = activeProject.scene.objects;
+    if (savedObjs.some((o) => Boolean(o.modelAssetId))) {
+      void hydrateImportedModelsForObjects(
+        savedObjs,
+        restoredGrid.worldSize
+      ).then(() => {
+        if (!cancelled && engineRef.current === engine) {
+          engine.loadSceneObjects(savedObjs, true);
+        }
+      });
+    }
+
     return () => {
+      cancelled = true;
       if (autoSaveTimerRef.current) {
         window.clearTimeout(autoSaveTimerRef.current);
       }
@@ -570,16 +591,62 @@ export const App: React.FC = () => {
     [showToast]
   );
 
-  const handleSpawnHousePreset = useCallback(
-    (preset: HousePresetItem) => {
+  const handleTriggerImport3D = useCallback(() => {
+    import3DInputRef.current?.click();
+  }, []);
+
+  const handleImport3DFiles = useCallback(
+    async (fileList: FileList | File[]) => {
+      const files = Array.from(fileList);
       const engine = engineRef.current;
-      if (!engine) return;
-      const label = preset.title[globalSettings.language];
-      engine.spawnCompoundParts(preset.parts, label, preset.archRole);
-      setEditSinglePartMode(false);
-      showToast(`+ ${label}`);
+      if (files.length === 0 || !engine) return;
+
+      setIsImporting3D(true);
+      showToast(t.importing3DToast);
+
+      const domainSize = engine.getDomainWorldSize();
+      const loadedAssets: LoadedImportedModelAsset[] = [];
+      let failedCount = 0;
+
+      for (const file of files) {
+        try {
+          const asset = await importExternal3DFile(file, domainSize);
+          loadedAssets.push(asset);
+        } catch {
+          failedCount++;
+        }
+      }
+
+      setIsImporting3D(false);
+
+      if (loadedAssets.length > 0) {
+        engine.spawnImportedModels(loadedAssets);
+        setTransformMode(engine.getTransformMode());
+        if (loadedAssets.length === 1) {
+          const one = loadedAssets[0];
+          showToast(`+ ${one.name} (.${one.format})`);
+        } else {
+          showToast(`+ ${loadedAssets.length} Model 3D`);
+        }
+      } else if (failedCount > 0) {
+        showToast(
+          globalSettings.language === 'en'
+            ? 'Failed to import 3D file (.glb/.obj/.stl/.ply/.fbx)'
+            : globalSettings.language === 'ja'
+            ? '3Dファイルの読み込みに失敗しました'
+            : 'Gagal memuat file 3D (gunakan .glb, .gltf, .obj, .stl, .ply, .fbx)'
+        );
+      }
     },
-    [globalSettings.language, showToast]
+    [globalSettings.language, showToast, t.importing3DToast]
+  );
+
+  const handleResetImportedMaterial = useCallback(
+    (id: string) => {
+      engineRef.current?.resetImportedObjectMaterial(id);
+      showToast(t.restoreOriginalMaterial);
+    },
+    [showToast, t.restoreOriginalMaterial]
   );
 
   const handleSpawnCustomAsset = useCallback(
@@ -1052,11 +1119,27 @@ export const App: React.FC = () => {
 
   return (
     <div className={`studio-shell ${isFullscreen ? 'is-fullscreen' : ''}`}>
+      <input
+        ref={import3DInputRef}
+        type="file"
+        multiple
+        accept={ACCEPTED_3D_EXTENSIONS}
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const picked = e.target.files ? Array.from(e.target.files) : [];
+          e.target.value = '';
+          if (picked.length > 0) {
+            void handleImport3DFiles(picked);
+          }
+        }}
+      />
+
       <TopBar
         language={globalSettings.language}
         studioMode={activeProject.mode}
         projectName={activeProject.name}
         isSavingProject={isSavingProject}
+        isImporting3D={isImporting3D}
         lightingMood={lightingMood}
         interiorPeek={interiorPeek}
         walkthroughActive={walkthroughActive}
@@ -1071,6 +1154,7 @@ export const App: React.FC = () => {
         objectCount={objects.length}
         onGoHome={() => void handleGoHome()}
         onRenameProject={(name) => void handleRenameActiveProject(name)}
+        onTriggerImport3D={handleTriggerImport3D}
         onCycleLightingMood={handleCycleLightingMood}
         onToggleInteriorPeek={handleToggleInteriorPeek}
         onToggleWalkthrough={handleToggleWalkthrough}
@@ -1094,7 +1178,25 @@ export const App: React.FC = () => {
         <div
           className={`viewport-area ${
             !leftSidebarCollapsed ? 'sidebar-left-open' : ''
-          }`}
+          } ${isDragOverViewport ? 'drag-over-3d' : ''}`}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes('Files')) {
+              e.preventDefault();
+              setIsDragOverViewport(true);
+            }
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget === e.target) {
+              setIsDragOverViewport(false);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOverViewport(false);
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+              void handleImport3DFiles(e.dataTransfer.files);
+            }
+          }}
         >
           <div ref={viewportRef} className="viewport-canvas-host" />
 
@@ -1146,7 +1248,10 @@ export const App: React.FC = () => {
               <div className="interactive-mode-banner">
                 {paintMode === 'bucket' && (
                   <>
-                    <span>🎨 {t.paint}</span>
+                    <span className="banner-icon-label">
+                      <PaintBucket size={13} />
+                      <span>{t.paint}</span>
+                    </span>
                     <button
                       type="button"
                       onClick={() => handleChangePaintMode('none')}
@@ -1157,7 +1262,10 @@ export const App: React.FC = () => {
                 )}
                 {paintMode === 'eyedropper' && (
                   <>
-                    <span>💧 Eyedropper</span>
+                    <span className="banner-icon-label">
+                      <Pipette size={13} />
+                      <span>Eyedropper</span>
+                    </span>
                     <button
                       type="button"
                       onClick={() => handleChangePaintMode('none')}
@@ -1170,7 +1278,10 @@ export const App: React.FC = () => {
                   surfaceSettings.enabled &&
                   surfaceSettings.clickToPlace && (
                     <>
-                      <span>🧲 {t.stickSurface}</span>
+                      <span className="banner-icon-label">
+                        <Magnet size={13} />
+                        <span>{t.stickSurface}</span>
+                      </span>
                       <button
                         type="button"
                         onClick={() =>
@@ -1249,9 +1360,9 @@ export const App: React.FC = () => {
               language={globalSettings.language}
               customAssets={customAssets}
               onSpawn={handleSpawn}
-              onSpawnHousePreset={handleSpawnHousePreset}
               onSpawnCustomAsset={handleSpawnCustomAsset}
               onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
+              onTriggerImport3D={handleTriggerImport3D}
             />
           )}
 
@@ -1313,6 +1424,7 @@ export const App: React.FC = () => {
             onDeleteObject={(id) => handleDeleteObject(id)}
             onDuplicateSelected={handleDuplicateSelected}
             onDropToFloor={handleDropToFloor}
+            onResetImportedMaterial={handleResetImportedMaterial}
           />
         )}
 
@@ -1342,6 +1454,7 @@ export const App: React.FC = () => {
             onDeleteObject={(id) => handleDeleteObject(id)}
             onDuplicateSelected={handleDuplicateSelected}
             onDropToFloor={handleDropToFloor}
+            onResetImportedMaterial={handleResetImportedMaterial}
           />
         )}
       </main>
@@ -1352,9 +1465,9 @@ export const App: React.FC = () => {
           language={globalSettings.language}
           customAssets={customAssets}
           onSpawn={handleSpawn}
-          onSpawnHousePreset={handleSpawnHousePreset}
           onSpawnCustomAsset={handleSpawnCustomAsset}
           onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
+          onTriggerImport3D={handleTriggerImport3D}
           objectCount={objects.length}
           drawerOpen={mobileDrawerOpen}
           onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}

@@ -10,6 +10,11 @@ import {
   SurfaceNormalVisualizer,
 } from './viewportHelpers';
 import { createPrimitiveGeometry, PRIMITIVE_META } from './primitives';
+import {
+  cloneImportedVisualGroup,
+  getRegisteredImportedModel,
+  LoadedImportedModelAsset,
+} from './modelImporter';
 import { SnappingEngine, SnapVisualizer } from './SnappingEngine';
 import { SurfaceAlignEngine } from './SurfaceAlignEngine';
 import { buildSubdividedGeometry, computeGeometryStats } from './SubdivisionEngine';
@@ -164,6 +169,7 @@ export class StudioEngine {
   private gizmoSurfaceProbeOffset = new THREE.Vector3(0, -0.5, 0);
 
   private counters: Partial<Record<PrimitiveKind, number>> = {};
+  private importedNameCounters: Record<string, number> = {};
 
   private history: HistorySnapshot[] = [];
   private historyIndex = -1;
@@ -761,6 +767,7 @@ export class StudioEngine {
     }
     this.meshMap.clear();
     this.counters = {};
+    this.importedNameCounters = {};
 
     for (const item of objects) {
       const cloned: SceneObjectData = {
@@ -902,6 +909,10 @@ export class StudioEngine {
       flatShading: o.flatShading,
       subdivision: { ...o.subdivision },
       archRole: o.archRole ?? 'prop',
+      modelAssetId: o.modelAssetId,
+      modelFormat: o.modelFormat,
+      modelThumbUrl: o.modelThumbUrl,
+      useCustomMaterial: o.useCustomMaterial,
     }));
 
     return { defaultName, parts };
@@ -1119,6 +1130,10 @@ export class StudioEngine {
     }> = [];
 
     for (const [id, mesh] of this.meshMap.entries()) {
+      if (mesh.userData.modelAssetId) {
+        mesh.material = this.hiddenFaceMaterial;
+        continue;
+      }
       const subdiv = mesh.userData.subdivision as ObjectSubdivisionSettings | undefined;
       const baseMat = this.getBaseMaterial(mesh);
       if (
@@ -1719,6 +1734,10 @@ export class StudioEngine {
         groupId: gid,
         groupName: gid ? groupLabel : undefined,
         archRole: p.archRole ?? defaultRole,
+        modelAssetId: p.modelAssetId,
+        modelFormat: p.modelFormat,
+        modelThumbUrl: p.modelThumbUrl,
+        useCustomMaterial: p.useCustomMaterial,
       };
 
       const mesh = this.buildMeshFromData(data);
@@ -1735,10 +1754,322 @@ export class StudioEngine {
     return leaderId;
   }
 
+  public getDomainWorldSize(): number {
+    return this.gridSettings.worldSize;
+  }
+
+  /**
+   * Finds a clean, non-overlapping XZ placement strictly inside the active domain
+   * anchored near the user's current camera target (so single or multiple imported
+   * 3D files appear side-by-side right where the user is working inside the domain).
+   */
+  private findDomainBatchPlacementXZ(
+    footprintW: number,
+    footprintD: number,
+    reservedBoxes: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }>
+  ): [number, number] {
+    const halfDomain = Math.max(4, this.gridSettings.worldSize * 0.5 - 0.6);
+    const halfW = Math.max(0.35, footprintW * 0.5);
+    const halfD = Math.max(0.35, footprintD * 0.5);
+    const margin = 0.28;
+
+    const snapStep =
+      this.snapSettings.enabled && this.snapSettings.grid
+        ? Math.max(0.25, this.snapSettings.gridStep)
+        : 0.5;
+    const snapVal = (v: number) => Math.round(v / snapStep) * snapStep;
+    const clampX = (x: number) =>
+      Math.max(-halfDomain + halfW, Math.min(halfDomain - halfW, x));
+    const clampZ = (z: number) =>
+      Math.max(-halfDomain + halfD, Math.min(halfDomain - halfD, z));
+
+    const anchorX = clampX(snapVal(this.orbitControls.target.x));
+    const anchorZ = clampZ(snapVal(this.orbitControls.target.z));
+
+    const stepX = Math.max(1.25, footprintW + 0.45);
+    const stepZ = Math.max(1.25, footprintD + 0.45);
+
+    const existingFootprints: Array<{
+      minX: number;
+      maxX: number;
+      minZ: number;
+      maxZ: number;
+      minY: number;
+      maxY: number;
+    }> = [];
+
+    for (const m of this.meshMap.values()) {
+      if (!m.visible) continue;
+      // Ignore flat floor slabs (`archRole === 'floor'`) so imported furniture/models can stand ON floors!
+      if (m.userData.archRole === 'floor') continue;
+      const b = this.computeWorldBounds(m);
+      if (!b.isEmpty() && b.max.y - b.min.y > 0.16) {
+        existingFootprints.push({
+          minX: b.min.x,
+          maxX: b.max.x,
+          minZ: b.min.z,
+          maxZ: b.max.z,
+          minY: b.min.y,
+          maxY: b.max.y,
+        });
+      }
+    }
+
+    const isFree = (cx: number, cz: number): boolean => {
+      const minX = cx - halfW - margin;
+      const maxX = cx + halfW + margin;
+      const minZ = cz - halfD - margin;
+      const maxZ = cz + halfD + margin;
+
+      for (const r of reservedBoxes) {
+        if (maxX > r.minX && minX < r.maxX && maxZ > r.minZ && minZ < r.maxZ) {
+          return false;
+        }
+      }
+      const gY = this.gridSystem.sampleHeight(cx, cz);
+      for (const e of existingFootprints) {
+        if (e.maxY < gY + 0.12) continue;
+        if (maxX > e.minX && minX < e.maxX && maxZ > e.minZ && minZ < e.maxZ) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    // Ordered outward grid spiral around (anchorX, anchorZ), clamped inside domain bounds
+    for (let ring = 0; ring <= 10; ring++) {
+      if (ring === 0) {
+        if (isFree(anchorX, anchorZ)) return [anchorX, anchorZ];
+        continue;
+      }
+      const ringCandidates: Array<[number, number]> = [];
+      for (let dx = -ring; dx <= ring; dx++) {
+        for (let dz = -ring; dz <= ring; dz++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== ring) continue;
+          ringCandidates.push([
+            clampX(snapVal(anchorX + dx * stepX)),
+            clampZ(snapVal(anchorZ + dz * stepZ)),
+          ]);
+        }
+      }
+      // Prefer side-by-side along X first, then Z
+      ringCandidates.sort(
+        (a, b) =>
+          Math.abs(a[1] - anchorZ) * 1.4 +
+          Math.abs(a[0] - anchorX) -
+          (Math.abs(b[1] - anchorZ) * 1.4 + Math.abs(b[0] - anchorX))
+      );
+
+      for (const [cx, cz] of ringCandidates) {
+        if (isFree(cx, cz)) return [cx, cz];
+      }
+    }
+
+    return [anchorX, anchorZ];
+  }
+
+  /**
+   * Spawns one or multiple imported 3D models (same or different files) cleanly
+   * side-by-side inside the active domain without overlapping.
+   */
+  public spawnImportedModels(assets: LoadedImportedModelAsset[]): string[] {
+    if (assets.length === 0) return [];
+
+    const reservedBoxes: Array<{
+      minX: number;
+      maxX: number;
+      minZ: number;
+      maxZ: number;
+    }> = [];
+    const spawnedIds: string[] = [];
+
+    for (const asset of assets) {
+      const nameKey = `imp_${asset.name}`;
+      const count = (this.importedNameCounters[nameKey] ?? 0) + 1;
+      this.importedNameCounters[nameKey] = count;
+
+      const label = count > 1 ? `${asset.name} (${count})` : asset.name;
+      const id = `mdl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+      const [sx, sz] = this.findDomainBatchPlacementXZ(
+        asset.size.x,
+        asset.size.z,
+        reservedBoxes
+      );
+      reservedBoxes.push({
+        minX: sx - asset.size.x * 0.5,
+        maxX: sx + asset.size.x * 0.5,
+        minZ: sz - asset.size.z * 0.5,
+        maxZ: sz + asset.size.z * 0.5,
+      });
+
+      asset.colliderGeometry.computeBoundingBox();
+      const minY = asset.colliderGeometry.boundingBox?.min.y ?? -asset.size.y * 0.5;
+      const groundY = this.gridSystem.sampleHeight(sx, sz);
+
+      // Also check if there is a floor slab directly at (sx, sz) so imported furniture sits ON house floors!
+      let floorTopY = groundY;
+      for (const m of this.meshMap.values()) {
+        if (!m.visible || m.userData.archRole !== 'floor') continue;
+        const b = this.computeWorldBounds(m);
+        if (sx >= b.min.x && sx <= b.max.x && sz >= b.min.z && sz <= b.max.z) {
+          floorTopY = Math.max(floorTopY, b.max.y);
+        }
+      }
+
+      const data: SceneObjectData = {
+        id,
+        name: label,
+        kind: 'cube',
+        position: { x: round3(sx), y: round3(floorTopY - minY), z: round3(sz) },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 },
+        color: '#cbd5e1',
+        roughness: 0.5,
+        metalness: 0.1,
+        opacity: 1,
+        emissive: '#000000',
+        emissiveIntensity: 0,
+        flatShading: false,
+        subdivision: { ...DEFAULT_SUBDIVISION_SETTINGS },
+        visible: true,
+        archRole: 'prop',
+        modelAssetId: asset.assetId,
+        modelFormat: asset.format,
+        modelThumbUrl: asset.thumbDataUrl,
+        useCustomMaterial: false,
+      };
+
+      const mesh = this.buildMeshFromData(data);
+      this.objectGroup.add(mesh);
+      this.meshMap.set(id, mesh);
+      spawnedIds.push(id);
+    }
+
+    const lastId = spawnedIds[spawnedIds.length - 1] ?? null;
+    if (lastId) {
+      this.selectObject(lastId, false);
+    }
+
+    // Gently frame the newly imported batch if the camera target was far away
+    if (spawnedIds.length > 0) {
+      const batchBox = new THREE.Box3();
+      for (const sid of spawnedIds) {
+        const m = this.meshMap.get(sid);
+        if (m) batchBox.union(this.computeWorldBounds(m));
+      }
+      if (!batchBox.isEmpty()) {
+        const batchCenter = new THREE.Vector3();
+        const batchSize = new THREE.Vector3();
+        batchBox.getCenter(batchCenter);
+        batchBox.getSize(batchSize);
+        if (batchCenter.distanceTo(this.orbitControls.target) > 4.5) {
+          const span = Math.max(batchSize.x, batchSize.y, batchSize.z, 2);
+          const curDir = this.camera.position
+            .clone()
+            .sub(this.orbitControls.target)
+            .normalize();
+          if (curDir.lengthSq() < 0.01) curDir.set(0.6, 0.5, 0.7).normalize();
+          this.cameraTween = {
+            active: true,
+            elapsed: 0,
+            duration: 0.36,
+            fromPos: this.camera.position.clone(),
+            toPos: batchCenter.clone().addScaledVector(curDir, Math.max(6.5, span * 2.3)),
+            fromTarget: this.orbitControls.target.clone(),
+            toTarget: batchCenter,
+          };
+        }
+      }
+    }
+
+    this.updateSeamlessTouchFaces();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return spawnedIds;
+  }
+
+  private applyMaterialToImportedVisual(mesh: THREE.Mesh): void {
+    const visualRoot = mesh.getObjectByName('__importedVisualRoot');
+    if (!visualRoot) return;
+    const useCustom = Boolean(mesh.userData.useCustomMaterial);
+    const baseMat = this.getBaseMaterial(mesh);
+    const op = (mesh.userData.userOpacity as number) ?? 1;
+    const emissiveHex = (mesh.userData.userEmissiveHex as string) ?? '#000000';
+    const emissiveIntensity = (mesh.userData.userEmissiveIntensity as number) ?? 0;
+
+    visualRoot.traverse((node) => {
+      if (!(node as THREE.Mesh).isMesh) return;
+      const m = node as THREE.Mesh;
+      m.castShadow = op > 0.35;
+      if (!useCustom) {
+        const orig = m.userData.origMaterials as
+          | THREE.Material
+          | THREE.Material[]
+          | undefined;
+        if (orig) {
+          m.material = Array.isArray(orig)
+            ? orig.map((om) => om.clone())
+            : orig.clone();
+        }
+        return;
+      }
+
+      const applyStd = (targetMat: THREE.Material) => {
+        const std = targetMat as THREE.MeshStandardMaterial;
+        if (std.color) std.color.copy(baseMat.color);
+        if (typeof std.roughness === 'number') std.roughness = baseMat.roughness;
+        if (typeof std.metalness === 'number') std.metalness = baseMat.metalness;
+        std.transparent = op < 0.995;
+        std.opacity = op;
+        std.depthWrite = op >= 0.98;
+        if (std.emissive) {
+          std.emissive.set(emissiveHex);
+          std.emissiveIntensity = emissiveIntensity;
+        }
+        std.flatShading = baseMat.flatShading;
+        std.needsUpdate = true;
+      };
+
+      if (Array.isArray(m.material)) {
+        m.material.forEach(applyStd);
+      } else if (m.material) {
+        applyStd(m.material);
+      }
+    });
+  }
+
+  public resetImportedObjectMaterial(id: string): void {
+    const mesh = this.meshMap.get(id);
+    if (!mesh || !mesh.userData.modelAssetId) return;
+    mesh.userData.useCustomMaterial = false;
+    mesh.userData.userOpacity = 1;
+    mesh.userData.userEmissiveHex = '#000000';
+    mesh.userData.userEmissiveIntensity = 0;
+    this.applyMaterialToImportedVisual(mesh);
+    this.updateSelectionHighlight();
+    this.pushHistorySnapshot();
+    this.emitState();
+  }
+
   private buildMeshFromData(data: SceneObjectData): THREE.Mesh {
-    const baseGeo = this.getOrCreateBaseGeometry(data.kind);
+    const importedEntry = data.modelAssetId
+      ? getRegisteredImportedModel(data.modelAssetId)
+      : undefined;
+
     const subdiv = data.subdivision ?? { ...DEFAULT_SUBDIVISION_SETTINGS };
-    const { geometry, stats } = buildSubdividedGeometry(baseGeo, subdiv);
+    let geometry: THREE.BufferGeometry;
+    let stats: SubdivisionStats;
+
+    if (importedEntry) {
+      geometry = importedEntry.colliderGeometry.clone();
+      stats = computeGeometryStats(geometry, geometry, false);
+    } else {
+      const baseGeo = this.getOrCreateBaseGeometry(data.kind);
+      const built = buildSubdividedGeometry(baseGeo, subdiv);
+      geometry = built.geometry;
+      stats = built.stats;
+    }
 
     const opacity = data.opacity !== undefined ? data.opacity : 1;
     const emissiveHex = data.emissive ?? '#000000';
@@ -1757,10 +2088,13 @@ export class StudioEngine {
       flatShading,
     });
 
-    const mesh = new THREE.Mesh(geometry, baseMaterial);
+    const mesh = new THREE.Mesh(
+      geometry,
+      importedEntry ? this.hiddenFaceMaterial : baseMaterial
+    );
     mesh.name = data.name;
-    mesh.castShadow = opacity > 0.35;
-    mesh.receiveShadow = true;
+    mesh.castShadow = !importedEntry && opacity > 0.35;
+    mesh.receiveShadow = !importedEntry;
     mesh.visible = data.visible;
     mesh.position.set(data.position.x, data.position.y, data.position.z);
     mesh.rotation.set(
@@ -1782,9 +2116,24 @@ export class StudioEngine {
       groupId: data.groupId ?? null,
       groupName: data.groupName,
       archRole: data.archRole,
+      modelAssetId: data.modelAssetId,
+      modelFormat: data.modelFormat ?? importedEntry?.format,
+      modelThumbUrl: data.modelThumbUrl ?? importedEntry?.thumbDataUrl,
+      useCustomMaterial: Boolean(data.useCustomMaterial),
     };
 
-    this.syncWireframeOverlay(mesh, subdiv.wireframe);
+    if (importedEntry && data.modelAssetId) {
+      const visualGroup = cloneImportedVisualGroup(data.modelAssetId);
+      if (visualGroup) {
+        mesh.add(visualGroup);
+        if (data.useCustomMaterial) {
+          this.applyMaterialToImportedVisual(mesh);
+        }
+      }
+    } else {
+      this.syncWireframeOverlay(mesh, subdiv.wireframe);
+    }
+
     return mesh;
   }
 
@@ -1810,6 +2159,27 @@ export class StudioEngine {
       } else {
         mat.emissive.set(userEmissive);
         mat.emissiveIntensity = userIntensity;
+      }
+
+      const visualRoot = mesh.getObjectByName('__importedVisualRoot');
+      if (visualRoot) {
+        visualRoot.traverse((node) => {
+          if (!(node as THREE.Mesh).isMesh) return;
+          const m = node as THREE.Mesh;
+          const applyGlow = (mMat: THREE.Material) => {
+            const std = mMat as THREE.MeshStandardMaterial;
+            if (!std.emissive) return;
+            if (isHighlighted && userIntensity === 0) {
+              std.emissive.set(id === this.selectedId ? '#241a08' : '#141e2e');
+              std.emissiveIntensity = 1;
+            } else {
+              std.emissive.set(userEmissive);
+              std.emissiveIntensity = userIntensity;
+            }
+          };
+          if (Array.isArray(m.material)) m.material.forEach(applyGlow);
+          else if (m.material) applyGlow(m.material);
+        });
       }
     }
   }
@@ -1975,7 +2345,7 @@ export class StudioEngine {
     recordHistory = true
   ): SubdivisionStats | null {
     const mesh = this.meshMap.get(id);
-    if (!mesh) return null;
+    if (!mesh || mesh.userData.modelAssetId) return null;
 
     const currentSubdiv =
       (mesh.userData.subdivision as ObjectSubdivisionSettings | undefined) ?? {
@@ -2226,6 +2596,21 @@ export class StudioEngine {
       }
     }
 
+    if (
+      patch.color !== undefined ||
+      patch.roughness !== undefined ||
+      patch.metalness !== undefined ||
+      patch.opacity !== undefined ||
+      patch.emissive !== undefined ||
+      patch.emissiveIntensity !== undefined ||
+      patch.flatShading !== undefined
+    ) {
+      if (mesh.userData.modelAssetId) {
+        mesh.userData.useCustomMaterial = true;
+        this.applyMaterialToImportedVisual(mesh);
+      }
+    }
+
     this.updateSelectionHighlight();
     this.updateSeamlessTouchFaces();
 
@@ -2368,6 +2753,7 @@ export class StudioEngine {
     }
     this.meshMap.clear();
     this.counters = {};
+    this.importedNameCounters = {};
 
     this.pushHistorySnapshot();
     this.emitState();
@@ -2435,6 +2821,39 @@ export class StudioEngine {
     for (const mesh of this.meshMap.values()) {
       const userVis = mesh.userData.userVisible !== false;
       if (!userVis) continue;
+
+      const visualRoot = mesh.getObjectByName('__importedVisualRoot');
+      if (visualRoot) {
+        const exportedGroup = visualRoot.clone(true);
+        exportedGroup.name = mesh.name;
+        exportedGroup.position.copy(mesh.position);
+        exportedGroup.quaternion.copy(mesh.quaternion);
+        exportedGroup.scale.copy(mesh.scale);
+        const userEmissive = (mesh.userData.userEmissiveHex as string) ?? '#000000';
+        const userIntensity = (mesh.userData.userEmissiveIntensity as number) ?? 0;
+        exportedGroup.traverse((n) => {
+          if ((n as THREE.Mesh).isMesh) {
+            const m = n as THREE.Mesh;
+            m.geometry = m.geometry.clone();
+            const cloneAndReset = (mat: THREE.Material) => {
+              const c = mat.clone() as THREE.MeshStandardMaterial;
+              if (c.emissive) {
+                c.emissive.set(userEmissive);
+                c.emissiveIntensity = userIntensity;
+              }
+              return c;
+            };
+            if (Array.isArray(m.material)) {
+              m.material = m.material.map(cloneAndReset);
+            } else if (m.material) {
+              m.material = cloneAndReset(m.material);
+            }
+          }
+        });
+        exportScene.add(exportedGroup);
+        continue;
+      }
+
       const baseMat = this.getBaseMaterial(mesh).clone();
       const origOp = (mesh.userData.userOpacity as number) ?? 1;
       baseMat.opacity = origOp;
@@ -2465,7 +2884,11 @@ export class StudioEngine {
       if ((obj as THREE.Mesh).isMesh) {
         const m = obj as THREE.Mesh;
         m.geometry.dispose();
-        (m.material as THREE.Material).dispose();
+        if (Array.isArray(m.material)) {
+          m.material.forEach((mat) => mat.dispose());
+        } else if (m.material) {
+          m.material.dispose();
+        }
       }
     });
 
@@ -2528,6 +2951,12 @@ export class StudioEngine {
       groupId: (mesh.userData.groupId as string | null | undefined) ?? null,
       groupName: mesh.userData.groupName as string | undefined,
       archRole: mesh.userData.archRole as ArchitecturalRole | undefined,
+      modelAssetId: mesh.userData.modelAssetId as string | undefined,
+      modelFormat: mesh.userData.modelFormat as string | undefined,
+      modelThumbUrl: mesh.userData.modelThumbUrl as string | undefined,
+      useCustomMaterial: mesh.userData.modelAssetId
+        ? Boolean(mesh.userData.useCustomMaterial)
+        : undefined,
     };
   }
 
@@ -2681,6 +3110,20 @@ export class StudioEngine {
     if (wire) {
       mesh.remove(wire);
       (wire.material as THREE.Material).dispose();
+    }
+    const visualRoot = mesh.getObjectByName('__importedVisualRoot');
+    if (visualRoot) {
+      visualRoot.traverse((node) => {
+        if ((node as THREE.Mesh).isMesh) {
+          const m = node as THREE.Mesh;
+          if (Array.isArray(m.material)) {
+            m.material.forEach((mat) => mat.dispose());
+          } else if (m.material) {
+            m.material.dispose();
+          }
+        }
+      });
+      mesh.remove(visualRoot);
     }
     mesh.geometry.dispose();
     const baseMat = mesh.userData.baseMaterial as THREE.Material | undefined;

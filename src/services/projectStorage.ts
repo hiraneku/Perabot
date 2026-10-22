@@ -2,19 +2,43 @@ import {
   CustomAssetRecord,
   DEFAULT_GLOBAL_SETTINGS,
   GlobalAppSettings,
+  ImportedModelBlobRecord,
   SavedProjectRecord,
   SerializedProjectFile,
 } from '../types/studio';
 
 const DB_NAME = 'PerabotStudioDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_PROJECTS = 'projects';
 const STORE_ASSETS = 'customAssets';
+const STORE_IMPORTED_MODELS = 'importedModels';
 const SETTINGS_LS_KEY = 'perabot_global_settings_v1';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 const memoryProjectsFallback = new Map<string, SavedProjectRecord>();
 const memoryAssetsFallback = new Map<string, CustomAssetRecord>();
+const memoryImportedModelsFallback = new Map<string, ImportedModelBlobRecord>();
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const slice = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+  const binary = atob(base64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
 
 function openStudioDB(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -35,6 +59,9 @@ function openStudioDB(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(STORE_ASSETS)) {
         const aStore = db.createObjectStore(STORE_ASSETS, { keyPath: 'id' });
         aStore.createIndex('createdAt', 'createdAt', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_IMPORTED_MODELS)) {
+        db.createObjectStore(STORE_IMPORTED_MODELS, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -66,6 +93,52 @@ export function saveGlobalSettings(settings: GlobalAppSettings): void {
   }
 }
 
+/* =========================================================
+   Imported 3D Model Binary Cache (GLB ArrayBuffer in IndexedDB)
+   ========================================================= */
+export async function saveImportedModelBlob(
+  record: ImportedModelBlobRecord
+): Promise<void> {
+  memoryImportedModelsFallback.set(record.id, record);
+  try {
+    const db = await openStudioDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_IMPORTED_MODELS, 'readwrite');
+      tx.objectStore(STORE_IMPORTED_MODELS).put(record);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch {
+    // Kept in memory fallback
+  }
+}
+
+export async function getImportedModelBlob(
+  id: string
+): Promise<ImportedModelBlobRecord | null> {
+  if (memoryImportedModelsFallback.has(id)) {
+    return memoryImportedModelsFallback.get(id)!;
+  }
+  try {
+    const db = await openStudioDB();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_IMPORTED_MODELS, 'readonly');
+      const req = tx.objectStore(STORE_IMPORTED_MODELS).get(id);
+      req.onsuccess = () => {
+        const res = (req.result as ImportedModelBlobRecord | undefined) ?? null;
+        if (res) memoryImportedModelsFallback.set(id, res);
+        resolve(res);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/* =========================================================
+   Projects Persistence
+   ========================================================= */
 export async function listProjects(): Promise<SavedProjectRecord[]> {
   try {
     const db = await openStudioDB();
@@ -163,8 +236,35 @@ export async function renameProjectRecord(
   return updated;
 }
 
-export function downloadProjectBackup(record: SavedProjectRecord): void {
-  const json = JSON.stringify(record.scene, null, 2);
+export async function downloadProjectBackup(
+  record: SavedProjectRecord
+): Promise<void> {
+  const exportScene: SerializedProjectFile = JSON.parse(
+    JSON.stringify(record.scene)
+  );
+
+  // Embed any referenced imported 3D model binaries into the .perabot backup file!
+  const modelIds = new Set<string>();
+  for (const obj of exportScene.objects) {
+    if (obj.modelAssetId) modelIds.add(obj.modelAssetId);
+  }
+  if (modelIds.size > 0) {
+    const embedded: NonNullable<SerializedProjectFile['embeddedModels']> = {};
+    for (const mid of modelIds) {
+      const blobRec = await getImportedModelBlob(mid);
+      if (blobRec) {
+        embedded[mid] = {
+          name: blobRec.name,
+          format: blobRec.format,
+          thumbDataUrl: blobRec.thumbDataUrl,
+          base64Glb: arrayBufferToBase64(blobRec.glbBuffer),
+        };
+      }
+    }
+    exportScene.embeddedModels = embedded;
+  }
+
+  const json = JSON.stringify(exportScene, null, 2);
   const blob = new Blob([json], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const safeName =
@@ -191,10 +291,28 @@ export async function importProjectBackupFile(
     throw new Error('Invalid .perabot project file');
   }
 
+  // Restore any embedded imported 3D models into IndexedDB
+  if (parsed.embeddedModels) {
+    for (const [mid, item] of Object.entries(parsed.embeddedModels)) {
+      if (item && item.base64Glb) {
+        await saveImportedModelBlob({
+          id: mid,
+          name: item.name || 'Model 3D',
+          format: item.format || 'GLB',
+          thumbDataUrl: item.thumbDataUrl || '',
+          glbBuffer: base64ToArrayBuffer(item.base64Glb),
+          createdAt: Date.now(),
+        });
+      }
+    }
+  }
+
   const now = Date.now();
   const newId = `proj_${now}_${Math.random().toString(36).slice(2, 7)}`;
   const cleanName =
-    parsed.name?.trim() || file.name.replace(/\.(perabot|json)$/i, '') || 'Impor Proyek';
+    parsed.name?.trim() ||
+    file.name.replace(/\.(perabot|json)$/i, '') ||
+    'Impor Proyek';
 
   const scene: SerializedProjectFile = {
     format: 'perabot-project-v1',
@@ -205,6 +323,8 @@ export async function importProjectBackupFile(
     updatedAt: now,
     objects: parsed.objects,
     gridSettings: parsed.gridSettings,
+    snapSettings: parsed.snapSettings,
+    surfaceSettings: parsed.surfaceSettings,
     lightingMood: parsed.lightingMood,
   };
 
