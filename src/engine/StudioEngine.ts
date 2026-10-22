@@ -404,6 +404,10 @@ export class StudioEngine {
     this.pushHistorySnapshot();
     this.emitState();
 
+    requestAnimationFrame(() => {
+      this.handleResize();
+    });
+
     this.animate();
   }
 
