@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import {
+  ArchitecturalRole,
   MAGNET_RADIUS_MAP,
   PrimitiveKind,
   SnapSettings,
@@ -28,18 +29,18 @@ export interface SnapComputeResult {
 interface ObjectSnapProfile {
   id: string;
   name: string;
+  archRole?: ArchitecturalRole;
   box: THREE.Box3;
   center: THREE.Vector3;
   points: THREE.Vector3[];
+  sockets: Array<{ pt: THREE.Vector3; tag: 'wall-end' | 'wall-top' | 'slab-edge' }>;
 }
 
 function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
   const kind = (mesh.userData.kind as PrimitiveKind) || 'cube';
   const posAttr = mesh.geometry.getAttribute('position');
 
-  // For faceted architectural shapes (wedges, pyramids, prisms, frames, L/T blocks),
-  // extract ACTUAL unique geometry vertices so we NEVER snap to phantom AABB air corners!
-  if (posAttr && posAttr.count > 0 && posAttr.count <= 144) {
+  if (posAttr && posAttr.count > 0 && posAttr.count <= 144 && !mesh.userData.modelAssetId) {
     const uniqueMap = new Map<string, THREE.Vector3>();
     for (let i = 0; i < posAttr.count; i++) {
       const x = posAttr.getX(i);
@@ -52,7 +53,6 @@ function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
       if (uniqueMap.size >= 28) break;
     }
     const pts = Array.from(uniqueMap.values());
-    // Add edge midpoints of bottom/top extremes for easy centered roof/block placement
     mesh.geometry.computeBoundingBox();
     if (mesh.geometry.boundingBox) {
       const mid = new THREE.Vector3();
@@ -65,7 +65,10 @@ function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
   mesh.geometry.computeBoundingBox();
   const bb =
     mesh.geometry.boundingBox ??
-    new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+    new THREE.Box3(
+      new THREE.Vector3(-0.5, -0.5, -0.5),
+      new THREE.Vector3(0.5, 0.5, 0.5)
+    );
 
   const min = bb.min;
   const max = bb.max;
@@ -93,34 +96,150 @@ function getLocalStructuralPoints(mesh: THREE.Mesh): THREE.Vector3[] {
   return pts;
 }
 
-function buildProfile(mesh: THREE.Mesh, overridePos?: THREE.Vector3): ObjectSnapProfile {
-  const localPts = getLocalStructuralPoints(mesh);
+function buildSocketsFromBox(
+  box: THREE.Box3,
+  role?: ArchitecturalRole
+): Array<{ pt: THREE.Vector3; tag: 'wall-end' | 'wall-top' | 'slab-edge' }> {
+  const sockets: Array<{
+    pt: THREE.Vector3;
+    tag: 'wall-end' | 'wall-top' | 'slab-edge';
+  }> = [];
+  if (!role) return sockets;
 
-  const mat = new THREE.Matrix4().compose(
-    overridePos ?? mesh.position,
-    mesh.quaternion,
-    mesh.scale
-  );
+  const min = box.min;
+  const max = box.max;
+  const cx = (min.x + max.x) * 0.5;
+  const cz = (min.z + max.z) * 0.5;
+  const sx = max.x - min.x;
+  const sz = max.z - min.z;
+
+  if (role === 'wall' || role === 'opening') {
+    // Wall horizontal endpoints at base Y & top rim center
+    if (sx >= sz) {
+      sockets.push(
+        { pt: new THREE.Vector3(min.x, min.y, cz), tag: 'wall-end' },
+        { pt: new THREE.Vector3(max.x, min.y, cz), tag: 'wall-end' }
+      );
+    } else {
+      sockets.push(
+        { pt: new THREE.Vector3(cx, min.y, min.z), tag: 'wall-end' },
+        { pt: new THREE.Vector3(cx, min.y, max.z), tag: 'wall-end' }
+      );
+    }
+    sockets.push(
+      { pt: new THREE.Vector3(cx, max.y, cz), tag: 'wall-top' },
+      { pt: new THREE.Vector3(min.x, max.y, cz), tag: 'wall-top' },
+      { pt: new THREE.Vector3(max.x, max.y, cz), tag: 'wall-top' }
+    );
+  } else if (role === 'floor') {
+    sockets.push(
+      { pt: new THREE.Vector3(min.x, max.y, cz), tag: 'slab-edge' },
+      { pt: new THREE.Vector3(max.x, max.y, cz), tag: 'slab-edge' },
+      { pt: new THREE.Vector3(cx, max.y, min.z), tag: 'slab-edge' },
+      { pt: new THREE.Vector3(cx, max.y, max.z), tag: 'slab-edge' }
+    );
+  } else if (role === 'roof') {
+    sockets.push(
+      { pt: new THREE.Vector3(cx, min.y, cz), tag: 'wall-top' },
+      { pt: new THREE.Vector3(min.x, min.y, cz), tag: 'wall-top' },
+      { pt: new THREE.Vector3(max.x, min.y, cz), tag: 'wall-top' }
+    );
+  }
+  return sockets;
+}
+
+function buildCombinedProfile(
+  leaderMesh: THREE.Mesh,
+  overrideLeaderPos?: THREE.Vector3,
+  companionMeshes?: THREE.Mesh[]
+): ObjectSnapProfile {
+  const delta = overrideLeaderPos
+    ? overrideLeaderPos.clone().sub(leaderMesh.position)
+    : new THREE.Vector3(0, 0, 0);
 
   const box = new THREE.Box3();
   const worldPts: THREE.Vector3[] = [];
+  const allMeshes =
+    companionMeshes && companionMeshes.length > 0
+      ? [leaderMesh, ...companionMeshes.filter((m) => m !== leaderMesh)]
+      : [leaderMesh];
 
-  for (const lp of localPts) {
-    const wp = lp.clone().applyMatrix4(mat);
-    box.expandByPoint(wp);
-    worldPts.push(wp);
+  for (const m of allMeshes) {
+    const localPts = getLocalStructuralPoints(m);
+    const shiftedPos = m.position.clone().add(delta);
+    const mat = new THREE.Matrix4().compose(shiftedPos, m.quaternion, m.scale);
+    for (const lp of localPts) {
+      const wp = lp.clone().applyMatrix4(mat);
+      box.expandByPoint(wp);
+      if (worldPts.length < 36) {
+        worldPts.push(wp);
+      }
+    }
+  }
+
+  // Always include the 8 outer corners & 6 face centers of the combined Bounding Box (#10 Bounding Box Snapping)
+  if (!box.isEmpty()) {
+    const { min, max } = box;
+    const mid = new THREE.Vector3().addVectors(min, max).multiplyScalar(0.5);
+    for (const x of [min.x, max.x]) {
+      for (const y of [min.y, max.y]) {
+        for (const z of [min.z, max.z]) {
+          worldPts.push(new THREE.Vector3(x, y, z));
+        }
+      }
+    }
+    worldPts.push(
+      new THREE.Vector3(mid.x, min.y, mid.z),
+      new THREE.Vector3(mid.x, max.y, mid.z)
+    );
   }
 
   const center = new THREE.Vector3();
   box.getCenter(center);
+  const role = leaderMesh.userData.archRole as ArchitecturalRole | undefined;
 
   return {
-    id: mesh.userData.objectId as string,
-    name: mesh.name,
+    id: (leaderMesh.userData.objectId as string) || leaderMesh.uuid,
+    name: leaderMesh.userData.groupName || leaderMesh.name,
+    archRole: role,
     box,
     center,
     points: worldPts,
+    sockets: buildSocketsFromBox(box, role),
   };
+}
+
+function groupTargetProfiles(otherMeshes: THREE.Mesh[]): ObjectSnapProfile[] {
+  const byGroup = new Map<string, THREE.Mesh[]>();
+  const singles: THREE.Mesh[] = [];
+
+  for (const m of otherMeshes) {
+    if (!m.visible) continue;
+    const gid = m.userData.groupId as string | null | undefined;
+    if (gid) {
+      let arr = byGroup.get(gid);
+      if (!arr) {
+        arr = [];
+        byGroup.set(gid, arr);
+      }
+      arr.push(m);
+    } else {
+      singles.push(m);
+    }
+  }
+
+  const profiles: ObjectSnapProfile[] = [];
+  for (const m of singles) {
+    profiles.push(buildCombinedProfile(m));
+  }
+  for (const grpMeshes of byGroup.values()) {
+    if (grpMeshes.length > 0) {
+      profiles.push(
+        buildCombinedProfile(grpMeshes[0], undefined, grpMeshes.slice(1))
+      );
+    }
+  }
+  return profiles;
 }
 
 function axisGap1D(minA: number, maxA: number, minB: number, maxB: number): number {
@@ -129,16 +248,25 @@ function axisGap1D(minA: number, maxA: number, minB: number, maxB: number): numb
   return 0;
 }
 
-function overlapCenter1D(minA: number, maxA: number, minB: number, maxB: number): {
-  center: number;
-  span: number;
-} {
+function overlapCenter1D(
+  minA: number,
+  maxA: number,
+  minB: number,
+  maxB: number
+): { center: number; span: number } {
   const lo = Math.max(minA, minB);
   const hi = Math.min(maxA, maxB);
   if (hi >= lo) {
     return { center: (lo + hi) * 0.5, span: Math.max(0.25, hi - lo) };
   }
   return { center: (lo + hi) * 0.5, span: 0.45 };
+}
+
+export interface SnapExtraContext {
+  companionMeshes?: THREE.Mesh[];
+  effectiveGridStep?: number;
+  storyElevations?: number[];
+  isHouseMode?: boolean;
 }
 
 export class SnappingEngine {
@@ -148,7 +276,8 @@ export class SnappingEngine {
     dragAxis: string | null,
     otherMeshes: THREE.Mesh[],
     settings: SnapSettings,
-    groundElevationY = 0
+    groundElevationY = 0,
+    extra: SnapExtraContext = {}
   ): SnapComputeResult {
     const result: SnapComputeResult = {
       snappedPosition: rawPos.clone(),
@@ -170,17 +299,82 @@ export class SnappingEngine {
     };
 
     const radius = MAGNET_RADIUS_MAP[settings.magnetStrength];
-    const moving = buildProfile(movingMesh, rawPos);
-    const targets = otherMeshes
-      .filter((m) => m.visible && m !== movingMesh)
-      .map((m) => buildProfile(m));
+    const companions = extra.companionMeshes ?? [];
+    const moving = buildCombinedProfile(movingMesh, rawPos, companions);
+    const targets = groupTargetProfiles(
+      otherMeshes.filter((m) => m !== movingMesh && !companions.includes(m))
+    );
 
     const lockedAxes = { x: false, y: false, z: false };
     const labels: string[] = [];
 
-    // 1. Unified Magnet Blok: Multi-axis 3D Corner/Edge Lock (on planar or XYZ drag)
-    const activeAxisCount = (allow.x ? 1 : 0) + (allow.y ? 1 : 0) + (allow.z ? 1 : 0);
-    if (settings.objectMagnet && activeAxisCount >= 2 && targets.length > 0) {
+    const activeAxisCount =
+      (allow.x ? 1 : 0) + (allow.y ? 1 : 0) + (allow.z ? 1 : 0);
+
+    // 0. #1 Modular Architectural Socket Snapping (in House Mode when moving Modular / Architectural parts)
+    if (
+      extra.isHouseMode &&
+      settings.modularSocket &&
+      moving.sockets.length > 0 &&
+      activeAxisCount >= 2 &&
+      targets.length > 0
+    ) {
+      let bestSocketDist = radius * 1.45;
+      let bestSocketDelta: THREE.Vector3 | null = null;
+      let bestSocketPt: THREE.Vector3 | null = null;
+      let bestSocketPartner = '';
+
+      for (const tar of targets) {
+        if (tar.sockets.length === 0) continue;
+        for (const ms of moving.sockets) {
+          for (const ts of tar.sockets) {
+            const compatible =
+              (ms.tag === 'wall-end' &&
+                (ts.tag === 'wall-end' || ts.tag === 'slab-edge')) ||
+              (ms.tag === 'wall-top' && ts.tag === 'wall-top') ||
+              (ms.tag === 'slab-edge' &&
+                (ts.tag === 'slab-edge' || ts.tag === 'wall-end'));
+            if (!compatible) continue;
+
+            const dx = allow.x ? ts.pt.x - ms.pt.x : 0;
+            const dy = allow.y ? ts.pt.y - ms.pt.y : 0;
+            const dz = allow.z ? ts.pt.z - ms.pt.z : 0;
+
+            const offAxisDist =
+              (!allow.x ? Math.abs(ts.pt.x - ms.pt.x) : 0) +
+              (!allow.y ? Math.abs(ts.pt.y - ms.pt.y) : 0) +
+              (!allow.z ? Math.abs(ts.pt.z - ms.pt.z) : 0);
+            if (offAxisDist > 0.75) continue;
+
+            const d = Math.hypot(dx, dy, dz);
+            if (d < bestSocketDist) {
+              bestSocketDist = d;
+              bestSocketDelta = new THREE.Vector3(dx, dy, dz);
+              bestSocketPt = ts.pt.clone();
+              bestSocketPartner = tar.name;
+            }
+          }
+        }
+      }
+
+      if (bestSocketDelta && bestSocketPt) {
+        result.snappedPosition.add(bestSocketDelta);
+        if (allow.x) lockedAxes.x = true;
+        if (allow.y) lockedAxes.y = true;
+        if (allow.z) lockedAxes.z = true;
+        result.points.push(bestSocketPt);
+        labels.push(`Modular Socket • ${bestSocketPartner}`);
+      }
+    }
+
+    // 1. Unified Magnet Blok: Multi-axis 3D Corner/Edge Lock
+    if (
+      !lockedAxes.x &&
+      !lockedAxes.z &&
+      settings.objectMagnet &&
+      activeAxisCount >= 2 &&
+      targets.length > 0
+    ) {
       let bestDist = radius * 0.92;
       let bestDelta: THREE.Vector3 | null = null;
       let bestTargetPt: THREE.Vector3 | null = null;
@@ -227,11 +421,18 @@ export class SnappingEngine {
       }
     }
 
-    let currentMoving = buildProfile(movingMesh, result.snappedPosition);
+    let currentMoving = buildCombinedProfile(
+      movingMesh,
+      result.snappedPosition,
+      companions
+    );
 
-    // 2. Per-Axis Evaluation: Magnet Blok (Surface + Edge + Flush Assist) -> Alignment -> Grid
+    // 2. Per-Axis Evaluation: Magnet Blok -> #11 Story/Height Snap -> #10 Full Bounding-Box Alignment -> Grid
     const axes: Array<'x' | 'y' | 'z'> = ['x', 'y', 'z'];
-    const otherAxesMap: Record<'x' | 'y' | 'z', ['x' | 'y' | 'z', 'x' | 'y' | 'z']> = {
+    const otherAxesMap: Record<
+      'x' | 'y' | 'z',
+      ['x' | 'y' | 'z', 'x' | 'y' | 'z']
+    > = {
       x: ['y', 'z'],
       y: ['x', 'z'],
       z: ['x', 'y'],
@@ -254,33 +455,43 @@ export class SnappingEngine {
       let chosenContact: ContactPatchSpec | null = null;
       let flushPartner: ObjectSnapProfile | null = null;
 
-      // 2A. Magnet Blok: Floor Contact + Surface Contact + Edge/Vertex Contact
+      // 2A. Magnet Blok: Floor Contact + Story Elevations + Object-to-Object Flush Contact
       if (settings.objectMagnet) {
-        // Floor / Workplane magnet
         if (ax === 'y') {
-          const distFloor = Math.abs(currentMoving.box.min.y - groundElevationY);
-          if (distFloor <= radius) {
-            const score = distFloor * 0.78;
-            if (score < bestScore) {
-              bestScore = score;
-              chosenDelta = groundElevationY - currentMoving.box.min.y;
-              chosenLabel = `Magnet • Lantai (Y=${groundElevationY}m)`;
-              const sizeX = Math.max(0.3, currentMoving.box.max.x - currentMoving.box.min.x);
-              const sizeZ = Math.max(0.3, currentMoving.box.max.z - currentMoving.box.min.z);
-              chosenContact = {
-                center: new THREE.Vector3(
-                  currentMoving.center.x,
-                  groundElevationY + 0.004,
-                  currentMoving.center.z
-                ),
-                size: [sizeX, sizeZ],
-                axis: 'y',
-              };
+          const elevationTargets = [
+            groundElevationY,
+            ...(extra.storyElevations ?? []),
+          ];
+          for (const elevY of elevationTargets) {
+            const distFloor = Math.abs(currentMoving.box.min.y - elevY);
+            if (distFloor <= radius) {
+              const score = distFloor * 0.76;
+              if (score < bestScore) {
+                bestScore = score;
+                chosenDelta = elevY - currentMoving.box.min.y;
+                chosenLabel = `Elevasi Y=${elevY.toFixed(2)}m`;
+                const sizeX = Math.max(
+                  0.3,
+                  currentMoving.box.max.x - currentMoving.box.min.x
+                );
+                const sizeZ = Math.max(
+                  0.3,
+                  currentMoving.box.max.z - currentMoving.box.min.z
+                );
+                chosenContact = {
+                  center: new THREE.Vector3(
+                    currentMoving.center.x,
+                    elevY + 0.004,
+                    currentMoving.center.z
+                  ),
+                  size: [sizeX, sizeZ],
+                  axis: 'y',
+                };
+              }
             }
           }
         }
 
-        // Object-to-object flush surface contact
         const maxPerpGap = radius * 2.5;
         for (const tar of targets) {
           const gap1 = axisGap1D(
@@ -305,8 +516,8 @@ export class SnappingEngine {
                 chosenDelta = dMinToMax;
                 chosenLabel =
                   ax === 'y'
-                    ? `Magnet • Tumpuk di atas ${tar.name}`
-                    : `Magnet • Menempel ${tar.name}`;
+                    ? `Tumpuk • ${tar.name}`
+                    : `Menempel • ${tar.name}`;
                 chosenContact = this.buildContactPatch(
                   ax,
                   tar.box.max[ax],
@@ -325,7 +536,7 @@ export class SnappingEngine {
               if (score < bestScore) {
                 bestScore = score;
                 chosenDelta = dMaxToMin;
-                chosenLabel = `Magnet • Menempel ${tar.name}`;
+                chosenLabel = `Menempel • ${tar.name}`;
                 chosenContact = this.buildContactPatch(
                   ax,
                   tar.box.min[ax],
@@ -339,7 +550,6 @@ export class SnappingEngine {
             }
           }
 
-          // Nearby Edge & Corner Snap
           if (currentMoving.center.distanceTo(tar.center) <= 2.5) {
             for (const mp of currentMoving.points) {
               for (const tp of tar.points) {
@@ -368,27 +578,37 @@ export class SnappingEngine {
         }
       }
 
-      // 2B. Alignment Snapping (Garis Sejajar Jarak Jauh)
+      // 2B. #10 Full 6-Relation Bounding Box Snapping (Center, Min↔Min, Max↔Max, Min↔Max, Max↔Min)
       if (settings.alignment) {
-        const alignThreshold = radius * 0.75;
+        const alignThreshold = radius * 0.78;
         for (const tar of targets) {
-          if (currentMoving.center.distanceTo(tar.center) > 22) continue;
+          if (currentMoving.center.distanceTo(tar.center) > 26) continue;
 
           const checks: Array<{ movVal: number; tarVal: number; tag: string }> = [
             {
               movVal: currentMoving.center[ax],
               tarVal: tar.center[ax],
-              tag: `Sejajar Tengah ${ax.toUpperCase()} • ${tar.name}`,
+              tag: `BBox Tengah ${ax.toUpperCase()} • ${tar.name}`,
             },
             {
               movVal: currentMoving.box.min[ax],
               tarVal: tar.box.min[ax],
-              tag: `Rata Tepi ${ax.toUpperCase()} • ${tar.name}`,
+              tag: `BBox Rata Tepi ${ax.toUpperCase()} • ${tar.name}`,
             },
             {
               movVal: currentMoving.box.max[ax],
               tarVal: tar.box.max[ax],
-              tag: `Rata Tepi ${ax.toUpperCase()} • ${tar.name}`,
+              tag: `BBox Rata Tepi ${ax.toUpperCase()} • ${tar.name}`,
+            },
+            {
+              movVal: currentMoving.box.min[ax],
+              tarVal: tar.box.max[ax],
+              tag: `BBox Sambung ${ax.toUpperCase()} • ${tar.name}`,
+            },
+            {
+              movVal: currentMoving.box.max[ax],
+              tarVal: tar.box.min[ax],
+              tag: `BBox Sambung ${ax.toUpperCase()} • ${tar.name}`,
             },
           ];
 
@@ -422,8 +642,6 @@ export class SnappingEngine {
       if (chosenDelta !== null) {
         result.snappedPosition[ax] += chosenDelta;
 
-        // Micro Auto-Flush Assist: when two blocks touch magnetically, snap tiny micro-offsets
-        // (< 0.08m) on perpendicular axes so touching walls/stacks meet 100% seamlessly
         if (flushPartner) {
           for (const pAx of [perp1, perp2]) {
             const microChecks = [
@@ -444,25 +662,67 @@ export class SnappingEngine {
         if (chosenGuide) result.guides.push(chosenGuide);
         if (chosenPoint) result.points.push(chosenPoint);
         if (chosenContact) result.contacts.push(chosenContact);
-        currentMoving = buildProfile(movingMesh, result.snappedPosition);
-      } else if (settings.grid && settings.gridStep > 0) {
-        const step = settings.gridStep;
-        if (ax === 'y') {
-          const snappedMinY = Math.round(currentMoving.box.min.y / step) * step;
-          const deltaY = snappedMinY - currentMoving.box.min.y;
-          result.snappedPosition.y += deltaY;
-        } else {
-          result.snappedPosition[ax] =
-            Math.round(result.snappedPosition[ax] / step) * step;
+        currentMoving = buildCombinedProfile(
+          movingMesh,
+          result.snappedPosition,
+          companions
+        );
+      } else if (ax === 'y' && settings.heightSnap && settings.heightStep > 0) {
+        // #11 Dedicated Height Snapping along Y
+        const hStep = settings.heightStep;
+        const relY = currentMoving.box.min.y - groundElevationY;
+        const snappedRelY = Math.round(relY / hStep) * hStep;
+        const targetMinY = groundElevationY + snappedRelY;
+        const deltaY = targetMinY - currentMoving.box.min.y;
+        result.snappedPosition.y += deltaY;
+
+        const sizeX = Math.max(
+          0.35,
+          currentMoving.box.max.x - currentMoving.box.min.x
+        );
+        const sizeZ = Math.max(
+          0.35,
+          currentMoving.box.max.z - currentMoving.box.min.z
+        );
+        result.contacts.push({
+          center: new THREE.Vector3(
+            currentMoving.center.x,
+            targetMinY + 0.003,
+            currentMoving.center.z
+          ),
+          size: [sizeX, sizeZ],
+          axis: 'y',
+        });
+        labels.push(`Height Y=${targetMinY.toFixed(2)}m`);
+        currentMoving = buildCombinedProfile(
+          movingMesh,
+          result.snappedPosition,
+          companions
+        );
+      } else if (settings.grid) {
+        const step = extra.effectiveGridStep ?? settings.gridStep;
+        if (step > 0) {
+          if (ax === 'y') {
+            const snappedMinY =
+              Math.round(currentMoving.box.min.y / step) * step;
+            const deltaY = snappedMinY - currentMoving.box.min.y;
+            result.snappedPosition.y += deltaY;
+          } else {
+            result.snappedPosition[ax] =
+              Math.round(result.snappedPosition[ax] / step) * step;
+          }
+          if (labels.length === 0) {
+            labels.push(`Grid ${step}m`);
+          }
+          currentMoving = buildCombinedProfile(
+            movingMesh,
+            result.snappedPosition,
+            companions
+          );
         }
-        if (labels.length === 0) {
-          labels.push(`Grid ${step}m`);
-        }
-        currentMoving = buildProfile(movingMesh, result.snappedPosition);
       }
     }
 
-    // Round tiny floating noise (e.g. 0.999999999 -> 1) so touching blocks share exact coordinates
     result.snappedPosition.set(
       Math.round(result.snappedPosition.x * 10000) / 10000,
       Math.round(result.snappedPosition.y * 10000) / 10000,

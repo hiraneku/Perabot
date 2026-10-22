@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Boxes,
+  Building2,
   ChevronUp,
   Info,
   Plus,
@@ -16,6 +17,12 @@ import {
   PRIMITIVE_META,
   PrimitiveMetaItem,
 } from '../engine/primitives';
+import {
+  getModularItemThumbnail,
+  MODULAR_CONSTRUCTION_CATALOG,
+  ModularCategory,
+  ModularConstructionItem,
+} from '../engine/modularConstruction';
 import {
   getLocalizedShapeMeta,
   getShapeSubcategoryLabel,
@@ -38,6 +45,16 @@ const SUBCATEGORY_ORDER: ShapeSubcategory[] = [
   'cylinders',
   'curved',
   'architecture',
+];
+
+const MODULAR_CATEGORY_ORDER: Array<'all' | ModularCategory> = [
+  'all',
+  'floors',
+  'walls',
+  'openings',
+  'stairs',
+  'roofs',
+  'landscape',
 ];
 
 const LONG_PRESS_MS = 380;
@@ -162,42 +179,56 @@ const BasicShapeTile: React.FC<ShapeTileProps> = ({
 };
 
 /* =========================================================
-   Catalog Drawer (75 Basic Shapes + User Custom Assets)
+   Catalog Drawer (75 Basic Shapes + House Modular Parts + User Custom Assets)
    ========================================================= */
+type CatalogTabMode = 'shapes' | 'modular' | 'custom';
+
 interface CatalogDrawerProps {
   open: boolean;
+  initialTab: CatalogTabMode;
+  studioMode: StudioMode;
   language: AppLanguage;
   recentKind: PrimitiveKind;
   customAssets: CustomAssetRecord[];
   onClose: () => void;
   onSpawnShape: (kind: PrimitiveKind, keepOpen?: boolean) => void;
+  onSpawnModularItem?: (item: ModularConstructionItem, label: string) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
 }
 
 const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   open,
+  initialTab,
+  studioMode,
   language,
   recentKind,
   customAssets,
   onClose,
   onSpawnShape,
+  onSpawnModularItem,
   onSpawnCustomAsset,
   onDeleteCustomAsset,
 }) => {
   const t = TRANSLATIONS[language];
-  const [catalogView, setCatalogView] = useState<'shapes' | 'custom'>('shapes');
+  const isHouse = studioMode === 'house';
+  const [catalogView, setCatalogView] = useState<CatalogTabMode>(initialTab);
   const [subcat, setSubcat] = useState<ShapeSubcategory>('all');
+  const [modCat, setModCat] = useState<'all' | ModularCategory>('all');
   const [query, setQuery] = useState('');
   const [inspectedShape, setInspectedShape] = useState<PrimitiveMetaItem | null>(
     null
   );
 
   useEffect(() => {
-    if (!open) {
+    if (open) {
+      setCatalogView(
+        !isHouse && initialTab === 'modular' ? 'shapes' : initialTab
+      );
+    } else {
       setInspectedShape(null);
     }
-  }, [open]);
+  }, [open, initialTab, isHouse]);
 
   const filteredShapes = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -215,6 +246,20 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
     });
   }, [subcat, query, language]);
 
+  const filteredModular = useMemo(() => {
+    if (!isHouse) return [];
+    const q = query.trim().toLowerCase();
+    return MODULAR_CONSTRUCTION_CATALOG.filter((item) => {
+      if (modCat !== 'all' && item.category !== modCat) return false;
+      if (!q) return true;
+      return (
+        item.name[language].toLowerCase().includes(q) ||
+        item.subtitle[language].toLowerCase().includes(q) ||
+        item.id.toLowerCase().includes(q)
+      );
+    });
+  }, [isHouse, modCat, query, language]);
+
   const filteredCustom = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return customAssets;
@@ -226,6 +271,35 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   const inspectedLocalized = inspectedShape
     ? getLocalizedShapeMeta(inspectedShape, language)
     : null;
+
+  const getModCategoryLabel = (cat: 'all' | ModularCategory): string => {
+    switch (cat) {
+      case 'all':
+        return `${t.modCatAll} (${MODULAR_CONSTRUCTION_CATALOG.length})`;
+      case 'floors':
+        return t.modCatFloors;
+      case 'walls':
+        return t.modCatWalls;
+      case 'openings':
+        return t.modCatOpenings;
+      case 'stairs':
+        return t.modCatStairs;
+      case 'roofs':
+        return t.modCatRoofs;
+      case 'landscape':
+        return t.modCatLandscape;
+    }
+  };
+
+  const headerTitle =
+    catalogView === 'modular'
+      ? t.modularKitTab
+      : catalogView === 'custom'
+      ? t.catCustom
+      : t.basicShapes;
+
+  const headerHint =
+    catalogView === 'modular' ? t.modularKitHint : t.shapesHint;
 
   return (
     <div
@@ -239,16 +313,22 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
       <div
         className="basic-shapes-panel"
         role="dialog"
-        aria-label={catalogView === 'custom' ? t.catCustom : t.basicShapes}
+        aria-label={headerTitle}
       >
         <div className="basic-shapes-header">
           <div className="basic-shapes-title">
             <span className="basic-shapes-badge-icon">
-              {catalogView === 'custom' ? <Boxes size={17} /> : <Shapes size={17} />}
+              {catalogView === 'modular' ? (
+                <Building2 size={17} />
+              ) : catalogView === 'custom' ? (
+                <Boxes size={17} />
+              ) : (
+                <Shapes size={17} />
+              )}
             </span>
             <div>
-              <h3>{catalogView === 'custom' ? t.catCustom : t.basicShapes}</h3>
-              <p>{t.shapesHint}</p>
+              <h3>{headerTitle}</h3>
+              <p>{headerHint}</p>
             </div>
           </div>
 
@@ -256,15 +336,36 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
             <div className="catalog-mode-switch">
               <button
                 type="button"
-                className={`cat-switch-pill ${catalogView === 'shapes' ? 'active' : ''}`}
+                className={`cat-switch-pill ${
+                  catalogView === 'shapes' ? 'active' : ''
+                }`}
                 onClick={() => setCatalogView('shapes')}
               >
                 <Shapes size={13} />
                 <span>{t.basicShapes}</span>
               </button>
+
+              {/* #7 Modular Construction Tab — Buat Rumah ONLY */}
+              {isHouse && (
+                <button
+                  type="button"
+                  className={`cat-switch-pill ${
+                    catalogView === 'modular' ? 'active' : ''
+                  }`}
+                  onClick={() => setCatalogView('modular')}
+                >
+                  <Building2 size={13} />
+                  <span>
+                    {t.modularKitTab} ({MODULAR_CONSTRUCTION_CATALOG.length})
+                  </span>
+                </button>
+              )}
+
               <button
                 type="button"
-                className={`cat-switch-pill ${catalogView === 'custom' ? 'active' : ''}`}
+                className={`cat-switch-pill ${
+                  catalogView === 'custom' ? 'active' : ''
+                }`}
                 onClick={() => setCatalogView('custom')}
               >
                 <Boxes size={13} />
@@ -294,7 +395,7 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={
-                catalogView === 'custom' ? t.searchPresets : t.searchShapes
+                catalogView === 'shapes' ? t.searchShapes : t.searchPresets
               }
             />
             {query && (
@@ -333,6 +434,25 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
               })}
             </div>
           )}
+
+          {catalogView === 'modular' && isHouse && (
+            <div className="basic-shapes-tabs" role="tablist">
+              {MODULAR_CATEGORY_ORDER.map((mc) => (
+                <button
+                  key={mc}
+                  type="button"
+                  role="tab"
+                  aria-selected={modCat === mc}
+                  className={`basic-subcat-tab ${
+                    modCat === mc ? 'active' : ''
+                  }`}
+                  onClick={() => setModCat(mc)}
+                >
+                  {getModCategoryLabel(mc)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Grid Body */}
@@ -351,6 +471,51 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                   onInspect={(m) => setInspectedShape(m)}
                 />
               ))
+            )
+          ) : catalogView === 'modular' ? (
+            filteredModular.length === 0 ? (
+              <div className="basic-shapes-empty">{t.noShapeMatch}</div>
+            ) : (
+              filteredModular.map((mod) => {
+                const thumb = getModularItemThumbnail(mod);
+                const locLabel = mod.name[language];
+                return (
+                  <div
+                    key={mod.id}
+                    role="button"
+                    tabIndex={0}
+                    className="basic-shape-tile modular-tile"
+                    onClick={() => {
+                      onSpawnModularItem?.(mod, locLabel);
+                      onClose();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSpawnModularItem?.(mod, locLabel);
+                        onClose();
+                      }
+                    }}
+                  >
+                    <div className="basic-shape-thumb">
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt={locLabel}
+                          className="primitive-3d-thumb"
+                          style={{ width: 48, height: 48 }}
+                        />
+                      ) : (
+                        <Building2 size={24} />
+                      )}
+                    </div>
+                    <div className="basic-shape-meta">
+                      <strong>{locLabel}</strong>
+                      <small>{mod.subtitle[language]}</small>
+                    </div>
+                  </div>
+                );
+              })
             )
           ) : filteredCustom.length === 0 ? (
             <div className="basic-shapes-empty">
@@ -478,19 +643,24 @@ interface SpawnDockProps {
   language: AppLanguage;
   customAssets: CustomAssetRecord[];
   onSpawn: (kind: PrimitiveKind) => void;
+  onSpawnModularItem?: (item: ModularConstructionItem, label: string) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
 }
 
 export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
+  studioMode,
   language,
   customAssets,
   onSpawn,
+  onSpawnModularItem,
   onSpawnCustomAsset,
   onDeleteCustomAsset,
 }) => {
   const t = TRANSLATIONS[language];
+  const isHouse = studioMode === 'house';
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<CatalogTabMode>('shapes');
   const [recentKind, setRecentKind] = useState<PrimitiveKind>('cube');
 
   const handleSpawnShape = (kind: PrimitiveKind, keepOpen = false) => {
@@ -507,8 +677,17 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
       <div className="desktop-spawn-dock" role="toolbar">
         <button
           type="button"
-          className={`spawn-category-trigger ${menuOpen ? 'active' : ''}`}
-          onClick={() => setMenuOpen((prev) => !prev)}
+          className={`spawn-category-trigger ${
+            menuOpen && activeTab === 'shapes' ? 'active' : ''
+          }`}
+          onClick={() => {
+            if (menuOpen && activeTab === 'shapes') {
+              setMenuOpen(false);
+            } else {
+              setActiveTab('shapes');
+              setMenuOpen(true);
+            }
+          }}
         >
           <span className="spawn-cat-icon-wrap">
             <Shapes size={20} />
@@ -520,9 +699,43 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
           <span className="spawn-cat-pill">{totalCount}</span>
           <ChevronUp
             size={15}
-            className={`spawn-cat-chevron ${menuOpen ? 'open' : ''}`}
+            className={`spawn-cat-chevron ${
+              menuOpen && activeTab === 'shapes' ? 'open' : ''
+            }`}
           />
         </button>
+
+        {/* #7 Modular Construction Trigger — Buat Rumah ONLY */}
+        {isHouse && (
+          <>
+            <div className="spawn-dock-divider" />
+            <button
+              type="button"
+              className={`spawn-category-trigger modular-trigger ${
+                menuOpen && activeTab === 'modular' ? 'active' : ''
+              }`}
+              onClick={() => {
+                if (menuOpen && activeTab === 'modular') {
+                  setMenuOpen(false);
+                } else {
+                  setActiveTab('modular');
+                  setMenuOpen(true);
+                }
+              }}
+            >
+              <span className="spawn-cat-icon-wrap modular">
+                <Building2 size={20} />
+              </span>
+              <span className="spawn-card-text">
+                <strong>{t.modularKitTab}</strong>
+                <small>3.0m</small>
+              </span>
+              <span className="spawn-cat-pill">
+                {MODULAR_CONSTRUCTION_CATALOG.length}
+              </span>
+            </button>
+          </>
+        )}
 
         <div className="spawn-dock-divider" />
 
@@ -543,11 +756,14 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
 
       <CatalogDrawer
         open={menuOpen}
+        initialTab={activeTab}
+        studioMode={studioMode}
         language={language}
         recentKind={recentKind}
         customAssets={customAssets}
         onClose={() => setMenuOpen(false)}
         onSpawnShape={handleSpawnShape}
+        onSpawnModularItem={onSpawnModularItem}
         onSpawnCustomAsset={onSpawnCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
       />
@@ -562,9 +778,11 @@ interface MobileBottomBarProps extends SpawnDockProps {
 }
 
 export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
+  studioMode,
   language,
   customAssets,
   onSpawn,
+  onSpawnModularItem,
   onSpawnCustomAsset,
   onDeleteCustomAsset,
   objectCount,
@@ -572,7 +790,9 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
   onToggleDrawer,
 }) => {
   const t = TRANSLATIONS[language];
+  const isHouse = studioMode === 'house';
   const [menuOpen, setMenuOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<CatalogTabMode>('shapes');
   const [recentKind, setRecentKind] = useState<PrimitiveKind>('cube');
 
   const handleSpawnShape = (kind: PrimitiveKind, keepOpen = false) => {
@@ -589,8 +809,16 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
       <nav className="mobile-bottom-bar">
         <button
           type="button"
-          className={`mobile-basic-shapes-btn ${menuOpen ? 'active' : ''}`}
-          onClick={() => setMenuOpen((prev) => !prev)}
+          className={`mobile-basic-shapes-btn ${
+            menuOpen && activeTab === 'shapes' ? 'active' : ''
+          }`}
+          onClick={() => {
+            if (menuOpen && activeTab === 'shapes') setMenuOpen(false);
+            else {
+              setActiveTab('shapes');
+              setMenuOpen(true);
+            }
+          }}
         >
           <div className="mobile-cat-row">
             <Shapes size={18} />
@@ -598,6 +826,30 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
           </div>
           <span>{t.basicShapes}</span>
         </button>
+
+        {isHouse && (
+          <button
+            type="button"
+            className={`mobile-basic-shapes-btn modular-mobile-btn ${
+              menuOpen && activeTab === 'modular' ? 'active' : ''
+            }`}
+            onClick={() => {
+              if (menuOpen && activeTab === 'modular') setMenuOpen(false);
+              else {
+                setActiveTab('modular');
+                setMenuOpen(true);
+              }
+            }}
+          >
+            <div className="mobile-cat-row">
+              <Building2 size={18} />
+              <span className="mobile-cat-count">
+                {MODULAR_CONSTRUCTION_CATALOG.length}
+              </span>
+            </div>
+            <span>{t.modularKitTab}</span>
+          </button>
+        )}
 
         <button
           type="button"
@@ -625,11 +877,14 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
 
       <CatalogDrawer
         open={menuOpen}
+        initialTab={activeTab}
+        studioMode={studioMode}
         language={language}
         recentKind={recentKind}
         customAssets={customAssets}
         onClose={() => setMenuOpen(false)}
         onSpawnShape={handleSpawnShape}
+        onSpawnModularItem={onSpawnModularItem}
         onSpawnCustomAsset={onSpawnCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
       />

@@ -297,6 +297,101 @@ export interface StudioStrings {
   hudMove: string;
   hudRotate: string;
   hudScale: string;
+
+  // 12-Concept Expansion: Modular, Validation, Terrain Sculpt, Surface-Aware, Repeat, Multi-Select, Adaptive Grid, Axis Lock, Height Snap, Floor System
+  snapModularSocketTitle: string;
+  snapModularSocketDesc: string;
+  snapHeightTitle: string;
+  snapHeightDesc: string;
+
+  validationBtn: string;
+  validPositionBadge: string;
+  warnCollisionWith: string;
+  warnOutOfPlot: string;
+  warnOutOfDomain: string;
+  warnSteepSlope: string;
+  warnWrongSurface: string;
+
+  terrainSculptBtn: string;
+  terrainSculptTitle: string;
+  sculptRaise: string;
+  sculptLower: string;
+  sculptFlatten: string;
+  sculptSmooth: string;
+  sculptTerrace: string;
+  sculptRadius: string;
+  sculptStrength: string;
+  sculptTargetHeight: string;
+  sculptLevelPlotBtn: string;
+  sculptResetFlatBtn: string;
+  sculptHint: string;
+
+  surfAwareTitle: string;
+  surfAwareDesc: string;
+  surfMaxSlopeLabel: string;
+  surfRuleSection: string;
+  surfRuleAny: string;
+  surfRuleBuilding: string;
+  surfRuleFoliage: string;
+  surfRuleRock: string;
+  surfRuleInterior: string;
+  surfRuleOpening: string;
+
+  repeatArrayBtn: string;
+  repeatModalTitle: string;
+  repeatModeLinear: string;
+  repeatModeGrid: string;
+  repeatModeRadial: string;
+  repeatCountLabel: string;
+  repeatCountZLabel: string;
+  repeatDirectionLabel: string;
+  repeatSpacingFlush: string;
+  repeatSpacingFixed: string;
+  repeatDistanceLabel: string;
+  repeatRadiusLabel: string;
+  repeatAngleLabel: string;
+  repeatFollowTerrain: string;
+  repeatGroupResult: string;
+  repeatApplyBtn: string;
+  repeatAppliedToast: string;
+
+  selSingle: string;
+  selMultiTap: string;
+  selBoxDrag: string;
+  selSelectAll: string;
+  selClear: string;
+  selGroupSelected: string;
+  multiSelectedCount: string;
+  boxSelectHint: string;
+
+  modularKitTab: string;
+  modularKitHint: string;
+  modCatAll: string;
+  modCatFloors: string;
+  modCatWalls: string;
+  modCatOpenings: string;
+  modCatStairs: string;
+  modCatRoofs: string;
+  modCatLandscape: string;
+
+  gridAdaptiveTitle: string;
+  gridAdaptiveDesc: string;
+  gridAdaptiveBadge: string;
+
+  axisLockTitle: string;
+  axisLockFree: string;
+  axisLockX: string;
+  axisLockY: string;
+  axisLockZ: string;
+  axisLockXZ: string;
+
+  floorSystemTitle: string;
+  floorAddBtn: string;
+  floorViewAll: string;
+  floorViewCutaway: string;
+  floorViewGhost: string;
+  floorAssignLabel: string;
+  floorMoveSelectionBtn: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -612,6 +707,104 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     hudMove: 'GESER',
     hudRotate: 'PUTAR',
     hudScale: 'SKALA',
+
+    snapModularSocketTitle: 'Koneksi Modular Bangunan',
+    snapModularSocketDesc:
+      'Kunci otomatis ujung dinding ke dinding, pintu/jendela ke tembok, tangga ke lantai & atap ke dinding',
+    snapHeightTitle: 'Snap Ketinggian (Height Snap)',
+    snapHeightDesc:
+      'Kunci posisi vertikal Y ke tingkatan elevasi tertentu atau tinggi lantai bangunan',
+
+    validationBtn: 'Validasi',
+    validPositionBadge: 'Posisi Aman & Valid',
+    warnCollisionWith: 'Peringatan: Bertabrakan dengan',
+    warnOutOfPlot: 'Peringatan: Di luar batas kavling bangunan',
+    warnOutOfDomain: 'Peringatan: Melewati batas area kanvas',
+    warnSteepSlope: 'Peringatan: Kemiringan tanah terlalu curam untuk bangunan',
+    warnWrongSurface: 'Peringatan: Permukaan tidak sesuai aturan objek',
+
+    terrainSculptBtn: 'Bentuk Tanah',
+    terrainSculptTitle: 'Terrain Sculpting (Pembentuk Permukaan Tanah)',
+    sculptRaise: 'Naikkan',
+    sculptLower: 'Turunkan',
+    sculptFlatten: 'Ratakan',
+    sculptSmooth: 'Haluskan',
+    sculptTerrace: 'Terasering',
+    sculptRadius: 'Radius Kuas',
+    sculptStrength: 'Kekuatan',
+    sculptTargetHeight: 'Tinggi Rata',
+    sculptLevelPlotBtn: 'Ratakan Tapak Kavling',
+    sculptResetFlatBtn: 'Reset Tanah Datar',
+    sculptHint: 'Sapukan kuas langsung di tanah 3D untuk membentuk kontur lahan',
+
+    surfAwareTitle: 'Penempatan Sadar-Permukaan (Surface-Aware)',
+    surfAwareDesc:
+      'Sesuaikan sikap & validasi objek berdasar jenis bidang (tanah, lereng, lantai, dinding, atap)',
+    surfMaxSlopeLabel: 'Batas Lereng Bangunan Rata',
+    surfRuleSection: 'Aturan Permukaan Objek Ini',
+    surfRuleAny: 'Bebas (Semua Bidang)',
+    surfRuleBuilding: 'Bangunan (Wajib Rata)',
+    surfRuleFoliage: 'Rumput & Pohon (Hanya Tanah)',
+    surfRuleRock: 'Batu Alam (Tanah & Lereng)',
+    surfRuleInterior: 'Perabot (Atas Lantai/Slab)',
+    surfRuleOpening: 'Pintu & Jendela (Dinding)',
+
+    repeatArrayBtn: 'Deret',
+    repeatModalTitle: 'Gandakan & Deret Berulang (Array)',
+    repeatModeLinear: 'Garis Lurus',
+    repeatModeGrid: 'Petak 2D',
+    repeatModeRadial: 'Melingkar',
+    repeatCountLabel: 'Jumlah',
+    repeatCountZLabel: 'Baris Z',
+    repeatDirectionLabel: 'Arah Deret',
+    repeatSpacingFlush: 'Rapat Sambung',
+    repeatSpacingFixed: 'Jarak Tetap',
+    repeatDistanceLabel: 'Jarak Antar',
+    repeatRadiusLabel: 'Radius Lingkar',
+    repeatAngleLabel: 'Sudut Sebar',
+    repeatFollowTerrain: 'Ikuti Tinggi Tanah / Kontur',
+    repeatGroupResult: 'Gabung Hasil Jadi Grup',
+    repeatApplyBtn: 'Terapkan Deretan',
+    repeatAppliedToast: 'Deretan objek berhasil dibuat!',
+
+    selSingle: 'Pilih Tunggal',
+    selMultiTap: 'Multi-Pilih',
+    selBoxDrag: 'Kotak Seleksi',
+    selSelectAll: 'Semua',
+    selClear: 'Lepas',
+    selGroupSelected: 'Gabung Pilihan',
+    multiSelectedCount: 'objek terpilih',
+    boxSelectHint: 'Seret kotak di layar untuk memilih banyak objek sekaligus',
+
+    modularKitTab: 'Konstruksi Modular',
+    modularKitHint: 'Komponen rumah presisi yang saling klop (lantai, dinding, pintu, jendela, tangga & atap)',
+    modCatAll: 'Semua Modul',
+    modCatFloors: 'Lantai & Fondasi',
+    modCatWalls: 'Dinding',
+    modCatOpenings: 'Pintu & Jendela',
+    modCatStairs: 'Tangga & Pilar',
+    modCatRoofs: 'Atap',
+    modCatLandscape: 'Taman & Pagar',
+
+    gridAdaptiveTitle: 'Grid Adaptif Otomatis (Zoom & Skala)',
+    gridAdaptiveDesc:
+      'Kerapatan petak berubah halus menyesuaikan jarak zoom kamera & skala objek',
+    gridAdaptiveBadge: 'Auto',
+
+    axisLockTitle: 'Kunci Sumbu:',
+    axisLockFree: 'Bebas XYZ',
+    axisLockX: 'Sumbu X',
+    axisLockY: 'Sumbu Y',
+    axisLockZ: 'Sumbu Z',
+    axisLockXZ: 'Datar XZ',
+
+    floorSystemTitle: 'Lantai Bangunan',
+    floorAddBtn: '+ Lantai',
+    floorViewAll: 'Semua Lantai',
+    floorViewCutaway: 'Potong Atas',
+    floorViewGhost: 'Bayang Lain',
+    floorAssignLabel: 'Tingkat Lantai Objek',
+    floorMoveSelectionBtn: 'Pindah ke Lantai Aktif',
   },
 
   en: {
@@ -926,6 +1119,104 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     hudMove: 'MOVE',
     hudRotate: 'ROTATE',
     hudScale: 'SCALE',
+
+    snapModularSocketTitle: 'Modular Building Sockets',
+    snapModularSocketDesc:
+      'Auto-connect wall ends, doors/windows into walls, stairs to slabs, and roofs onto walls',
+    snapHeightTitle: 'Height Elevation Snap',
+    snapHeightDesc:
+      'Snap vertical Y movement to fixed elevation steps or building story levels',
+
+    validationBtn: 'Validate',
+    validPositionBadge: 'Valid Placement',
+    warnCollisionWith: 'Warning: Overlapping with',
+    warnOutOfPlot: 'Warning: Outside plot boundary',
+    warnOutOfDomain: 'Warning: Outside workspace domain',
+    warnSteepSlope: 'Warning: Slope too steep for flat building',
+    warnWrongSurface: 'Warning: Surface does not match object rule',
+
+    terrainSculptBtn: 'Sculpt Land',
+    terrainSculptTitle: 'Terrain Sculpting Studio',
+    sculptRaise: 'Raise',
+    sculptLower: 'Lower',
+    sculptFlatten: 'Flatten',
+    sculptSmooth: 'Smooth',
+    sculptTerrace: 'Terrace',
+    sculptRadius: 'Brush Radius',
+    sculptStrength: 'Strength',
+    sculptTargetHeight: 'Target Y',
+    sculptLevelPlotBtn: 'Level Plot Pad',
+    sculptResetFlatBtn: 'Reset Flat',
+    sculptHint: 'Paint directly across the 3D terrain to sculpt hills, pads, and slopes',
+
+    surfAwareTitle: 'Surface-Aware Placement',
+    surfAwareDesc:
+      'Adapt posture & validate rules by surface kind (soil ground, slope, floor slab, wall, roof)',
+    surfMaxSlopeLabel: 'Max Building Slope',
+    surfRuleSection: 'Object Surface Rule',
+    surfRuleAny: 'Any Surface',
+    surfRuleBuilding: 'Building (Flat Pad Only)',
+    surfRuleFoliage: 'Grass & Trees (Ground Only)',
+    surfRuleRock: 'Rocks (Ground & Steep Slopes)',
+    surfRuleInterior: 'Interior Prop (Floor Slab)',
+    surfRuleOpening: 'Door & Window (Wall)',
+
+    repeatArrayBtn: 'Repeat',
+    repeatModalTitle: 'Duplicate & Repeat Array',
+    repeatModeLinear: 'Linear Row',
+    repeatModeGrid: '2D Grid',
+    repeatModeRadial: 'Radial Ring',
+    repeatCountLabel: 'Count',
+    repeatCountZLabel: 'Rows Z',
+    repeatDirectionLabel: 'Direction',
+    repeatSpacingFlush: 'Flush Touching',
+    repeatSpacingFixed: 'Fixed Step',
+    repeatDistanceLabel: 'Step Spacing',
+    repeatRadiusLabel: 'Ring Radius',
+    repeatAngleLabel: 'Arc Angle',
+    repeatFollowTerrain: 'Follow Ground / Terrain Height',
+    repeatGroupResult: 'Group Generated Copies',
+    repeatApplyBtn: 'Generate Array',
+    repeatAppliedToast: 'Repeated array created!',
+
+    selSingle: 'Single',
+    selMultiTap: 'Multi-Select',
+    selBoxDrag: 'Box Select',
+    selSelectAll: 'All',
+    selClear: 'Clear',
+    selGroupSelected: 'Group Selected',
+    multiSelectedCount: 'selected',
+    boxSelectHint: 'Drag a marquee box on screen to select multiple objects at once',
+
+    modularKitTab: 'Modular Build',
+    modularKitHint: 'Compatible architectural modules (floors, walls, doors, windows, stairs & roofs)',
+    modCatAll: 'All Modules',
+    modCatFloors: 'Floors & Slabs',
+    modCatWalls: 'Walls',
+    modCatOpenings: 'Doors & Windows',
+    modCatStairs: 'Stairs & Pillars',
+    modCatRoofs: 'Roofs',
+    modCatLandscape: 'Site & Fences',
+
+    gridAdaptiveTitle: 'Adaptive Zoom & Scale Grid',
+    gridAdaptiveDesc:
+      'Automatically refines or coarsens grid density based on camera zoom & object scale',
+    gridAdaptiveBadge: 'Auto',
+
+    axisLockTitle: 'Axis Lock:',
+    axisLockFree: 'Free XYZ',
+    axisLockX: 'X Only',
+    axisLockY: 'Y Only',
+    axisLockZ: 'Z Only',
+    axisLockXZ: 'XZ Plane',
+
+    floorSystemTitle: 'Building Floors',
+    floorAddBtn: '+ Floor',
+    floorViewAll: 'All Floors',
+    floorViewCutaway: 'Cut Above',
+    floorViewGhost: 'Ghost Others',
+    floorAssignLabel: 'Assigned Building Floor',
+    floorMoveSelectionBtn: 'Move to Active Floor',
   },
 
   ja: {
@@ -1231,6 +1522,104 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     hudMove: '移動',
     hudRotate: '回転',
     hudScale: 'サイズ',
+
+    snapModularSocketTitle: '建築モジュール接続スナップ',
+    snapModularSocketDesc:
+      '壁同士の端・ドアや窓と壁・階段と床・屋根と壁上端を自動でピタッと接続します',
+    snapHeightTitle: '高さスナップ (Height Snap)',
+    snapHeightDesc:
+      '垂直(Y)の移動を指定した高さ間隔や階層フロア高さにスナップします',
+
+    validationBtn: '配置判定',
+    validPositionBadge: '配置OK（有効）',
+    warnCollisionWith: '警告：干渉しています →',
+    warnOutOfPlot: '警告：敷地ガイド枠の外側です',
+    warnOutOfDomain: '警告：キャンバス範囲外です',
+    warnSteepSlope: '警告：傾斜が急すぎるため建物配置に不向きです',
+    warnWrongSurface: '警告：配置先の面の種類がルールと異なります',
+
+    terrainSculptBtn: '地形編集',
+    terrainSculptTitle: '地形スカルプト（土地の造成・起伏編集）',
+    sculptRaise: '盛り上げ',
+    sculptLower: '掘り下げ',
+    sculptFlatten: '平坦化',
+    sculptSmooth: 'ならす',
+    sculptTerrace: '段々造成',
+    sculptRadius: 'ブラシ半径',
+    sculptStrength: '強さ',
+    sculptTargetHeight: '基準高さ',
+    sculptLevelPlotBtn: '敷地内を平坦に整地',
+    sculptResetFlatBtn: '平坦にリセット',
+    sculptHint: '3Dの地面をなぞって丘・池・建築用の平地を自由に造成できます',
+
+    surfAwareTitle: 'サーフェス認識配置 (Surface-Aware)',
+    surfAwareDesc:
+      '地面・斜面・床・壁・屋根を判別し、草木・岩・建物の向きと適性を自動調整',
+    surfMaxSlopeLabel: '建物の許容傾斜角',
+    surfRuleSection: 'このオブジェクトの配置面ルール',
+    surfRuleAny: '自由（すべての面）',
+    surfRuleBuilding: '建物・基礎（平地のみ）',
+    surfRuleFoliage: '草木・植栽（地面のみ）',
+    surfRuleRock: '庭石・岩（地面・急斜面OK）',
+    surfRuleInterior: '室内家具（床スラブ上）',
+    surfRuleOpening: 'ドア・窓（壁面用）',
+
+    repeatArrayBtn: '連続配置',
+    repeatModalTitle: '複製＆連続配列（アレイ配置）',
+    repeatModeLinear: '直線配列',
+    repeatModeGrid: '2Dグリッド',
+    repeatModeRadial: '円形配列',
+    repeatCountLabel: '個数',
+    repeatCountZLabel: 'Z列数',
+    repeatDirectionLabel: '方向',
+    repeatSpacingFlush: '隙間なく連結',
+    repeatSpacingFixed: '等間隔',
+    repeatDistanceLabel: '間隔 (m)',
+    repeatRadiusLabel: '半径 (m)',
+    repeatAngleLabel: '配置角度',
+    repeatFollowTerrain: '地面・地形の高さに追従',
+    repeatGroupResult: '結果をグループ化',
+    repeatApplyBtn: '連続配置を実行',
+    repeatAppliedToast: '連続配置を作成しました！',
+
+    selSingle: '単一選択',
+    selMultiTap: '複数選択',
+    selBoxDrag: '枠ドラッグ選択',
+    selSelectAll: '全選択',
+    selClear: '解除',
+    selGroupSelected: '選択をグループ化',
+    multiSelectedCount: '個を選択中',
+    boxSelectHint: '画面をドラッグして範囲内の複数オブジェクトを一括選択します',
+
+    modularKitTab: '建築モジュール',
+    modularKitHint: '規格が揃った床・壁・ドア・窓・階段・屋根パーツで素早く家を組み立て',
+    modCatAll: 'すべて',
+    modCatFloors: '床・基礎',
+    modCatWalls: '壁パネル',
+    modCatOpenings: 'ドア・窓壁',
+    modCatStairs: '階段・柱',
+    modCatRoofs: '屋根',
+    modCatLandscape: '外構・柵・植栽',
+
+    gridAdaptiveTitle: 'アダプティブ自動グリッド（ズーム連動）',
+    gridAdaptiveDesc:
+      'カメラのズーム距離やオブジェクト規模に応じてマス目密度を自動最適化',
+    gridAdaptiveBadge: '自動',
+
+    axisLockTitle: '軸ロック:',
+    axisLockFree: '自由 XYZ',
+    axisLockX: 'X軸のみ',
+    axisLockY: 'Y軸のみ',
+    axisLockZ: 'Z軸のみ',
+    axisLockXZ: '水平 XZ',
+
+    floorSystemTitle: '階層・フロア管理',
+    floorAddBtn: '+ 階層追加',
+    floorViewAll: '全フロア表示',
+    floorViewCutaway: '上階カット',
+    floorViewGhost: '他階を半透明',
+    floorAssignLabel: '所属フロア階層',
+    floorMoveSelectionBtn: '現在の階層へ移動',
   },
 };
 

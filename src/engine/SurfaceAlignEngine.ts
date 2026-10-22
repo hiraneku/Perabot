@@ -900,7 +900,20 @@ export class SurfaceAlignEngine {
 
     const upVec = new THREE.Vector3(0, 1, 0);
 
-    if (settings.conformMode === 'align-normal') {
+    // #4 Surface-Aware Placement: Smart per-category posture override when enabled
+    let effectiveMode = settings.conformMode;
+    if (settings.surfaceAware) {
+      const rule = mesh.userData.surfaceRule as string | undefined;
+      if (rule === 'ground-foliage' || rule === 'floor-interior') {
+        effectiveMode = 'upright-follow';
+      } else if (rule === 'building-flat') {
+        effectiveMode = 'foundation-seat';
+      } else if (rule === 'slope-rock' || rule === 'wall-opening') {
+        effectiveMode = 'align-normal';
+      }
+    }
+
+    if (effectiveMode === 'align-normal') {
       const q = this.computeSmartAlignedQuaternion(
         mesh,
         n,
@@ -939,7 +952,7 @@ export class SurfaceAlignEngine {
 
     const minYProj = this.computeMinVertexProjection(mesh, upVec);
 
-    if (settings.conformMode === 'foundation-seat') {
+    if (effectiveMode === 'foundation-seat') {
       mesh.geometry.computeBoundingBox();
       const bb = mesh.geometry.boundingBox ?? new THREE.Box3();
       const halfW = (bb.max.x - bb.min.x) * 0.5 * mesh.scale.x;

@@ -20,13 +20,23 @@ import { SurfaceAlignEngine } from './SurfaceAlignEngine';
 import { buildSubdividedGeometry, computeGeometryStats } from './SubdivisionEngine';
 import { GridTerrainSystem } from './GridTerrainSystem';
 import {
+  PlacementValidationVisualizer,
+  PlacementValidator,
+} from './PlacementValidator';
+import { ModularConstructionItem } from './modularConstruction';
+import {
   ArchitecturalRole,
+  AxisLockMode,
+  BuildingFloorLayer,
   CustomAssetPart,
+  DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
   DEFAULT_SUBDIVISION_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
+  DEFAULT_TERRAIN_SCULPT_SETTINGS,
   DragFeedback,
+  FloorViewMode,
   GraphicsQuality,
   GridSettings,
   isSubdivisionActive,
@@ -34,11 +44,17 @@ import {
   normalizeSubdivisionSettings,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
+  PlacementValidationStatus,
   PrimitiveKind,
+  RepeatArrayConfig,
   SceneObjectData,
+  SelectionSubMode,
   SnapSettings,
+  StudioMode,
   SubdivisionStats,
+  SurfacePlacementRule,
   SurfaceSettings,
+  TerrainSculptSettings,
   TransformMode,
   TransformSpace,
   Vec3,
@@ -47,6 +63,10 @@ import {
 interface HistorySnapshot {
   objects: SceneObjectData[];
   selectedId: string | null;
+  selectedIds: string[];
+  sculptedHeightsB64?: string | null;
+  floors?: BuildingFloorLayer[];
+  activeFloorId?: string;
 }
 
 interface InternalTransformControls {
@@ -65,17 +85,31 @@ export interface PaintBrushPayload {
   flatShading: boolean;
 }
 
+export interface BoxSelectRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface StudioEngineCallbacks {
   onStateChange: (state: {
     objects: SceneObjectData[];
     selectedId: string | null;
+    selectedIds: string[];
     canUndo: boolean;
     canRedo: boolean;
     selectedSubdivStats: SubdivisionStats | null;
+    validationStatus: PlacementValidationStatus | null;
+    adaptiveSpacing: number;
+    floors: BuildingFloorLayer[];
+    activeFloorId: string;
+    floorViewMode: FloorViewMode;
   }) => void;
   onDragFeedback: (feedback: DragFeedback) => void;
   onEyedropperSample?: (sample: PaintBrushPayload, objectName: string) => void;
   onPaintApplied?: (objectName: string) => void;
+  onBoxSelectRect?: (rect: BoxSelectRect | null) => void;
 }
 
 const RAD2DEG = 180 / Math.PI;
@@ -119,15 +153,41 @@ export class StudioEngine {
   private hiddenFaceMaterial = new THREE.MeshBasicMaterial({ visible: false });
 
   private selectedId: string | null = null;
+  private selectedIds: string[] = [];
+  private selectionSubMode: SelectionSubMode = 'single';
+  private studioMode: StudioMode = 'modeling';
+  private axisLock: AxisLockMode = 'free';
   private transformMode: TransformMode = 'translate';
   private transformSpace: TransformSpace = 'world';
   private snapSettings: SnapSettings = { ...DEFAULT_SNAP_SETTINGS };
   private surfaceSettings: SurfaceSettings = { ...DEFAULT_SURFACE_SETTINGS };
   private gridSettings: GridSettings = { ...DEFAULT_GRID_SETTINGS };
+  private terrainSculpt: TerrainSculptSettings = { ...DEFAULT_TERRAIN_SCULPT_SETTINGS };
 
-  // Group rigid-transform state
+  // Placement Validation (#2)
+  private placementValidationEnabled = false;
+  private placementValidator = new PlacementValidator();
+  private validationVisualizer = new PlacementValidationVisualizer();
+
+  // Duplicate & Repeat Array Ghost Preview (#5)
+  private repeatPreviewGroup = new THREE.Group();
+
+  // Layer / Building Floor System (#12 - house mode)
+  private floors: BuildingFloorLayer[] = DEFAULT_BUILDING_FLOORS.map((f) => ({ ...f }));
+  private activeFloorId = 'floor_1';
+  private floorViewMode: FloorViewMode = 'all';
+  private floorGhostedIds = new Set<string>();
+
+  // Group & Multi-Selection rigid-transform state
   private editSinglePartMode = false;
   private activeGroupRelMatrices = new Map<string, THREE.Matrix4>();
+  private dragStartLeaderPos = new THREE.Vector3();
+
+  // Terrain Sculpting & Box Marquee pointer states
+  private isSculptingStroke = false;
+  private isBoxSelecting = false;
+  private boxSelectStart = { x: 0, y: 0 };
+  private lastAdaptiveSpacing = 1;
 
   // Interior Peek ("Intip Ruang") state
   private interiorPeekEnabled = false;
@@ -235,10 +295,13 @@ export class StudioEngine {
     this.scene.add(this.gridSystem.group);
 
     this.objectGroup.name = 'PerabotSceneObjects';
+    this.repeatPreviewGroup.name = '__repeatPreviewGroup';
     this.scene.add(this.objectGroup);
+    this.scene.add(this.repeatPreviewGroup);
     this.scene.add(this.snapVisualizer.group);
     this.scene.add(this.protractorVisualizer.group);
     this.scene.add(this.surfaceNormalVisualizer.group);
+    this.scene.add(this.validationVisualizer.group);
 
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
@@ -265,12 +328,14 @@ export class StudioEngine {
 
     this.transformControls.addEventListener('dragging-changed', (event) => {
       const isDragging = Boolean(event.value);
-      this.orbitControls.enabled = !isDragging && !this.walkthroughEnabled;
+      this.orbitControls.enabled =
+        !isDragging && !this.walkthroughEnabled && !this.terrainSculpt.active;
       if (isDragging) {
         this.wasGizmoDragging = true;
         if (this.selectedId) {
           const selMesh = this.meshMap.get(this.selectedId);
           if (selMesh) {
+            this.dragStartLeaderPos.copy(selMesh.position);
             this.captureGroupRelativeMatrices(selMesh);
             if (this.transformControls.getMode() === 'translate') {
               const halfDiag = this.getMeshHalfDiagonal(selMesh);
@@ -342,30 +407,53 @@ export class StudioEngine {
   }
 
   /* =========================================================
-     Group Sibling Rigid-Transform Helpers
+     Group & Multi-Selection Rigid-Transform Helpers (#6)
      ========================================================= */
   private getGroupSiblings(leaderMesh: THREE.Mesh): THREE.Mesh[] {
-    if (this.editSinglePartMode) return [];
-    const gid = leaderMesh.userData.groupId as string | null | undefined;
-    if (!gid) return [];
-    const siblings: THREE.Mesh[] = [];
-    for (const m of this.meshMap.values()) {
-      if (m !== leaderMesh && m.userData.groupId === gid) {
-        siblings.push(m);
+    const companionSet = new Set<THREE.Mesh>();
+
+    // 1. Group siblings of the leader mesh (unless editing single part)
+    if (!this.editSinglePartMode) {
+      const gid = leaderMesh.userData.groupId as string | null | undefined;
+      if (gid) {
+        for (const m of this.meshMap.values()) {
+          if (m !== leaderMesh && m.userData.groupId === gid) {
+            companionSet.add(m);
+          }
+        }
       }
     }
-    return siblings;
+
+    // 2. Any other objects in the active Multi-Selection (`this.selectedIds`) + their group siblings!
+    if (this.selectedIds.length > 1) {
+      for (const sid of this.selectedIds) {
+        const sm = this.meshMap.get(sid);
+        if (!sm || sm === leaderMesh) continue;
+        companionSet.add(sm);
+        if (!this.editSinglePartMode) {
+          const sgid = sm.userData.groupId as string | null | undefined;
+          if (sgid) {
+            for (const m of this.meshMap.values()) {
+              if (m !== leaderMesh && m.userData.groupId === sgid) {
+                companionSet.add(m);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return Array.from(companionSet);
   }
 
   private getNonSiblingMeshes(leaderMesh: THREE.Mesh): THREE.Mesh[] {
-    const gid = !this.editSinglePartMode
-      ? (leaderMesh.userData.groupId as string | null | undefined)
-      : null;
+    const companions = new Set<THREE.Mesh>(this.getGroupSiblings(leaderMesh));
+    companions.add(leaderMesh);
     const out: THREE.Mesh[] = [];
     for (const m of this.meshMap.values()) {
-      if (m === leaderMesh) continue;
-      if (gid && m.userData.groupId === gid) continue;
-      if (this.ghostedMeshIds.has(m.userData.objectId as string)) continue;
+      if (companions.has(m)) continue;
+      const oid = m.userData.objectId as string;
+      if (this.ghostedMeshIds.has(oid) || this.floorGhostedIds.has(oid)) continue;
       out.push(m);
     }
     return out;
@@ -386,7 +474,8 @@ export class StudioEngine {
   }
 
   private syncGroupSiblingsFromLeader(leaderMesh: THREE.Mesh): void {
-    if (this.editSinglePartMode || this.activeGroupRelMatrices.size === 0) return;
+    if (this.activeGroupRelMatrices.size === 0) return;
+    if (this.editSinglePartMode && this.selectedIds.length <= 1) return;
     leaderMesh.updateMatrixWorld(true);
     const pos = new THREE.Vector3();
     const quat = new THREE.Quaternion();
@@ -419,7 +508,41 @@ export class StudioEngine {
     return this.editSinglePartMode;
   }
 
+  /**
+   * Groups ONLY the currently selected objects (plus their existing group members),
+   * or falls back to all visible objects if <2 selected and explicitly requested via groupAllSceneObjects.
+   */
+  public groupSelectedObjects(groupName = 'Grup Pilihan'): string | null {
+    const targetMeshes = new Set<THREE.Mesh>();
+    for (const sid of this.selectedIds) {
+      const m = this.meshMap.get(sid);
+      if (!m || !m.visible) continue;
+      targetMeshes.add(m);
+      const gid = m.userData.groupId as string | null | undefined;
+      if (gid) {
+        for (const gm of this.meshMap.values()) {
+          if (gm.userData.groupId === gid) targetMeshes.add(gm);
+        }
+      }
+    }
+    if (targetMeshes.size < 2) return null;
+
+    const newGid = `grp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    for (const m of targetMeshes) {
+      m.userData.groupId = newGid;
+      m.userData.groupName = groupName;
+    }
+    this.editSinglePartMode = false;
+    this.updateSelectionHighlight();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return newGid;
+  }
+
   public groupAllSceneObjects(groupName = 'Grup Rakitan'): string | null {
+    if (this.selectedIds.length >= 2) {
+      return this.groupSelectedObjects(groupName);
+    }
     const visibleMeshes = Array.from(this.meshMap.values()).filter((m) => m.visible);
     if (visibleMeshes.length < 2) return null;
     const newGid = `grp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -435,13 +558,17 @@ export class StudioEngine {
   }
 
   public ungroupSelected(): boolean {
-    if (!this.selectedId) return false;
-    const sel = this.meshMap.get(this.selectedId);
-    const gid = sel?.userData.groupId as string | null | undefined;
-    if (!gid) return false;
+    const gidsToClear = new Set<string>();
+    for (const sid of this.selectedIds) {
+      const m = this.meshMap.get(sid);
+      const gid = m?.userData.groupId as string | null | undefined;
+      if (gid) gidsToClear.add(gid);
+    }
+    if (gidsToClear.size === 0) return false;
 
     for (const m of this.meshMap.values()) {
-      if (m.userData.groupId === gid) {
+      const gid = m.userData.groupId as string | null | undefined;
+      if (gid && gidsToClear.has(gid)) {
         m.userData.groupId = null;
         m.userData.groupName = undefined;
       }
@@ -451,6 +578,754 @@ export class StudioEngine {
     this.pushHistorySnapshot();
     this.emitState();
     return true;
+  }
+
+  /* =========================================================
+     Studio Mode, Selection Sub-Modes (#6), Axis Lock (#9) & Validation (#2)
+     ========================================================= */
+  public setStudioMode(mode: StudioMode): void {
+    this.studioMode = mode;
+    if (mode !== 'house') {
+      // Ensure house-exclusive modes (Terrain Sculpt, Cutaway Floors) gracefully pause in Modeling mode
+      if (this.terrainSculpt.active) {
+        this.terrainSculpt.active = false;
+        this.gridSystem.updateSculptCursor(null);
+        this.renderer.domElement.style.cursor = 'default';
+      }
+      this.applyFloorVisibilityAndGhosting();
+    } else {
+      this.applyFloorVisibilityAndGhosting();
+    }
+    this.emitState();
+  }
+
+  public getStudioMode(): StudioMode {
+    return this.studioMode;
+  }
+
+  public setSelectionSubMode(mode: SelectionSubMode): void {
+    this.selectionSubMode = mode;
+    if (mode !== 'box' && this.isBoxSelecting) {
+      this.isBoxSelecting = false;
+      this.callbacks.onBoxSelectRect?.(null);
+    }
+  }
+
+  public getSelectionSubMode(): SelectionSubMode {
+    return this.selectionSubMode;
+  }
+
+  public getSelectedIds(): string[] {
+    return [...this.selectedIds];
+  }
+
+  public selectAllObjects(): number {
+    const ids: string[] = [];
+    for (const [id, mesh] of this.meshMap.entries()) {
+      if (
+        mesh.visible &&
+        !this.ghostedMeshIds.has(id) &&
+        !this.floorGhostedIds.has(id) &&
+        !this.isMeshFloorLocked(mesh)
+      ) {
+        ids.push(id);
+      }
+    }
+    this.selectedIds = ids;
+    this.selectedId = ids.length > 0 ? ids[ids.length - 1] : null;
+    this.reattachTransformAfterSelectionChange();
+    this.emitState();
+    return ids.length;
+  }
+
+  public setAxisLock(lock: AxisLockMode): void {
+    this.axisLock = lock;
+    this.applyAxisLockToGizmo();
+    this.emitState();
+  }
+
+  public getAxisLock(): AxisLockMode {
+    return this.axisLock;
+  }
+
+  private applyAxisLockToGizmo(): void {
+    if (this.axisLock === 'free') {
+      this.transformControls.showX = true;
+      this.transformControls.showY = true;
+      this.transformControls.showZ = true;
+    } else if (this.axisLock === 'x') {
+      this.transformControls.showX = true;
+      this.transformControls.showY = false;
+      this.transformControls.showZ = false;
+    } else if (this.axisLock === 'y') {
+      this.transformControls.showX = false;
+      this.transformControls.showY = true;
+      this.transformControls.showZ = false;
+    } else if (this.axisLock === 'z') {
+      this.transformControls.showX = false;
+      this.transformControls.showY = false;
+      this.transformControls.showZ = true;
+    } else if (this.axisLock === 'xz') {
+      this.transformControls.showX = true;
+      this.transformControls.showY = false;
+      this.transformControls.showZ = true;
+    }
+  }
+
+  private clampPositionByAxisLock(pos: THREE.Vector3): void {
+    if (this.axisLock === 'free') return;
+    if (this.axisLock === 'x') {
+      pos.y = this.dragStartLeaderPos.y;
+      pos.z = this.dragStartLeaderPos.z;
+    } else if (this.axisLock === 'y') {
+      pos.x = this.dragStartLeaderPos.x;
+      pos.z = this.dragStartLeaderPos.z;
+    } else if (this.axisLock === 'z') {
+      pos.x = this.dragStartLeaderPos.x;
+      pos.y = this.dragStartLeaderPos.y;
+    } else if (this.axisLock === 'xz') {
+      pos.y = this.dragStartLeaderPos.y;
+    }
+  }
+
+  public setPlacementValidationEnabled(enabled: boolean): void {
+    this.placementValidationEnabled = enabled;
+    if (!enabled) {
+      this.validationVisualizer.clear();
+    }
+    this.emitState();
+  }
+
+  public getPlacementValidationEnabled(): boolean {
+    return this.placementValidationEnabled;
+  }
+
+  public updateObjectSurfaceRule(
+    id: string,
+    rule: SurfacePlacementRule,
+    recordHistory = true
+  ): void {
+    const mesh = this.meshMap.get(id);
+    if (!mesh) return;
+    mesh.userData.surfaceRule = rule;
+    if (recordHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  /* =========================================================
+     #3 Terrain Sculpting API (`house` mode)
+     ========================================================= */
+  public updateTerrainSculptSettings(
+    patch: Partial<TerrainSculptSettings>
+  ): TerrainSculptSettings {
+    this.terrainSculpt = { ...this.terrainSculpt, ...patch };
+    if (this.terrainSculpt.active) {
+      this.transformControls.detach();
+      if (!this.gridSettings.visible || this.gridSettings.style !== 'terrain') {
+        this.gridSettings = this.gridSystem.updateSettings({
+          visible: true,
+          style: 'terrain',
+        });
+      }
+      this.renderer.domElement.style.cursor = 'crosshair';
+    } else {
+      this.gridSystem.updateSculptCursor(null);
+      this.renderer.domElement.style.cursor = 'default';
+      this.reattachTransformAfterSelectionChange();
+    }
+    this.emitState();
+    return { ...this.terrainSculpt };
+  }
+
+  public getTerrainSculptSettings(): TerrainSculptSettings {
+    return { ...this.terrainSculpt };
+  }
+
+  public levelTerrainPlotPad(): void {
+    this.gridSettings = this.gridSystem.levelPlotPad();
+    this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public resetSculptedTerrain(): void {
+    this.gridSettings = this.gridSystem.resetSculptedTerrain();
+    this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public exportSculptedHeightsBase64(): string | null {
+    return this.gridSystem.exportSculptedHeightsBase64();
+  }
+
+  public importSculptedHeightsBase64(b64: string | null | undefined): void {
+    this.gridSystem.importSculptedHeightsBase64(b64);
+    this.emitState();
+  }
+
+  /* =========================================================
+     #12 Building Floor / Story Layer System (`house` mode)
+     ========================================================= */
+  private isMeshFloorLocked(mesh: THREE.Mesh): boolean {
+    if (this.studioMode !== 'house') return false;
+    const fid = mesh.userData.floorId as string | undefined;
+    if (!fid) return false;
+    const fl = this.floors.find((f) => f.id === fid);
+    return Boolean(fl?.locked);
+  }
+
+  public getFloorSystemState(): {
+    floors: BuildingFloorLayer[];
+    activeFloorId: string;
+    floorViewMode: FloorViewMode;
+  } {
+    return {
+      floors: this.floors.map((f) => ({ ...f })),
+      activeFloorId: this.activeFloorId,
+      floorViewMode: this.floorViewMode,
+    };
+  }
+
+  public setFloorSystemState(
+    floors?: BuildingFloorLayer[],
+    activeFloorId?: string,
+    floorViewMode?: FloorViewMode
+  ): void {
+    if (floors && floors.length > 0) {
+      this.floors = floors.map((f) => ({ ...f }));
+    } else {
+      this.floors = DEFAULT_BUILDING_FLOORS.map((f) => ({ ...f }));
+    }
+    this.activeFloorId =
+      activeFloorId && this.floors.some((f) => f.id === activeFloorId)
+        ? activeFloorId
+        : this.floors[0].id;
+    this.floorViewMode = floorViewMode ?? 'all';
+    this.applyFloorVisibilityAndGhosting();
+    this.emitState();
+  }
+
+  public setActiveFloor(floorId: string, syncWorkplane = true): void {
+    const target = this.floors.find((f) => f.id === floorId);
+    if (!target) return;
+    this.activeFloorId = target.id;
+    if (syncWorkplane && this.studioMode === 'house') {
+      this.gridSettings = this.gridSystem.updateSettings({
+        elevationY: target.elevation,
+      });
+    }
+    this.applyFloorVisibilityAndGhosting();
+    this.emitState();
+  }
+
+  public addBuildingFloor(labelPrefix = 'Lantai'): BuildingFloorLayer {
+    const sorted = [...this.floors].sort((a, b) => a.elevation - b.elevation);
+    const top = sorted[sorted.length - 1];
+    const nextElevation = top ? round3(top.elevation + top.height) : 0;
+    const nextNum = this.floors.length + 1;
+    const newFloor: BuildingFloorLayer = {
+      id: `floor_${Date.now().toString(36)}`,
+      name: `${labelPrefix} ${nextNum}`,
+      elevation: nextElevation,
+      height: 3.0,
+      visible: true,
+      locked: false,
+    };
+    this.floors.push(newFloor);
+    this.setActiveFloor(newFloor.id, true);
+    this.pushHistorySnapshot();
+    return { ...newFloor };
+  }
+
+  public removeBuildingFloor(floorId: string): boolean {
+    if (this.floors.length <= 1) return false;
+    const idx = this.floors.findIndex((f) => f.id === floorId);
+    if (idx === -1) return false;
+    this.floors.splice(idx, 1);
+    const fallbackId = this.floors[Math.max(0, idx - 1)].id;
+    for (const m of this.meshMap.values()) {
+      if (m.userData.floorId === floorId) {
+        m.userData.floorId = fallbackId;
+      }
+    }
+    if (this.activeFloorId === floorId) {
+      this.activeFloorId = fallbackId;
+    }
+    this.applyFloorVisibilityAndGhosting();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  public updateBuildingFloor(
+    floorId: string,
+    patch: Partial<BuildingFloorLayer>
+  ): void {
+    const fl = this.floors.find((f) => f.id === floorId);
+    if (!fl) return;
+    Object.assign(fl, patch);
+    if (fl.id === this.activeFloorId && patch.elevation !== undefined && this.studioMode === 'house') {
+      this.gridSettings = this.gridSystem.updateSettings({
+        elevationY: fl.elevation,
+      });
+    }
+    this.applyFloorVisibilityAndGhosting();
+    this.emitState();
+  }
+
+  public setFloorViewMode(mode: FloorViewMode): void {
+    this.floorViewMode = mode;
+    this.applyFloorVisibilityAndGhosting();
+    this.emitState();
+  }
+
+  public assignObjectToFloor(
+    objectId: string,
+    floorId: string,
+    moveToElevation = false
+  ): void {
+    const mesh = this.meshMap.get(objectId);
+    const fl = this.floors.find((f) => f.id === floorId);
+    if (!mesh || !fl) return;
+    mesh.userData.floorId = fl.id;
+
+    if (moveToElevation) {
+      this.captureGroupRelativeMatrices(mesh);
+      const bounds = this.computeWorldBounds(mesh);
+      const deltaY = fl.elevation - bounds.min.y;
+      mesh.position.y = round3(mesh.position.y + deltaY);
+      this.syncGroupSiblingsFromLeader(mesh);
+      this.activeGroupRelMatrices.clear();
+      for (const sib of this.getGroupSiblings(mesh)) {
+        sib.userData.floorId = fl.id;
+      }
+    }
+    this.applyFloorVisibilityAndGhosting();
+    this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  private resolveAutoFloorIdForY(minY: number): string | undefined {
+    if (this.studioMode !== 'house' || this.floors.length === 0) return undefined;
+    const activeFl = this.floors.find((f) => f.id === this.activeFloorId);
+    if (
+      activeFl &&
+      minY >= activeFl.elevation - 0.35 &&
+      minY < activeFl.elevation + activeFl.height - 0.1
+    ) {
+      return activeFl.id;
+    }
+    let best = this.floors[0];
+    let bestDist = Infinity;
+    for (const fl of this.floors) {
+      const d = Math.abs(minY - fl.elevation);
+      if (d < bestDist) {
+        bestDist = d;
+        best = fl;
+      }
+    }
+    return best.id;
+  }
+
+  private applyFloorVisibilityAndGhosting(): void {
+    // Restore previous floor ghosts first
+    for (const id of this.floorGhostedIds) {
+      const m = this.meshMap.get(id);
+      if (!m) continue;
+      const mat = this.getBaseMaterial(m);
+      const origOp = (m.userData.userOpacity as number) ?? 1;
+      mat.opacity = origOp;
+      mat.transparent = origOp < 0.995;
+      mat.depthWrite = origOp >= 0.98;
+      mat.needsUpdate = true;
+      m.visible = m.userData.userVisible !== false;
+    }
+    this.floorGhostedIds.clear();
+
+    if (this.studioMode !== 'house') {
+      for (const m of this.meshMap.values()) {
+        m.visible = m.userData.userVisible !== false;
+      }
+      return;
+    }
+
+    const activeFl =
+      this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+
+    for (const [id, mesh] of this.meshMap.entries()) {
+      const userVis = mesh.userData.userVisible !== false;
+      if (!userVis) {
+        mesh.visible = false;
+        continue;
+      }
+
+      let fid = mesh.userData.floorId as string | undefined;
+      if (!fid) {
+        const b = this.computeWorldBounds(mesh);
+        fid = this.resolveAutoFloorIdForY(b.min.y);
+        mesh.userData.floorId = fid;
+      }
+      const fl = this.floors.find((f) => f.id === fid);
+      if (!fl) {
+        mesh.visible = true;
+        continue;
+      }
+
+      if (!fl.visible) {
+        mesh.visible = false;
+        continue;
+      }
+
+      if (
+        this.floorViewMode === 'cutaway-above' &&
+        activeFl &&
+        fl.elevation > activeFl.elevation + 0.08
+      ) {
+        mesh.visible = false;
+        continue;
+      }
+
+      mesh.visible = true;
+
+      if (
+        this.floorViewMode === 'ghost-others' &&
+        activeFl &&
+        fl.id !== activeFl.id &&
+        !this.selectedIds.includes(id)
+      ) {
+        const mat = this.getBaseMaterial(mesh);
+        mat.transparent = true;
+        mat.opacity = 0.18;
+        mat.depthWrite = false;
+        mat.needsUpdate = true;
+        this.floorGhostedIds.add(id);
+      }
+    }
+  }
+
+  /* =========================================================
+     #7 Modular Construction Spawner (`house` mode)
+     ========================================================= */
+  public spawnModularItem(item: ModularConstructionItem, labelName: string): string | null {
+    const activeFl =
+      this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+    const baseElevation =
+      this.studioMode === 'house' && activeFl
+        ? activeFl.elevation
+        : this.gridSettings.elevationY;
+
+    const [sx, sz] = this.findDomainBatchPlacementXZ(
+      item.moduleSize.x,
+      item.moduleSize.z,
+      []
+    );
+    const terrainY = this.gridSystem.sampleHeight(sx, sz);
+    const spawnBaseY =
+      item.surfaceRule === 'ground-foliage' || item.surfaceRule === 'slope-rock'
+        ? terrainY
+        : Math.max(baseElevation, terrainY);
+
+    const gid =
+      item.parts.length > 1
+        ? `grp_mod_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+        : null;
+
+    let leaderId: string | null = null;
+    this.editSinglePartMode = false;
+
+    item.parts.forEach((p, idx) => {
+      const id = `mod-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`;
+      if (idx === 0) leaderId = id;
+
+      const data: SceneObjectData = {
+        id,
+        name: item.parts.length === 1 ? labelName : `${labelName} • ${p.name}`,
+        kind: p.kind,
+        position: {
+          x: round3(sx + p.localPosition.x),
+          y: round3(spawnBaseY + p.localPosition.y),
+          z: round3(sz + p.localPosition.z),
+        },
+        rotation: { ...p.rotation },
+        scale: { ...p.scale },
+        color: p.color,
+        roughness: p.roughness,
+        metalness: p.metalness,
+        opacity: p.opacity,
+        emissive: p.emissive,
+        emissiveIntensity: p.emissiveIntensity,
+        flatShading: p.flatShading,
+        subdivision: { ...(p.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
+        visible: true,
+        groupId: gid,
+        groupName: gid ? labelName : undefined,
+        archRole: p.archRole ?? item.archRole,
+        surfaceRule: item.surfaceRule,
+        floorId: activeFl?.id,
+      };
+
+      const mesh = this.buildMeshFromData(data);
+      this.objectGroup.add(mesh);
+      this.meshMap.set(id, mesh);
+    });
+
+    this.updateSeamlessTouchFaces();
+    this.applyFloorVisibilityAndGhosting();
+    if (leaderId) {
+      this.selectObject(leaderId, false);
+    }
+    this.pushHistorySnapshot();
+    this.emitState();
+    return leaderId;
+  }
+
+  /* =========================================================
+     #5 Duplicate & Repeat Array Placement (Linear / Grid / Radial)
+     ========================================================= */
+  private computeRepeatArrayOffsets(
+    config: RepeatArrayConfig,
+    sourceBox: THREE.Box3
+  ): Array<{ offset: THREE.Vector3; rotYDeg: number }> {
+    const out: Array<{ offset: THREE.Vector3; rotYDeg: number }> = [];
+    const spanX = Math.max(0.2, sourceBox.max.x - sourceBox.min.x);
+    const spanY = Math.max(0.2, sourceBox.max.y - sourceBox.min.y);
+    const spanZ = Math.max(0.2, sourceBox.max.z - sourceBox.min.z);
+    const isFlush = config.spacingMode === 'flush';
+
+    if (config.mode === 'linear') {
+      const total = Math.max(2, Math.min(48, Math.round(config.count)));
+      const dir = config.axis;
+      const baseSpan =
+        dir === '+x' || dir === '-x'
+          ? spanX
+          : dir === '+z' || dir === '-z'
+          ? spanZ
+          : spanY;
+      const stepDist = isFlush ? baseSpan : Math.max(0.05, config.stepDistance);
+
+      for (let i = 1; i < total; i++) {
+        const d = stepDist * i;
+        const off = new THREE.Vector3(
+          dir === '+x' ? d : dir === '-x' ? -d : 0,
+          dir === '+y' ? d : config.stepElevationY * i,
+          dir === '+z' ? d : dir === '-z' ? -d : 0
+        );
+        out.push({
+          offset: off,
+          rotYDeg: config.rotationStepYDeg * i,
+        });
+      }
+    } else if (config.mode === 'grid') {
+      const nx = Math.max(1, Math.min(16, Math.round(config.count)));
+      const nz = Math.max(1, Math.min(16, Math.round(config.countZ)));
+      const sx = isFlush ? spanX : Math.max(0.1, config.stepDistance);
+      const sz = isFlush ? spanZ : Math.max(0.1, config.stepDistanceZ);
+
+      for (let ix = 0; ix < nx; ix++) {
+        for (let iz = 0; iz < nz; iz++) {
+          if (ix === 0 && iz === 0) continue;
+          out.push({
+            offset: new THREE.Vector3(
+              ix * sx,
+              (ix + iz) * config.stepElevationY,
+              iz * sz
+            ),
+            rotYDeg: 0,
+          });
+        }
+      }
+    } else if (config.mode === 'radial') {
+      const count = Math.max(2, Math.min(36, Math.round(config.count)));
+      const totalAngleRad =
+        Math.max(15, Math.min(360, config.fullAngleDeg)) * DEG2RAD;
+      const isFullCircle = Math.abs(config.fullAngleDeg - 360) < 0.5;
+      const stepRad = isFullCircle
+        ? totalAngleRad / count
+        : totalAngleRad / Math.max(1, count - 1);
+      const r = Math.max(0.3, config.radius);
+
+      // Anchor circle center `-Z` by `r` from source so index 0 sits right at source!
+      const centerOffsetZ = r;
+      for (let i = 1; i < count; i++) {
+        const theta = stepRad * i;
+        const ox = Math.sin(theta) * r;
+        const oz = centerOffsetZ - Math.cos(theta) * r;
+        out.push({
+          offset: new THREE.Vector3(ox, config.stepElevationY * i, oz),
+          rotYDeg: theta * RAD2DEG,
+        });
+      }
+    }
+
+    return out;
+  }
+
+  private getSelectedSourceMeshesForArray(): THREE.Mesh[] {
+    if (!this.selectedId) return [];
+    const primary = this.meshMap.get(this.selectedId);
+    if (!primary) return [];
+    return [primary, ...this.getGroupSiblings(primary)];
+  }
+
+  public clearRepeatPreview(): void {
+    while (this.repeatPreviewGroup.children.length > 0) {
+      const ch = this.repeatPreviewGroup.children[0] as THREE.Mesh;
+      this.repeatPreviewGroup.remove(ch);
+      ch.geometry?.dispose();
+      (ch.material as THREE.Material)?.dispose();
+    }
+  }
+
+  public previewRepeatArray(config: RepeatArrayConfig | null): number {
+    this.clearRepeatPreview();
+    if (!config) return 0;
+
+    const sourceMeshes = this.getSelectedSourceMeshesForArray();
+    if (sourceMeshes.length === 0) return 0;
+
+    const combinedBox = new THREE.Box3();
+    for (const sm of sourceMeshes) {
+      combinedBox.union(this.computeWorldBounds(sm));
+    }
+    const pivot = new THREE.Vector3();
+    combinedBox.getCenter(pivot);
+    const sourceGroundY = this.gridSystem.sampleHeight(pivot.x, pivot.z);
+
+    const instances = this.computeRepeatArrayOffsets(config, combinedBox);
+    const ghostMat = new THREE.MeshStandardMaterial({
+      color: '#38bdf8',
+      emissive: '#0284c7',
+      emissiveIntensity: 0.42,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+      roughness: 0.4,
+    });
+
+    const yAxis = new THREE.Vector3(0, 1, 0);
+
+    for (const inst of instances) {
+      const qYaw = new THREE.Quaternion().setFromAxisAngle(
+        yAxis,
+        inst.rotYDeg * DEG2RAD
+      );
+      const targetPivot = pivot.clone().add(inst.offset);
+      const terrainDeltaY = config.followTerrain
+        ? this.gridSystem.sampleHeight(targetPivot.x, targetPivot.z) -
+          sourceGroundY
+        : 0;
+
+      for (const sm of sourceMeshes) {
+        const relPos = sm.position.clone().sub(pivot).applyQuaternion(qYaw);
+        const finalPos = targetPivot.clone().add(relPos);
+        finalPos.y += terrainDeltaY;
+
+        const ghost = new THREE.Mesh(sm.geometry.clone(), ghostMat.clone());
+        ghost.position.copy(finalPos);
+        ghost.quaternion.copy(sm.quaternion).premultiply(qYaw);
+        ghost.scale.copy(sm.scale);
+        ghost.raycast = () => {};
+        this.repeatPreviewGroup.add(ghost);
+      }
+    }
+
+    ghostMat.dispose();
+    return instances.length;
+  }
+
+  public commitRepeatArray(config: RepeatArrayConfig): number {
+    this.clearRepeatPreview();
+    const sourceMeshes = this.getSelectedSourceMeshesForArray();
+    if (sourceMeshes.length === 0) return 0;
+
+    const combinedBox = new THREE.Box3();
+    for (const sm of sourceMeshes) {
+      combinedBox.union(this.computeWorldBounds(sm));
+    }
+    const pivot = new THREE.Vector3();
+    combinedBox.getCenter(pivot);
+    const sourceGroundY = this.gridSystem.sampleHeight(pivot.x, pivot.z);
+
+    const instances = this.computeRepeatArrayOffsets(config, combinedBox);
+    if (instances.length === 0) return 0;
+
+    const sharedArrayGroupId = config.groupResult
+      ? `grp_arr_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+      : null;
+    const arrayGroupLabel = `${sourceMeshes[0].userData.groupName || sourceMeshes[0].name} (Array)`;
+
+    if (sharedArrayGroupId) {
+      for (const sm of sourceMeshes) {
+        sm.userData.groupId = sharedArrayGroupId;
+        sm.userData.groupName = arrayGroupLabel;
+      }
+    }
+
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    let createdCopies = 0;
+
+    instances.forEach((inst, copyIdx) => {
+      const qYaw = new THREE.Quaternion().setFromAxisAngle(
+        yAxis,
+        inst.rotYDeg * DEG2RAD
+      );
+      const targetPivot = pivot.clone().add(inst.offset);
+      const terrainDeltaY = config.followTerrain
+        ? this.gridSystem.sampleHeight(targetPivot.x, targetPivot.z) -
+          sourceGroundY
+        : 0;
+
+      const perInstanceGid = sharedArrayGroupId
+        ? sharedArrayGroupId
+        : sourceMeshes.length > 1
+        ? `grp_rep_${Date.now()}_${copyIdx}_${Math.random().toString(36).slice(2, 5)}`
+        : null;
+
+      for (const sm of sourceMeshes) {
+        const ser = this.serializeObject(sm.userData.objectId as string);
+        if (!ser) continue;
+
+        const relPos = sm.position.clone().sub(pivot).applyQuaternion(qYaw);
+        const finalPos = targetPivot.clone().add(relPos);
+        finalPos.y += terrainDeltaY;
+
+        const finalQuat = sm.quaternion.clone().premultiply(qYaw);
+        const finalEuler = new THREE.Euler().setFromQuaternion(finalQuat);
+
+        const newId = `${ser.kind}-arr-${Date.now()}-${copyIdx}-${Math.random()
+          .toString(36)
+          .slice(2, 6)}`;
+        const copyData: SceneObjectData = {
+          ...ser,
+          id: newId,
+          name: `${ser.name} #${copyIdx + 2}`,
+          position: {
+            x: round3(finalPos.x),
+            y: round3(finalPos.y),
+            z: round3(finalPos.z),
+          },
+          rotation: {
+            x: round3(finalEuler.x * RAD2DEG),
+            y: round3(finalEuler.y * RAD2DEG),
+            z: round3(finalEuler.z * RAD2DEG),
+          },
+          subdivision: { ...ser.subdivision },
+          groupId: perInstanceGid,
+          groupName: perInstanceGid ? arrayGroupLabel : undefined,
+        };
+
+        const newMesh = this.buildMeshFromData(copyData);
+        this.objectGroup.add(newMesh);
+        this.meshMap.set(newId, newMesh);
+      }
+      createdCopies++;
+    });
+
+    this.updateSeamlessTouchFaces();
+    this.applyFloorVisibilityAndGhosting();
+    this.updateSelectionHighlight();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return createdCopies;
   }
 
   /* =========================================================
@@ -761,7 +1636,11 @@ export class StudioEngine {
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
     this.surfaceNormalVisualizer.hide();
+    this.validationVisualizer.clear();
+    this.clearRepeatPreview();
     this.selectedId = null;
+    this.selectedIds = [];
+    this.floorGhostedIds.clear();
 
     for (const mesh of this.meshMap.values()) {
       this.disposeMesh(mesh);
@@ -785,6 +1664,7 @@ export class StudioEngine {
     }
 
     this.updateSeamlessTouchFaces();
+    this.applyFloorVisibilityAndGhosting();
     if (resetHistory) {
       this.history = [];
       this.historyIndex = -1;
@@ -805,6 +1685,9 @@ export class StudioEngine {
       this.snapVisualizer.group.visible = false;
       this.protractorVisualizer.group.visible = false;
       this.surfaceNormalVisualizer.group.visible = false;
+      this.validationVisualizer.group.visible = false;
+      this.repeatPreviewGroup.visible = false;
+      this.gridSystem.updateSculptCursor(null);
 
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
@@ -836,6 +1719,8 @@ export class StudioEngine {
       this.snapVisualizer.group.visible = true;
       this.protractorVisualizer.group.visible = true;
       this.surfaceNormalVisualizer.group.visible = true;
+      this.validationVisualizer.group.visible = true;
+      this.repeatPreviewGroup.visible = true;
 
       return thumbCanvas.toDataURL('image/webp', 0.9);
     } catch {
@@ -857,7 +1742,20 @@ export class StudioEngine {
     let targetObjs: SceneObjectData[] = [];
     let defaultName = 'Properti Kustom';
 
-    if (this.selectedId) {
+    if (this.selectedIds.length >= 2) {
+      const selSet = new Set<string>(this.selectedIds);
+      const groupSet = new Set<string>();
+      for (const o of allObjs) {
+        if (selSet.has(o.id) && o.groupId && !this.editSinglePartMode) {
+          groupSet.add(o.groupId);
+        }
+      }
+      targetObjs = allObjs.filter(
+        (o) =>
+          selSet.has(o.id) || (Boolean(o.groupId) && groupSet.has(o.groupId!))
+      );
+      defaultName = targetObjs[0]?.groupName || targetObjs[0]?.name || defaultName;
+    } else if (this.selectedId) {
       const sel = allObjs.find((o) => o.id === this.selectedId);
       if (sel) {
         if (sel.groupId && !this.editSinglePartMode) {
@@ -992,8 +1890,15 @@ export class StudioEngine {
     try {
       if (mode === 'translate') {
         const rawPos = mesh.position.clone();
+        this.clampPositionByAxisLock(rawPos);
+        mesh.position.copy(rawPos);
+
+        const companions = this.getGroupSiblings(mesh);
         const others = this.getNonSiblingMeshes(mesh);
         const groundY = this.gridSystem.sampleHeight(rawPos.x, rawPos.z);
+        const effectiveGridStep = this.gridSettings.adaptive
+          ? this.gridSystem.getEffectiveSpacing()
+          : this.snapSettings.gridStep;
 
         let conformedToSurface = false;
         let finalLabel: string | null = null;
@@ -1018,7 +1923,7 @@ export class StudioEngine {
               surfHit.isGround &&
               this.snapSettings.enabled &&
               this.snapSettings.grid
-                ? this.snapSettings.gridStep
+                ? effectiveGridStep
                 : 0;
 
             const applied = this.surfaceEngine.applySurfaceHit(
@@ -1030,6 +1935,7 @@ export class StudioEngine {
               true,
               gridStep
             );
+            this.clampPositionByAxisLock(mesh.position);
             this.surfaceNormalVisualizer.show(
               applied.contactPoint,
               applied.contactNormal
@@ -1048,9 +1954,19 @@ export class StudioEngine {
             axis,
             others,
             this.snapSettings,
-            groundY
+            groundY,
+            {
+              companionMeshes: companions,
+              effectiveGridStep,
+              storyElevations:
+                this.studioMode === 'house'
+                  ? this.floors.map((f) => f.elevation)
+                  : undefined,
+              isHouseMode: this.studioMode === 'house',
+            }
           );
           mesh.position.copy(snapRes.snappedPosition);
+          this.clampPositionByAxisLock(mesh.position);
           this.snapVisualizer.update(snapRes);
           finalLabel = snapRes.snapLabel;
         }
@@ -1290,6 +2206,22 @@ export class StudioEngine {
     this.pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
+  private raycastTerrainPoint(event: PointerEvent): THREE.Vector3 | null {
+    const collider = this.gridSystem.getGroundCollider();
+    if (!collider) return null;
+    this.setPointerNDCFromEvent(event);
+    this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+    const hits = this.raycaster.intersectObject(collider, false);
+    if (hits.length > 0) return hits[0].point.clone();
+
+    const plane = new THREE.Plane(
+      new THREE.Vector3(0, 1, 0),
+      -this.gridSettings.elevationY
+    );
+    const pt = new THREE.Vector3();
+    return this.raycaster.ray.intersectPlane(plane, pt) ? pt : null;
+  }
+
   private handlePointerDown = (event: PointerEvent): void => {
     this.pointerDownPos = { x: event.clientX, y: event.clientY };
     this.wasGizmoDragging = false;
@@ -1298,6 +2230,62 @@ export class StudioEngine {
       this.isWalkLooking = true;
       this.walkLookPrev = { x: event.clientX, y: event.clientY };
       this.renderer.domElement.setPointerCapture?.(event.pointerId);
+      return;
+    }
+
+    // #3 Terrain Sculpting Stroke Start (`house` mode, primary pointer)
+    if (
+      this.studioMode === 'house' &&
+      this.terrainSculpt.active &&
+      event.button <= 0
+    ) {
+      const hitPt = this.raycastTerrainPoint(event);
+      if (hitPt) {
+        this.isSculptingStroke = true;
+        this.orbitControls.enabled = false;
+        this.renderer.domElement.setPointerCapture?.(event.pointerId);
+        if (this.terrainSculpt.tool === 'flatten') {
+          this.terrainSculpt.flattenHeight =
+            Math.round(this.gridSystem.sampleHeight(hitPt.x, hitPt.z) * 20) / 20;
+        }
+        this.gridSystem.updateSculptCursor(
+          hitPt,
+          this.terrainSculpt.radius,
+          this.terrainSculpt.tool
+        );
+        this.gridSystem.sculptTerrainAt(
+          hitPt.x,
+          hitPt.z,
+          this.terrainSculpt.tool,
+          this.terrainSculpt.radius,
+          this.terrainSculpt.strength,
+          this.terrainSculpt.flattenHeight
+        );
+      }
+      return;
+    }
+
+    // #6 Box Marquee Selection Start (`select` mode + `box` sub-mode)
+    if (
+      this.transformMode === 'select' &&
+      this.selectionSubMode === 'box' &&
+      this.paintMode === 'none' &&
+      event.button <= 0
+    ) {
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      this.isBoxSelecting = true;
+      this.boxSelectStart = {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      };
+      this.orbitControls.enabled = false;
+      this.renderer.domElement.setPointerCapture?.(event.pointerId);
+      this.callbacks.onBoxSelectRect?.({
+        x: this.boxSelectStart.x,
+        y: this.boxSelectStart.y,
+        width: 0,
+        height: 0,
+      });
       return;
     }
 
@@ -1317,6 +2305,7 @@ export class StudioEngine {
         if (hitSel.length > 0) {
           this.isSurfaceSliding = true;
           this.didMoveDuringSurfaceSlide = false;
+          this.dragStartLeaderPos.copy(selMesh.position);
           this.captureGroupRelativeMatrices(selMesh);
           this.orbitControls.enabled = false;
           this.renderer.domElement.setPointerCapture?.(event.pointerId);
@@ -1337,6 +2326,44 @@ export class StudioEngine {
         Math.min(Math.PI * 0.44, this.walkPitch - dy * 0.0038)
       );
       this.applyWalkCameraRotation();
+      return;
+    }
+
+    // #3 Terrain Sculpting Hover Cursor + Continuous Brush Stroke
+    if (this.studioMode === 'house' && this.terrainSculpt.active) {
+      const hitPt = this.raycastTerrainPoint(event);
+      if (hitPt) {
+        this.gridSystem.updateSculptCursor(
+          hitPt,
+          this.terrainSculpt.radius,
+          this.terrainSculpt.tool
+        );
+        if (this.isSculptingStroke) {
+          this.gridSystem.sculptTerrainAt(
+            hitPt.x,
+            hitPt.z,
+            this.terrainSculpt.tool,
+            this.terrainSculpt.radius,
+            this.terrainSculpt.strength * 0.65,
+            this.terrainSculpt.flattenHeight
+          );
+        }
+      } else {
+        this.gridSystem.updateSculptCursor(null);
+      }
+      return;
+    }
+
+    // #6 Box Marquee Selection Drag
+    if (this.isBoxSelecting) {
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      const curX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+      const curY = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+      const minX = Math.min(this.boxSelectStart.x, curX);
+      const minY = Math.min(this.boxSelectStart.y, curY);
+      const w = Math.abs(curX - this.boxSelectStart.x);
+      const h = Math.abs(curY - this.boxSelectStart.y);
+      this.callbacks.onBoxSelectRect?.({ x: minX, y: minY, width: w, height: h });
       return;
     }
 
@@ -1365,7 +2392,9 @@ export class StudioEngine {
 
     const gridStep =
       this.snapSettings.enabled && this.snapSettings.grid
-        ? this.snapSettings.gridStep
+        ? this.gridSettings.adaptive
+          ? this.gridSystem.getEffectiveSpacing()
+          : this.snapSettings.gridStep
         : 0;
 
     const applied = this.surfaceEngine.applySurfaceHit(
@@ -1377,6 +2406,7 @@ export class StudioEngine {
       true,
       gridStep
     );
+    this.clampPositionByAxisLock(selMesh.position);
 
     this.syncGroupSiblingsFromLeader(selMesh);
     this.surfaceNormalVisualizer.show(
@@ -1395,6 +2425,76 @@ export class StudioEngine {
         this.renderer.domElement.releasePointerCapture?.(event.pointerId);
       }
       return;
+    }
+
+    // #3 Finalize Terrain Sculpt Stroke
+    if (this.isSculptingStroke) {
+      this.isSculptingStroke = false;
+      this.orbitControls.enabled = true;
+      this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+      this.gridSettings = this.gridSystem.finalizeSculptStroke();
+      this.pushHistorySnapshot();
+      this.emitState();
+      return;
+    }
+
+    // #6 Finalize Box Marquee Selection
+    if (this.isBoxSelecting) {
+      this.isBoxSelecting = false;
+      this.orbitControls.enabled = true;
+      this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+      this.callbacks.onBoxSelectRect?.(null);
+
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      const endX = Math.max(0, Math.min(rect.width, event.clientX - rect.left));
+      const endY = Math.max(0, Math.min(rect.height, event.clientY - rect.top));
+      const minX = Math.min(this.boxSelectStart.x, endX);
+      const maxX = Math.max(this.boxSelectStart.x, endX);
+      const minY = Math.min(this.boxSelectStart.y, endY);
+      const maxY = Math.max(this.boxSelectStart.y, endY);
+
+      if (maxX - minX >= 6 && maxY - minY >= 6) {
+        const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+        const nextIds = new Set<string>(additive ? this.selectedIds : []);
+        const proj = new THREE.Vector3();
+
+        for (const [id, mesh] of this.meshMap.entries()) {
+          if (
+            !mesh.visible ||
+            this.ghostedMeshIds.has(id) ||
+            this.floorGhostedIds.has(id) ||
+            this.isMeshFloorLocked(mesh)
+          ) {
+            continue;
+          }
+          const b = this.computeWorldBounds(mesh);
+          const testPts = [
+            mesh.position.clone(),
+            new THREE.Vector3(b.min.x, b.min.y, b.min.z),
+            new THREE.Vector3(b.max.x, b.max.y, b.max.z),
+            new THREE.Vector3(b.min.x, b.max.y, b.max.z),
+            new THREE.Vector3(b.max.x, b.min.y, b.min.z),
+          ];
+          for (const pt of testPts) {
+            proj.copy(pt).project(this.camera);
+            if (proj.z > 1) continue;
+            const sx = (proj.x * 0.5 + 0.5) * rect.width;
+            const sy = (-proj.y * 0.5 + 0.5) * rect.height;
+            if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+              nextIds.add(id);
+              break;
+            }
+          }
+        }
+
+        const arr = Array.from(nextIds);
+        this.selectedIds = arr;
+        this.selectedId = arr.length > 0 ? arr[arr.length - 1] : null;
+        this.reattachTransformAfterSelectionChange();
+        this.emitState();
+        return;
+      }
+      // Small click in box mode falls through to normal single/multi click selection
     }
 
     if (this.isSurfaceSliding) {
@@ -1435,7 +2535,11 @@ export class StudioEngine {
     this.raycaster.setFromCamera(this.pointerNDC, this.camera);
 
     const selectableMeshes = Array.from(this.meshMap.values()).filter(
-      (m) => m.visible && !this.ghostedMeshIds.has(m.userData.objectId as string)
+      (m) =>
+        m.visible &&
+        !this.ghostedMeshIds.has(m.userData.objectId as string) &&
+        !this.floorGhostedIds.has(m.userData.objectId as string) &&
+        !this.isMeshFloorLocked(m)
     );
     const hits = this.raycaster.intersectObjects(selectableMeshes, false);
 
@@ -1493,7 +2597,9 @@ export class StudioEngine {
         if (hitSurf) {
           const gridStep =
             this.snapSettings.enabled && this.snapSettings.grid
-              ? this.snapSettings.gridStep
+              ? this.gridSettings.adaptive
+                ? this.gridSystem.getEffectiveSpacing()
+                : this.snapSettings.gridStep
               : 0;
           this.surfaceEngine.applySurfaceHit(
             selMesh,
@@ -1515,14 +2621,24 @@ export class StudioEngine {
       }
     }
 
-    // 3. Normal Object Selection
+    // 3. Normal / Multi-Select Object Selection (#6)
+    const isAdditiveClick =
+      this.selectionSubMode === 'multi' ||
+      event.shiftKey ||
+      event.ctrlKey ||
+      event.metaKey;
+
     if (hits.length > 0) {
       const hitMesh = hits[0].object as THREE.Mesh;
       const hitId = hitMesh.userData.objectId as string | undefined;
       if (hitId) {
-        this.selectObject(hitId);
+        if (isAdditiveClick) {
+          this.toggleSelectObject(hitId);
+        } else {
+          this.selectObject(hitId);
+        }
       }
-    } else {
+    } else if (!isAdditiveClick) {
       this.selectObject(null);
     }
   };
@@ -1538,9 +2654,30 @@ export class StudioEngine {
       this.viewHelper.update(delta);
     } else if (this.cameraTween?.active) {
       this.updateCameraTween(delta);
-    } else if (!this.transformControls.dragging && !this.isSurfaceSliding) {
+    } else if (
+      !this.transformControls.dragging &&
+      !this.isSurfaceSliding &&
+      !this.isSculptingStroke &&
+      !this.isBoxSelecting
+    ) {
       this.orbitControls.enabled = true;
       this.orbitControls.update();
+    }
+
+    // #8 Adaptive Grid Zoom Update
+    if (!this.walkthroughEnabled && this.gridSettings.adaptive) {
+      const camDist = this.camera.position.distanceTo(this.orbitControls.target);
+      const changed = this.gridSystem.updateAdaptiveZoom(camDist);
+      if (changed) {
+        const eff = this.gridSystem.getEffectiveSpacing();
+        if (Math.abs(eff - this.lastAdaptiveSpacing) > 1e-4) {
+          this.lastAdaptiveSpacing = eff;
+          if (this.gridSettings.syncSnap) {
+            this.applyControlSnapConfig();
+          }
+          this.emitState();
+        }
+      }
     }
 
     if (this.interiorPeekEnabled) {
@@ -2158,6 +3295,8 @@ export class StudioEngine {
       groupId: data.groupId ?? null,
       groupName: data.groupName,
       archRole: data.archRole,
+      surfaceRule: data.surfaceRule,
+      floorId: data.floorId,
       modelAssetId: data.modelAssetId,
       modelFormat: data.modelFormat ?? importedEntry?.format,
       modelThumbUrl: data.modelThumbUrl ?? importedEntry?.thumbDataUrl,
@@ -2187,23 +3326,30 @@ export class StudioEngine {
   }
 
   private updateSelectionHighlight(): void {
-    const selMesh = this.selectedId ? this.meshMap.get(this.selectedId) : null;
-    const selGroupId =
-      selMesh && !this.editSinglePartMode
-        ? (selMesh.userData.groupId as string | null | undefined)
-        : null;
+    const selectedSet = new Set(this.selectedIds);
+    const selectedGroups = new Set<string>();
+    if (!this.editSinglePartMode) {
+      for (const sid of this.selectedIds) {
+        const m = this.meshMap.get(sid);
+        const gid = m?.userData.groupId as string | null | undefined;
+        if (gid) selectedGroups.add(gid);
+      }
+    }
 
     for (const [id, mesh] of this.meshMap.entries()) {
       const mat = this.getBaseMaterial(mesh);
       const userEmissive = (mesh.userData.userEmissiveHex as string) ?? '#000000';
       const userIntensity = (mesh.userData.userEmissiveIntensity as number) ?? 0;
 
-      const isHighlighted =
-        id === this.selectedId ||
-        (Boolean(selGroupId) && mesh.userData.groupId === selGroupId);
+      const isPrimary = id === this.selectedId;
+      const isSecondary =
+        !isPrimary &&
+        (selectedSet.has(id) ||
+          (Boolean(mesh.userData.groupId) &&
+            selectedGroups.has(mesh.userData.groupId as string)));
 
-      if (isHighlighted && userIntensity === 0) {
-        mat.emissive.set(id === this.selectedId ? '#241a08' : '#141e2e');
+      if ((isPrimary || isSecondary) && userIntensity === 0) {
+        mat.emissive.set(isPrimary ? '#241a08' : '#132338');
         mat.emissiveIntensity = 1;
       } else {
         mat.emissive.set(userEmissive);
@@ -2218,8 +3364,8 @@ export class StudioEngine {
           const applyGlow = (mMat: THREE.Material) => {
             const std = mMat as THREE.MeshStandardMaterial;
             if (!std.emissive) return;
-            if (isHighlighted && userIntensity === 0) {
-              std.emissive.set(id === this.selectedId ? '#241a08' : '#141e2e');
+            if ((isPrimary || isSecondary) && userIntensity === 0) {
+              std.emissive.set(isPrimary ? '#241a08' : '#132338');
               std.emissiveIntensity = 1;
             } else {
               std.emissive.set(userEmissive);
@@ -2233,27 +3379,57 @@ export class StudioEngine {
     }
   }
 
-  public selectObject(id: string | null, emit = true): void {
-    if (id && !this.meshMap.has(id)) {
-      id = null;
-    }
-    this.selectedId = id;
+  private reattachTransformAfterSelectionChange(): void {
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
     this.surfaceNormalVisualizer.hide();
     this.updateSelectionHighlight();
 
-    if (id && this.transformMode !== 'select' && !this.walkthroughEnabled) {
-      const mesh = this.meshMap.get(id);
+    if (
+      this.selectedId &&
+      this.transformMode !== 'select' &&
+      !this.walkthroughEnabled &&
+      !this.terrainSculpt.active
+    ) {
+      const mesh = this.meshMap.get(this.selectedId);
       if (mesh && mesh.visible) {
         this.transformControls.attach(mesh);
+        this.applyAxisLockToGizmo();
       } else {
         this.transformControls.detach();
       }
     } else {
       this.transformControls.detach();
     }
+  }
 
+  public selectObject(id: string | null, emit = true): void {
+    if (id && !this.meshMap.has(id)) {
+      id = null;
+    }
+    this.selectedId = id;
+    this.selectedIds = id ? [id] : [];
+    this.reattachTransformAfterSelectionChange();
+
+    if (emit) {
+      this.emitState();
+    }
+  }
+
+  public toggleSelectObject(id: string, emit = true): void {
+    if (!this.meshMap.has(id)) return;
+    const idx = this.selectedIds.indexOf(id);
+    if (idx !== -1) {
+      this.selectedIds.splice(idx, 1);
+      this.selectedId =
+        this.selectedIds.length > 0
+          ? this.selectedIds[this.selectedIds.length - 1]
+          : null;
+    } else {
+      this.selectedIds.push(id);
+      this.selectedId = id;
+    }
+    this.reattachTransformAfterSelectionChange();
     if (emit) {
       this.emitState();
     }
@@ -2266,10 +3442,15 @@ export class StudioEngine {
     this.surfaceNormalVisualizer.hide();
     this.updateSelectionHighlight();
 
-    if (mode === 'select' || this.walkthroughEnabled) {
+    if (
+      mode === 'select' ||
+      this.walkthroughEnabled ||
+      this.terrainSculpt.active
+    ) {
       this.transformControls.detach();
     } else {
       this.transformControls.setMode(mode);
+      this.applyAxisLockToGizmo();
       if (this.selectedId) {
         const mesh = this.meshMap.get(this.selectedId);
         if (mesh && mesh.visible) {
@@ -2838,55 +4019,72 @@ export class StudioEngine {
     const selMesh = this.meshMap.get(this.selectedId);
     if (!selMesh) return null;
 
-    const gid = !this.editSinglePartMode
-      ? (selMesh.userData.groupId as string | null | undefined)
-      : null;
-
-    if (gid) {
-      // Duplicate the entire group cohesively!
-      const groupMembers = Array.from(this.meshMap.keys())
-        .map((id) => this.serializeObject(id))
-        .filter((o): o is SceneObjectData => Boolean(o && o.groupId === gid));
-
-      if (groupMembers.length > 0) {
-        const groupBox = new THREE.Box3();
-        for (const gm of groupMembers) {
-          const m = this.meshMap.get(gm.id);
-          if (m) groupBox.union(this.computeWorldBounds(m));
-        }
-        const spanX = Math.max(1.2, groupBox.max.x - groupBox.min.x + 0.35);
-        const newGid = `grp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-        let newLeaderId: string | null = null;
-
-        for (const gm of groupMembers) {
-          const newId = `${gm.kind}-${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2, 6)}`;
-          if (gm.id === this.selectedId || !newLeaderId) {
-            newLeaderId = newId;
-          }
-          const copyData: SceneObjectData = {
-            ...gm,
-            id: newId,
-            groupId: newGid,
-            position: {
-              x: round3(gm.position.x + spanX),
-              y: gm.position.y,
-              z: gm.position.z,
-            },
-            subdivision: { ...gm.subdivision },
-          };
-          const m = this.buildMeshFromData(copyData);
-          this.objectGroup.add(m);
-          this.meshMap.set(newId, m);
-        }
-
-        this.updateSeamlessTouchFaces();
-        if (newLeaderId) this.selectObject(newLeaderId, false);
-        this.pushHistorySnapshot();
-        this.emitState();
-        return newLeaderId;
+    const companions = this.getGroupSiblings(selMesh);
+    if (companions.length > 0) {
+      // Duplicate the entire Multi-Selection or Group cohesively!
+      const allSourceMeshes = [selMesh, ...companions];
+      const combinedBox = new THREE.Box3();
+      for (const sm of allSourceMeshes) {
+        combinedBox.union(this.computeWorldBounds(sm));
       }
+      const spanX = Math.max(1.2, combinedBox.max.x - combinedBox.min.x + 0.35);
+      const groupIdRemap = new Map<string, string>();
+      const newSelectedIds: string[] = [];
+      let newLeaderId: string | null = null;
+
+      for (const sm of allSourceMeshes) {
+        const ser = this.serializeObject(sm.userData.objectId as string);
+        if (!ser) continue;
+
+        let nextGid: string | null = null;
+        if (ser.groupId && !this.editSinglePartMode) {
+          let mapped = groupIdRemap.get(ser.groupId);
+          if (!mapped) {
+            mapped = `grp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+            groupIdRemap.set(ser.groupId, mapped);
+          }
+          nextGid = mapped;
+        }
+
+        const newId = `${ser.kind}-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 6)}`;
+        if (ser.id === this.selectedId || !newLeaderId) {
+          newLeaderId = newId;
+        }
+        if (this.selectedIds.includes(ser.id)) {
+          newSelectedIds.push(newId);
+        }
+
+        const copyData: SceneObjectData = {
+          ...ser,
+          id: newId,
+          groupId: nextGid,
+          position: {
+            x: round3(ser.position.x + spanX),
+            y: ser.position.y,
+            z: ser.position.z,
+          },
+          subdivision: { ...ser.subdivision },
+        };
+        const m = this.buildMeshFromData(copyData);
+        this.objectGroup.add(m);
+        this.meshMap.set(newId, m);
+      }
+
+      this.updateSeamlessTouchFaces();
+      this.applyFloorVisibilityAndGhosting();
+      this.selectedIds =
+        newSelectedIds.length > 0
+          ? newSelectedIds
+          : newLeaderId
+          ? [newLeaderId]
+          : [];
+      this.selectedId = newLeaderId;
+      this.reattachTransformAfterSelectionChange();
+      this.pushHistorySnapshot();
+      this.emitState();
+      return newLeaderId;
     }
 
     const current = this.serializeObject(this.selectedId);
@@ -2911,6 +4109,7 @@ export class StudioEngine {
     this.objectGroup.add(mesh);
     this.meshMap.set(newId, mesh);
     this.updateSeamlessTouchFaces();
+    this.applyFloorVisibilityAndGhosting();
     this.selectObject(newId, false);
     this.pushHistorySnapshot();
     this.emitState();
@@ -2922,28 +4121,42 @@ export class StudioEngine {
     const mesh = this.meshMap.get(id);
     if (!mesh) return;
 
-    const gid = !this.editSinglePartMode
-      ? (mesh.userData.groupId as string | null | undefined)
-      : null;
+    const deleteSet = new Set<string>();
+    const seedIds =
+      id === this.selectedId && this.selectedIds.length > 1
+        ? [...this.selectedIds]
+        : [id];
 
-    const idsToDelete = gid
-      ? Array.from(this.meshMap.entries())
-          .filter(([, m]) => m.userData.groupId === gid)
-          .map(([k]) => k)
-      : [id];
-
-    if (this.selectedId && idsToDelete.includes(this.selectedId)) {
-      this.transformControls.detach();
-      this.selectedId = null;
+    for (const sid of seedIds) {
+      deleteSet.add(sid);
+      const sm = this.meshMap.get(sid);
+      const gid = !this.editSinglePartMode
+        ? (sm?.userData.groupId as string | null | undefined)
+        : null;
+      if (gid) {
+        for (const [k, m] of this.meshMap.entries()) {
+          if (m.userData.groupId === gid) deleteSet.add(k);
+        }
+      }
     }
 
-    for (const delId of idsToDelete) {
+    this.selectedIds = this.selectedIds.filter((sid) => !deleteSet.has(sid));
+    if (this.selectedId && deleteSet.has(this.selectedId)) {
+      this.selectedId =
+        this.selectedIds.length > 0
+          ? this.selectedIds[this.selectedIds.length - 1]
+          : null;
+    }
+    this.reattachTransformAfterSelectionChange();
+
+    for (const delId of deleteSet) {
       const m = this.meshMap.get(delId);
       if (m) {
         this.disposeMesh(m);
         this.objectGroup.remove(m);
         this.meshMap.delete(delId);
         this.ghostedMeshIds.delete(delId);
+        this.floorGhostedIds.delete(delId);
       }
     }
 
@@ -2957,8 +4170,12 @@ export class StudioEngine {
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
     this.surfaceNormalVisualizer.hide();
+    this.validationVisualizer.clear();
+    this.clearRepeatPreview();
     this.selectedId = null;
+    this.selectedIds = [];
     this.ghostedMeshIds.clear();
+    this.floorGhostedIds.clear();
 
     for (const mesh of this.meshMap.values()) {
       this.disposeMesh(mesh);
@@ -3164,6 +4381,8 @@ export class StudioEngine {
       groupId: (mesh.userData.groupId as string | null | undefined) ?? null,
       groupName: mesh.userData.groupName as string | undefined,
       archRole: mesh.userData.archRole as ArchitecturalRole | undefined,
+      surfaceRule: mesh.userData.surfaceRule as SurfacePlacementRule | undefined,
+      floorId: mesh.userData.floorId as string | undefined,
       modelAssetId: mesh.userData.modelAssetId as string | undefined,
       modelFormat: mesh.userData.modelFormat as string | undefined,
       modelThumbUrl: mesh.userData.modelThumbUrl as string | undefined,
@@ -3207,6 +4426,10 @@ export class StudioEngine {
     const snapshot: HistorySnapshot = {
       objects: this.serializeAllObjects(),
       selectedId: this.selectedId,
+      selectedIds: [...this.selectedIds],
+      sculptedHeightsB64: this.gridSystem.exportSculptedHeightsBase64(),
+      floors: this.floors.map((f) => ({ ...f })),
+      activeFloorId: this.activeFloorId,
     };
 
     if (this.historyIndex < this.history.length - 1) {
@@ -3246,13 +4469,24 @@ export class StudioEngine {
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
     this.surfaceNormalVisualizer.hide();
+    this.validationVisualizer.clear();
+    this.clearRepeatPreview();
     this.ghostedMeshIds.clear();
+    this.floorGhostedIds.clear();
 
     for (const mesh of this.meshMap.values()) {
       this.disposeMesh(mesh);
       this.objectGroup.remove(mesh);
     }
     this.meshMap.clear();
+
+    this.gridSystem.importSculptedHeightsBase64(snapshot.sculptedHeightsB64 ?? null);
+    if (snapshot.floors && snapshot.floors.length > 0) {
+      this.floors = snapshot.floors.map((f) => ({ ...f }));
+    }
+    if (snapshot.activeFloorId) {
+      this.activeFloorId = snapshot.activeFloorId;
+    }
 
     for (const item of snapshot.objects) {
       const cloned: SceneObjectData = {
@@ -3268,7 +4502,21 @@ export class StudioEngine {
     }
 
     this.updateSeamlessTouchFaces();
-    this.selectObject(snapshot.selectedId, false);
+    this.applyFloorVisibilityAndGhosting();
+
+    const restoredIds = (snapshot.selectedIds ?? []).filter((id) =>
+      this.meshMap.has(id)
+    );
+    if (restoredIds.length > 0) {
+      this.selectedIds = restoredIds;
+      this.selectedId =
+        snapshot.selectedId && this.meshMap.has(snapshot.selectedId)
+          ? snapshot.selectedId
+          : restoredIds[restoredIds.length - 1];
+      this.reattachTransformAfterSelectionChange();
+    } else {
+      this.selectObject(snapshot.selectedId, false);
+    }
     this.emitState();
   }
 
@@ -3315,42 +4563,70 @@ export class StudioEngine {
     });
   }
 
+  private computeSelectedCombinedBounds(): THREE.Box3 | null {
+    if (!this.selectedId) return null;
+    const selMesh = this.meshMap.get(this.selectedId);
+    if (!selMesh || !selMesh.visible) return null;
+
+    const companions = this.getGroupSiblings(selMesh);
+    const box = this.computeWorldBounds(selMesh);
+    for (const cm of companions) {
+      if (cm.visible) {
+        box.union(this.computeWorldBounds(cm));
+      }
+    }
+    return box.isEmpty() ? null : box;
+  }
+
   private refreshGridSelectionFootprint(): void {
-    if (!this.selectedId) {
-      this.gridSystem.updateSelectionFootprint(null);
-      return;
+    const box = this.computeSelectedCombinedBounds();
+    this.gridSystem.updateSelectionFootprint(box);
+  }
+
+  private evaluateCurrentValidation(): PlacementValidationStatus | null {
+    if (!this.placementValidationEnabled || !this.selectedId) {
+      this.validationVisualizer.clear();
+      return null;
     }
     const selMesh = this.meshMap.get(this.selectedId);
     if (!selMesh || !selMesh.visible) {
-      this.gridSystem.updateSelectionFootprint(null);
-      return;
+      this.validationVisualizer.clear();
+      return null;
     }
-
-    const gid = !this.editSinglePartMode
-      ? (selMesh.userData.groupId as string | null | undefined)
-      : null;
-
-    if (gid) {
-      const groupBox = new THREE.Box3();
-      for (const m of this.meshMap.values()) {
-        if (m.visible && m.userData.groupId === gid) {
-          groupBox.union(this.computeWorldBounds(m));
-        }
-      }
-      this.gridSystem.updateSelectionFootprint(groupBox);
-    } else {
-      this.gridSystem.updateSelectionFootprint(this.computeWorldBounds(selMesh));
-    }
+    const activeMeshes = [selMesh, ...this.getGroupSiblings(selMesh)];
+    const otherMeshes = this.getNonSiblingMeshes(selMesh);
+    const status = this.placementValidator.evaluate(
+      activeMeshes,
+      otherMeshes,
+      this.gridSystem,
+      this.gridSettings,
+      this.surfaceSettings,
+      this.studioMode === 'house'
+    );
+    const combinedBox = this.computeSelectedCombinedBounds();
+    this.validationVisualizer.update(
+      combinedBox,
+      status,
+      this.placementValidationEnabled
+    );
+    return status;
   }
 
   private emitState(): void {
     this.refreshGridSelectionFootprint();
+    const validationStatus = this.evaluateCurrentValidation();
     this.callbacks.onStateChange({
       objects: this.serializeAllObjects(),
       selectedId: this.selectedId,
+      selectedIds: [...this.selectedIds],
       canUndo: this.canUndo(),
       canRedo: this.canRedo(),
       selectedSubdivStats: this.getSelectedSubdivStats(),
+      validationStatus,
+      adaptiveSpacing: this.gridSystem.getEffectiveSpacing(),
+      floors: this.floors.map((f) => ({ ...f })),
+      activeFloorId: this.activeFloorId,
+      floorViewMode: this.floorViewMode,
     });
   }
 
@@ -3403,6 +4679,8 @@ export class StudioEngine {
     this.snapVisualizer.dispose();
     this.protractorVisualizer.dispose();
     this.surfaceNormalVisualizer.dispose();
+    this.validationVisualizer.dispose();
+    this.clearRepeatPreview();
     this.hiddenFaceMaterial.dispose();
 
     for (const mesh of this.meshMap.values()) {

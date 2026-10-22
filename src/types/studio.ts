@@ -128,6 +128,78 @@ export type HousePresetCategory =
 
 export type TransformMode = 'select' | 'translate' | 'rotate' | 'scale';
 
+export type SelectionSubMode = 'single' | 'multi' | 'box';
+
+export type AxisLockMode = 'free' | 'x' | 'y' | 'z' | 'xz';
+
+export type SurfacePlacementRule =
+  | 'any'
+  | 'building-flat'
+  | 'ground-foliage'
+  | 'slope-rock'
+  | 'floor-interior'
+  | 'wall-opening';
+
+export type PlacementValidationIssueKind =
+  | 'collision'
+  | 'out-of-plot'
+  | 'out-of-domain'
+  | 'steep-slope'
+  | 'wrong-surface';
+
+export interface PlacementValidationStatus {
+  valid: boolean;
+  issues: Array<{
+    kind: PlacementValidationIssueKind;
+    targetName?: string;
+    slopeDeg?: number;
+  }>;
+}
+
+export type TerrainSculptTool =
+  | 'raise'
+  | 'lower'
+  | 'flatten'
+  | 'smooth'
+  | 'terrace';
+
+export interface TerrainSculptSettings {
+  active: boolean;
+  tool: TerrainSculptTool;
+  radius: number; // 0.6 .. 10m
+  strength: number; // 0.1 .. 1.0
+  flattenHeight: number; // Target Y when tool === 'flatten'
+}
+
+export interface BuildingFloorLayer {
+  id: string;
+  name: string;
+  elevation: number; // Base Y in meters (e.g. 0, 3, 6)
+  height: number; // Story height in meters (default 3.0)
+  visible: boolean;
+  locked?: boolean;
+}
+
+export type FloorViewMode = 'all' | 'cutaway-above' | 'ghost-others';
+
+export type RepeatArrayMode = 'linear' | 'grid' | 'radial';
+
+export interface RepeatArrayConfig {
+  mode: RepeatArrayMode;
+  count: number; // 2..24
+  countZ: number; // 2..12 (for 'grid' 2D mode)
+  axis: '+x' | '-x' | '+z' | '-z' | '+y';
+  spacingMode: 'flush' | 'fixed';
+  stepDistance: number; // meters when spacingMode === 'fixed'
+  stepDistanceZ: number;
+  stepElevationY: number; // meters elevation step per item (stairs / sloped fence)
+  rotationStepYDeg: number; // optional yaw curve per item
+  radius: number; // meters for 'radial'
+  fullAngleDeg: number; // 45..360 for 'radial'
+  followTerrain: boolean;
+  groupResult: boolean;
+}
+
 export type PaintInteractionMode = 'none' | 'eyedropper' | 'bucket';
 
 export type TransformSpace = 'world' | 'local';
@@ -151,6 +223,8 @@ export interface SurfaceSettings {
   clickToPlace: boolean;
   spinDeg: number;
   offset: number;
+  surfaceAware: boolean;
+  maxFlatSlopeDeg: number;
 }
 
 export interface ObjectSubdivisionSettings {
@@ -186,6 +260,7 @@ export type GridVerticalMode = 'none' | 'back' | 'corner';
 
 export interface GridSettings {
   visible: boolean;
+  adaptive: boolean;
   style: GridStyle;
   spacing: number;
   subdivisions: number;
@@ -202,15 +277,20 @@ export interface GridSettings {
   plotDepth: number;
   terrainPreset: TerrainPreset;
   terrainAmplitude: number;
+  terrainHeightmapB64?: string;
+  terrainGridRes?: number;
 }
 
 export interface SnapSettings {
   enabled: boolean;
   objectMagnet: boolean;
+  modularSocket: boolean;
   magnetStrength: MagnetStrength;
   alignment: boolean;
   grid: boolean;
   gridStep: number;
+  heightSnap: boolean;
+  heightStep: number;
   rotationSnapDeg: RotationSnapStep;
 }
 
@@ -252,6 +332,9 @@ export interface SceneObjectData {
   groupId?: string | null;
   groupName?: string;
   archRole?: ArchitecturalRole;
+  modularId?: string;
+  surfaceRule?: SurfacePlacementRule;
+  floorId?: string;
   modelAssetId?: string;
   modelFormat?: string;
   modelThumbUrl?: string;
@@ -279,6 +362,11 @@ export interface SerializedProjectFile {
   snapSettings?: SnapSettings;
   surfaceSettings?: SurfaceSettings;
   lightingMood?: LightingMood;
+  sculptedHeightsB64?: string | null;
+  floors?: BuildingFloorLayer[];
+  activeFloorId?: string;
+  floorViewMode?: FloorViewMode;
+  placementValidation?: boolean;
   embeddedModels?: Record<
     string,
     { name: string; format: string; thumbDataUrl: string; base64Glb: string }
@@ -487,10 +575,13 @@ export const DEFAULT_SURFACE_SETTINGS: SurfaceSettings = {
   clickToPlace: false,
   spinDeg: 0,
   offset: 0,
+  surfaceAware: true,
+  maxFlatSlopeDeg: 14,
 };
 
 export const DEFAULT_GRID_SETTINGS: GridSettings = {
   visible: true,
+  adaptive: true,
   style: 'wire',
   spacing: 1.0,
   subdivisions: 4,
@@ -512,12 +603,53 @@ export const DEFAULT_GRID_SETTINGS: GridSettings = {
 export const DEFAULT_SNAP_SETTINGS: SnapSettings = {
   enabled: true,
   objectMagnet: true,
+  modularSocket: true,
   magnetStrength: 'normal',
   alignment: true,
   grid: true,
   gridStep: 0.25,
+  heightSnap: false,
+  heightStep: 0.5,
   rotationSnapDeg: 15,
 };
+
+export const DEFAULT_TERRAIN_SCULPT_SETTINGS: TerrainSculptSettings = {
+  active: false,
+  tool: 'raise',
+  radius: 2.5,
+  strength: 0.45,
+  flattenHeight: 0,
+};
+
+export const DEFAULT_REPEAT_ARRAY_CONFIG: RepeatArrayConfig = {
+  mode: 'linear',
+  count: 4,
+  countZ: 3,
+  axis: '+x',
+  spacingMode: 'flush',
+  stepDistance: 1.5,
+  stepDistanceZ: 1.5,
+  stepElevationY: 0,
+  rotationStepYDeg: 0,
+  radius: 3.0,
+  fullAngleDeg: 360,
+  followTerrain: true,
+  groupResult: true,
+};
+
+export function createDefaultBuildingFloors(lang: AppLanguage = 'id'): BuildingFloorLayer[] {
+  const f1 = lang === 'ja' ? '1階' : lang === 'en' ? 'Floor 1' : 'Lantai 1';
+  const f2 = lang === 'ja' ? '2階' : lang === 'en' ? 'Floor 2' : 'Lantai 2';
+  const roof = lang === 'ja' ? '屋上・屋根' : lang === 'en' ? 'Roof Level' : 'Atap';
+  return [
+    { id: 'floor_1', name: f1, elevation: 0, height: 3.0, visible: true },
+    { id: 'floor_2', name: f2, elevation: 3.0, height: 3.0, visible: true },
+    { id: 'floor_roof', name: roof, elevation: 6.0, height: 2.6, visible: true },
+  ];
+}
+
+export const DEFAULT_BUILDING_FLOORS: BuildingFloorLayer[] =
+  createDefaultBuildingFloors('id');
 
 export const MAGNET_RADIUS_MAP: Record<MagnetStrength, number> = {
   subtle: 0.12,

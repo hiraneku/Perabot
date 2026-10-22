@@ -1,9 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, Magnet, PaintBucket, Pipette } from 'lucide-react';
-import { PaintBrushPayload, StudioEngine } from './engine/StudioEngine';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronLeft,
+  Magnet,
+  PaintBucket,
+  Pipette,
+} from 'lucide-react';
+import {
+  BoxSelectRect,
+  PaintBrushPayload,
+  StudioEngine,
+} from './engine/StudioEngine';
 import { CameraPresetType } from './engine/viewportHelpers';
 import { PRIMITIVE_META } from './engine/primitives';
 import { renderPartsThumbnailDataUrl } from './engine/housePresets';
+import { ModularConstructionItem } from './engine/modularConstruction';
 import {
   ACCEPTED_3D_EXTENSIONS,
   hydrateImportedModelsForObjects,
@@ -28,25 +40,35 @@ import {
 } from './services/projectStorage';
 import {
   AppScreen,
+  AxisLockMode,
+  BuildingFloorLayer,
   CustomAssetRecord,
+  DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
+  DEFAULT_TERRAIN_SCULPT_SETTINGS,
   DragFeedback,
+  FloorViewMode,
   GlobalAppSettings,
   GridSettings,
   LightingMood,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
+  PlacementValidationStatus,
   PrimitiveKind,
+  RepeatArrayConfig,
   RotationSnapStep,
   SavedProjectRecord,
   SceneObjectData,
+  SelectionSubMode,
   SnapSettings,
   StudioMode,
   STUDIO_THEMES,
   SubdivisionStats,
+  SurfacePlacementRule,
   SurfaceSettings,
+  TerrainSculptSettings,
   TransformMode,
   TransformSpace,
   Vec3,
@@ -60,6 +82,9 @@ import { InspectorPanel, InspectorSubTab } from './components/InspectorPanel';
 import { HelpModal } from './components/HelpModal';
 import { RotationControlBar } from './components/RotationControlBar';
 import { WalkthroughOverlay } from './components/WalkthroughOverlay';
+import { RepeatArrayModal } from './components/RepeatArrayModal';
+import { TerrainSculptBar } from './components/TerrainSculptBar';
+import { FloorLayerWidget } from './components/FloorLayerWidget';
 import { AdvancedColorMaterialPatch } from './components/ColorWheelPicker';
 
 const SMART_AUTOSAVE_IDLE_MS = 5000;
@@ -76,7 +101,9 @@ function computeProjectContentSignature(
   grid: GridSettings,
   snap: SnapSettings,
   surface: SurfaceSettings,
-  mood: LightingMood
+  mood: LightingMood,
+  sculptedHeightsB64?: string | null,
+  floors?: BuildingFloorLayer[]
 ): string {
   const objSig = objects
     .map((o) => {
@@ -91,6 +118,8 @@ function computeProjectContentSignature(
         o.name,
         o.visible ? 1 : 0,
         o.groupId || '',
+        o.floorId || '',
+        o.surfaceRule || '',
         o.modelAssetId || '',
         o.useCustomMaterial ? 1 : 0,
         o.position.x.toFixed(3),
@@ -118,6 +147,7 @@ function computeProjectContentSignature(
     grid.visible ? 1 : 0,
     grid.style,
     grid.spacing,
+    grid.adaptive ? 1 : 0,
     grid.worldSize,
     grid.elevationY.toFixed(2),
     grid.showAxes ? 1 : 0,
@@ -140,6 +170,9 @@ function computeProjectContentSignature(
     snap.grid ? 1 : 0,
     snap.gridStep,
     snap.rotationSnapDeg,
+    snap.modularSocket ? 1 : 0,
+    snap.heightSnap ? 1 : 0,
+    snap.heightStep,
   ].join(',');
 
   const surfSig = [
@@ -150,9 +183,22 @@ function computeProjectContentSignature(
     surface.clickToPlace ? 1 : 0,
     surface.spinDeg,
     surface.offset.toFixed(2),
+    surface.surfaceAware ? 1 : 0,
+    surface.maxFlatSlopeDeg,
   ].join(',');
 
-  return `${projectName}##${mood}##${gridSig}##${snapSig}##${surfSig}##${objSig}`;
+  const floorSig = (floors ?? [])
+    .map(
+      (f) =>
+        `${f.id}:${f.name}:${f.elevation.toFixed(2)}:${f.visible ? 1 : 0}:${
+          f.locked ? 1 : 0
+        }`
+    )
+    .join(';');
+
+  return `${projectName}##${mood}##${gridSig}##${snapSig}##${surfSig}##${floorSig}##${
+    sculptedHeightsB64 ?? ''
+  }##${objSig}`;
 }
 
 function buildEmptyProjectRecord(
@@ -170,10 +216,20 @@ function buildEmptyProjectRecord(
           spacing: 0.5,
           worldSize: 32,
           showPlotBoundary: true,
-          plotWidth: 10,
+          plotWidth: 12,
           plotDepth: 12,
         }
       : { ...DEFAULT_GRID_SETTINGS };
+
+  const snapSettings: SnapSettings =
+    mode === 'house'
+      ? { ...DEFAULT_SNAP_SETTINGS, modularSocket: true }
+      : { ...DEFAULT_SNAP_SETTINGS, modularSocket: false };
+
+  const surfaceSettings: SurfaceSettings =
+    mode === 'house'
+      ? { ...DEFAULT_SURFACE_SETTINGS, surfaceAware: true }
+      : { ...DEFAULT_SURFACE_SETTINGS, surfaceAware: false };
 
   return {
     id,
@@ -192,9 +248,16 @@ function buildEmptyProjectRecord(
       updatedAt: now,
       objects: [],
       gridSettings,
-      snapSettings: { ...DEFAULT_SNAP_SETTINGS },
-      surfaceSettings: { ...DEFAULT_SURFACE_SETTINGS },
+      snapSettings,
+      surfaceSettings,
       lightingMood,
+      sculptedHeightsB64: null,
+      floors:
+        mode === 'house'
+          ? DEFAULT_BUILDING_FLOORS.map((f: BuildingFloorLayer) => ({ ...f }))
+          : undefined,
+      activeFloorId: mode === 'house' ? 'floor_1' : undefined,
+      floorViewMode: mode === 'house' ? 'all' : undefined,
     },
   };
 }
@@ -230,6 +293,17 @@ export const App: React.FC = () => {
   // Studio Scene State
   const [objects, setObjects] = useState<SceneObjectData[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectionSubMode, setSelectionSubMode] =
+    useState<SelectionSubMode>('single');
+  const [boxSelectRect, setBoxSelectRect] = useState<BoxSelectRect | null>(null);
+  const [axisLock, setAxisLock] = useState<AxisLockMode>('free');
+  const [placementValidationEnabled, setPlacementValidationEnabled] =
+    useState(false);
+  const [validationStatus, setValidationStatus] =
+    useState<PlacementValidationStatus | null>(null);
+  const [adaptiveSpacing, setAdaptiveSpacing] = useState(1);
+
   const [editSinglePartMode, setEditSinglePartMode] = useState(false);
   const [selectedSubdivStats, setSelectedSubdivStats] =
     useState<SubdivisionStats | null>(null);
@@ -247,6 +321,20 @@ export const App: React.FC = () => {
   const [gridSettings, setGridSettings] = useState<GridSettings>({
     ...DEFAULT_GRID_SETTINGS,
   });
+  const [terrainSculptSettings, setTerrainSculptSettings] =
+    useState<TerrainSculptSettings>({ ...DEFAULT_TERRAIN_SCULPT_SETTINGS });
+  const [sculptedHeightsB64, setSculptedHeightsB64] = useState<string | null>(
+    null
+  );
+
+  // Repeat Array Modal (#5) & Floor Layer Widget (#12)
+  const [repeatModalOpen, setRepeatModalOpen] = useState(false);
+  const [floorWidgetOpen, setFloorWidgetOpen] = useState(false);
+  const [floors, setFloors] = useState<BuildingFloorLayer[]>(() =>
+    DEFAULT_BUILDING_FLOORS.map((f: BuildingFloorLayer) => ({ ...f }))
+  );
+  const [activeFloorId, setActiveFloorId] = useState('floor_1');
+  const [floorViewMode, setFloorViewMode] = useState<FloorViewMode>('all');
 
   // House Builder & Exploration States
   const [lightingMood, setLightingMood] = useState<LightingMood>(
@@ -422,6 +510,8 @@ export const App: React.FC = () => {
       const curSnap = engine.getSnapSettings();
       const curSurf = engine.getSurfaceSettings();
       const curMood = engine.getLightingMood();
+      const curSculptB64 = engine.exportSculptedHeightsBase64();
+      const curFloorState = engine.getFloorSystemState();
       const nextName = options?.overrideName ?? proj.name;
 
       const nextSig = computeProjectContentSignature(
@@ -430,7 +520,9 @@ export const App: React.FC = () => {
         curGrid,
         curSnap,
         curSurf,
-        curMood
+        curMood,
+        curSculptB64,
+        proj.mode === 'house' ? curFloorState.floors : undefined
       );
 
       if (!options?.force && nextSig === lastSavedSigRef.current) {
@@ -463,6 +555,12 @@ export const App: React.FC = () => {
           snapSettings: curSnap,
           surfaceSettings: curSurf,
           lightingMood: curMood,
+          sculptedHeightsB64: curSculptB64,
+          floors: proj.mode === 'house' ? curFloorState.floors : undefined,
+          activeFloorId:
+            proj.mode === 'house' ? curFloorState.activeFloorId : undefined,
+          floorViewMode:
+            proj.mode === 'house' ? curFloorState.floorViewMode : undefined,
         },
       };
 
@@ -486,9 +584,16 @@ export const App: React.FC = () => {
         onStateChange: (state) => {
           setObjects(state.objects);
           setSelectedId(state.selectedId);
+          setSelectedIds(state.selectedIds);
           setCanUndo(state.canUndo);
           setCanRedo(state.canRedo);
           setSelectedSubdivStats(state.selectedSubdivStats);
+          setValidationStatus(state.validationStatus);
+          setAdaptiveSpacing(state.adaptiveSpacing);
+          setFloors(state.floors);
+          setActiveFloorId(state.activeFloorId);
+          setFloorViewMode(state.floorViewMode);
+          setSculptedHeightsB64(engine.exportSculptedHeightsBase64());
         },
         onDragFeedback: (feedback) => {
           setDragFeedback(feedback);
@@ -502,9 +607,24 @@ export const App: React.FC = () => {
         onPaintApplied: (objName) => {
           showToast(objName);
         },
+        onBoxSelectRect: (rect) => {
+          setBoxSelectRect(rect);
+        },
       },
       activeProject.scene.objects
     );
+
+    engine.setStudioMode(activeProject.mode);
+    engine.importSculptedHeightsBase64(
+      activeProject.scene.sculptedHeightsB64 ?? null
+    );
+    if (activeProject.mode === 'house') {
+      engine.setFloorSystemState(
+        activeProject.scene.floors,
+        activeProject.scene.activeFloorId,
+        activeProject.scene.floorViewMode
+      );
+    }
 
     const themeSpec =
       STUDIO_THEMES.find((th) => th.id === globalSettings.theme) ??
@@ -526,6 +646,9 @@ export const App: React.FC = () => {
       activeProject.scene.surfaceSettings ?? DEFAULT_SURFACE_SETTINGS
     );
 
+    const initFloors = engine.getFloorSystemState().floors;
+    const initSculptB64 = engine.exportSculptedHeightsBase64();
+
     // Record baseline content signature on open so opening a project triggers 0 redundant saves
     lastSavedSigRef.current = computeProjectContentSignature(
       activeProject.name,
@@ -533,7 +656,9 @@ export const App: React.FC = () => {
       restoredGrid,
       restoredSnap,
       restoredSurf,
-      projMood
+      projMood,
+      initSculptB64,
+      activeProject.mode === 'house' ? initFloors : undefined
     );
     dirtySinceRef.current = null;
     setSaveState('saved');
@@ -546,6 +671,12 @@ export const App: React.FC = () => {
     setWalkthroughActive(false);
     setEditSinglePartMode(false);
     setPaintMode('none');
+    setAxisLock('free');
+    setSelectionSubMode('single');
+    setPlacementValidationEnabled(false);
+    setTerrainSculptSettings({ ...DEFAULT_TERRAIN_SCULPT_SETTINGS });
+    setRepeatModalOpen(false);
+    setFloorWidgetOpen(false);
 
     engineRef.current = engine;
 
@@ -565,7 +696,11 @@ export const App: React.FC = () => {
             engine.getGridSettings(),
             engine.getSnapSettings(),
             engine.getSurfaceSettings(),
-            engine.getLightingMood()
+            engine.getLightingMood(),
+            engine.exportSculptedHeightsBase64(),
+            activeProject.mode === 'house'
+              ? engine.getFloorSystemState().floors
+              : undefined
           );
           dirtySinceRef.current = null;
           setSaveState('saved');
@@ -594,16 +729,21 @@ export const App: React.FC = () => {
       gridSettings,
       snapSettings,
       surfaceSettings,
-      lightingMood
+      lightingMood,
+      sculptedHeightsB64,
+      activeProject.mode === 'house' ? floors : undefined
     );
   }, [
     activeScreen,
     activeProject?.name,
+    activeProject?.mode,
     objects,
     gridSettings,
     snapSettings,
     surfaceSettings,
     lightingMood,
+    sculptedHeightsB64,
+    floors,
   ]);
 
   // Smart Auto-Save scheduler:
@@ -897,6 +1037,149 @@ export const App: React.FC = () => {
       showToast(`+ ${asset.name}`);
     },
     [showToast]
+  );
+
+  const handleSpawnModularItem = useCallback(
+    (item: ModularConstructionItem, label: string) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      engine.spawnModularItem(item, label);
+      setEditSinglePartMode(false);
+      showToast(`+ ${label}`);
+    },
+    [showToast]
+  );
+
+  const handleChangeSelectionSubMode = useCallback((sub: SelectionSubMode) => {
+    setSelectionSubMode(sub);
+    engineRef.current?.setSelectionSubMode(sub);
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    const count = engineRef.current?.selectAllObjects() ?? 0;
+    if (count > 0) {
+      showToast(`${count} ${t.multiSelectedCount}`);
+    }
+  }, [showToast, t.multiSelectedCount]);
+
+  const handleToggleSelectObject = useCallback((id: string) => {
+    engineRef.current?.toggleSelectObject(id);
+  }, []);
+
+  const handleChangeAxisLock = useCallback((lock: AxisLockMode) => {
+    setAxisLock(lock);
+    engineRef.current?.setAxisLock(lock);
+  }, []);
+
+  const handleTogglePlacementValidation = useCallback(() => {
+    setPlacementValidationEnabled((prev) => {
+      const next = !prev;
+      engineRef.current?.setPlacementValidationEnabled(next);
+      return next;
+    });
+  }, []);
+
+  const handleToggleTerrainSculpt = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const nextActive = !terrainSculptSettings.active;
+    const updated = engine.updateTerrainSculptSettings({
+      active: nextActive,
+    });
+    setTerrainSculptSettings(updated);
+    setGridSettings(engine.getGridSettings());
+  }, [terrainSculptSettings.active]);
+
+  const handleUpdateTerrainSculpt = useCallback(
+    (patch: Partial<TerrainSculptSettings>) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const updated = engine.updateTerrainSculptSettings(patch);
+      setTerrainSculptSettings(updated);
+      setGridSettings(engine.getGridSettings());
+    },
+    []
+  );
+
+  const handleLevelPlotPad = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.levelTerrainPlotPad();
+    setGridSettings(engine.getGridSettings());
+    showToast(t.sculptLevelPlotBtn);
+  }, [showToast, t.sculptLevelPlotBtn]);
+
+  const handleResetSculptedTerrain = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.resetSculptedTerrain();
+    setGridSettings(engine.getGridSettings());
+    showToast(t.sculptResetFlatBtn);
+  }, [showToast, t.sculptResetFlatBtn]);
+
+  const handlePreviewRepeatArray = useCallback(
+    (config: RepeatArrayConfig | null): number => {
+      return engineRef.current?.previewRepeatArray(config) ?? 0;
+    },
+    []
+  );
+
+  const handleCommitRepeatArray = useCallback(
+    (config: RepeatArrayConfig) => {
+      const created = engineRef.current?.commitRepeatArray(config) ?? 0;
+      setRepeatModalOpen(false);
+      if (created > 0) {
+        showToast(`${t.repeatAppliedToast} (+${created})`);
+      }
+    },
+    [showToast, t.repeatAppliedToast]
+  );
+
+  const handleSelectFloor = useCallback((floorId: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setActiveFloor(floorId, true);
+    setGridSettings(engine.getGridSettings());
+  }, []);
+
+  const handleAddFloor = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const fl = engine.addBuildingFloor(t.floorSystemTitle);
+    setGridSettings(engine.getGridSettings());
+    showToast(`+ ${fl.name} (${fl.elevation}m)`);
+  }, [showToast, t.floorSystemTitle]);
+
+  const handleRemoveFloor = useCallback((floorId: string) => {
+    engineRef.current?.removeBuildingFloor(floorId);
+  }, []);
+
+  const handleUpdateFloor = useCallback(
+    (floorId: string, patch: Partial<BuildingFloorLayer>) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      engine.updateBuildingFloor(floorId, patch);
+      setGridSettings(engine.getGridSettings());
+    },
+    []
+  );
+
+  const handleChangeFloorViewMode = useCallback((mode: FloorViewMode) => {
+    engineRef.current?.setFloorViewMode(mode);
+  }, []);
+
+  const handleAssignObjectFloor = useCallback(
+    (objectId: string, floorId: string, moveY = true) => {
+      engineRef.current?.assignObjectToFloor(objectId, floorId, moveY);
+    },
+    []
+  );
+
+  const handleUpdateSurfaceRule = useCallback(
+    (objectId: string, rule: SurfacePlacementRule) => {
+      engineRef.current?.updateObjectSurfaceRule(objectId, rule);
+    },
+    []
   );
 
   const handleSaveAsCustomAsset = useCallback(
@@ -1244,6 +1527,18 @@ export const App: React.FC = () => {
         return;
       }
 
+      if ((e.ctrlKey || e.metaKey) && key === 'a') {
+        e.preventDefault();
+        handleSelectAll();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && key === 'g') {
+        e.preventDefault();
+        handleGroupSceneObjects();
+        return;
+      }
+
       if (e.shiftKey && key === 'd') {
         e.preventDefault();
         handleDuplicateSelected();
@@ -1317,7 +1612,31 @@ export const App: React.FC = () => {
     handleDeleteObject,
     handleDuplicateSelected,
     handleCameraPreset,
+    handleSelectAll,
+    handleGroupSceneObjects,
   ]);
+
+  const formatValidationWarning = (status: PlacementValidationStatus): string => {
+    if (status.valid || status.issues.length === 0) return t.validPositionBadge;
+    const first = status.issues[0];
+    if (first.kind === 'collision') {
+      return `${t.warnCollisionWith}: ${first.targetName ?? ''}`;
+    }
+    if (first.kind === 'out-of-plot') return t.warnOutOfPlot;
+    if (first.kind === 'out-of-domain') return t.warnOutOfDomain;
+    if (first.kind === 'steep-slope') {
+      return `${t.warnSteepSlope} (${first.slopeDeg ?? 0}°)`;
+    }
+    return t.warnWrongSurface;
+  };
+
+  const canUngroupSelection = useMemo(() => {
+    return objects.some(
+      (o) =>
+        (o.id === selectedId || selectedIds.includes(o.id)) &&
+        Boolean(o.groupId)
+    );
+  }, [objects, selectedId, selectedIds]);
 
   const formatDragAxis = (axis: string | null, mode: string) => {
     if (mode === 'surface') return t.hudSurfaceAlign;
@@ -1407,6 +1726,13 @@ export const App: React.FC = () => {
         lightingMood={lightingMood}
         interiorPeek={interiorPeek}
         walkthroughActive={walkthroughActive}
+        terrainSculptActive={terrainSculptSettings.active}
+        floorWidgetOpen={floorWidgetOpen}
+        floors={floors}
+        activeFloorId={activeFloorId}
+        placementValidationEnabled={placementValidationEnabled}
+        validationStatus={validationStatus}
+        adaptiveSpacing={adaptiveSpacing}
         canUndo={canUndo}
         canRedo={canRedo}
         snapSettings={snapSettings}
@@ -1423,6 +1749,9 @@ export const App: React.FC = () => {
         onCycleLightingMood={handleCycleLightingMood}
         onToggleInteriorPeek={handleToggleInteriorPeek}
         onToggleWalkthrough={handleToggleWalkthrough}
+        onToggleTerrainSculpt={handleToggleTerrainSculpt}
+        onToggleFloorWidget={() => setFloorWidgetOpen((v) => !v)}
+        onTogglePlacementValidation={handleTogglePlacementValidation}
         onOpenSettings={() => setSettingsOpen(true)}
         onUndo={() => engineRef.current?.undo()}
         onRedo={() => engineRef.current?.redo()}
@@ -1466,20 +1795,104 @@ export const App: React.FC = () => {
         >
           <div ref={viewportRef} className="viewport-canvas-host" />
 
+          {/* #6 2D Screen Box Marquee Selection Overlay */}
+          {boxSelectRect && (
+            <div
+              className="box-select-marquee"
+              style={{
+                left: `${boxSelectRect.x}px`,
+                top: `${boxSelectRect.y}px`,
+                width: `${boxSelectRect.width}px`,
+                height: `${boxSelectRect.height}px`,
+              }}
+            />
+          )}
+
+          {/* #2 Non-Blocking Placement Validation Status Banner */}
+          {!walkthroughActive &&
+            placementValidationEnabled &&
+            selectedId &&
+            validationStatus && (
+              <div
+                className={`validation-hud-banner ${
+                  validationStatus.valid ? 'valid' : 'warn'
+                }`}
+                role="status"
+              >
+                {validationStatus.valid ? (
+                  <CheckCircle2 size={14} />
+                ) : (
+                  <AlertTriangle size={14} />
+                )}
+                <span>{formatValidationWarning(validationStatus)}</span>
+              </div>
+            )}
+
           {!walkthroughActive && (
             <TransformToolbar
               language={globalSettings.language}
               mode={transformMode}
+              selectionSubMode={selectionSubMode}
+              axisLock={axisLock}
               space={transformSpace}
               hasSelection={Boolean(selectedId)}
+              selectedCount={selectedIds.length}
+              canUngroup={canUngroupSelection}
               collapsed={leftSidebarCollapsed}
               onToggleCollapse={() => setLeftSidebarCollapsed((v) => !v)}
               onChangeMode={handleChangeMode}
+              onChangeSelectionSubMode={handleChangeSelectionSubMode}
+              onSelectAll={handleSelectAll}
+              onGroupSelected={handleGroupSceneObjects}
+              onUngroupSelected={handleUngroupSelected}
+              onChangeAxisLock={handleChangeAxisLock}
               onToggleSpace={handleToggleSpace}
               onOpenColorStudio={handleOpenColorStudio}
               onDropToFloor={handleDropToFloor}
               onDuplicate={handleDuplicateSelected}
+              onOpenRepeatModal={() => setRepeatModalOpen(true)}
               onDelete={() => handleDeleteObject()}
+            />
+          )}
+
+          {/* #5 Duplicate & Repeat Placement Live 3D Array Modal */}
+          <RepeatArrayModal
+            open={repeatModalOpen && Boolean(selectedId) && !walkthroughActive}
+            language={globalSettings.language}
+            studioMode={activeProject.mode}
+            onPreview={handlePreviewRepeatArray}
+            onApply={handleCommitRepeatArray}
+            onClose={() => setRepeatModalOpen(false)}
+          />
+
+          {/* #3 Terrain Sculpting Bar — Buat Rumah ONLY */}
+          {activeProject.mode === 'house' && !walkthroughActive && (
+            <TerrainSculptBar
+              open={terrainSculptSettings.active}
+              language={globalSettings.language}
+              settings={terrainSculptSettings}
+              onUpdate={handleUpdateTerrainSculpt}
+              onLevelPlotPad={handleLevelPlotPad}
+              onResetTerrain={handleResetSculptedTerrain}
+              onClose={() => handleUpdateTerrainSculpt({ active: false })}
+            />
+          )}
+
+          {/* #12 Building Story / Floor System Widget — Buat Rumah ONLY */}
+          {activeProject.mode === 'house' && !walkthroughActive && (
+            <FloorLayerWidget
+              open={floorWidgetOpen}
+              language={globalSettings.language}
+              floors={floors}
+              activeFloorId={activeFloorId}
+              floorViewMode={floorViewMode}
+              objects={objects}
+              onSelectFloor={handleSelectFloor}
+              onAddFloor={handleAddFloor}
+              onRemoveFloor={handleRemoveFloor}
+              onUpdateFloor={handleUpdateFloor}
+              onChangeViewMode={handleChangeFloorViewMode}
+              onClose={() => setFloorWidgetOpen(false)}
             />
           )}
 
@@ -1628,6 +2041,7 @@ export const App: React.FC = () => {
               language={globalSettings.language}
               customAssets={customAssets}
               onSpawn={handleSpawn}
+              onSpawnModularItem={handleSpawnModularItem}
               onSpawnCustomAsset={handleSpawnCustomAsset}
               onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
             />
@@ -1651,7 +2065,15 @@ export const App: React.FC = () => {
                 ? t.scale
                 : t.select}
             </span>
-            {interiorPeek && (
+            {axisLock !== 'free' && (
+              <>
+                <span className="dot-sep">•</span>
+                <span className="status-emerald">
+                  {t.axisLockTitle}: {axisLock.toUpperCase()}
+                </span>
+              </>
+            )}
+            {interiorPeek && activeProject.mode === 'house' && (
               <>
                 <span className="dot-sep">•</span>
                 <span className="status-emerald">{t.peekInterior}</span>
@@ -1671,8 +2093,11 @@ export const App: React.FC = () => {
         {inspectorOpen && !walkthroughActive && (
           <InspectorPanel
             language={globalSettings.language}
+            studioMode={activeProject.mode}
             objects={objects}
             selectedId={selectedId}
+            selectedIds={selectedIds}
+            floors={floors}
             editSinglePartMode={editSinglePartMode}
             subdivStats={selectedSubdivStats}
             paintMode={paintMode}
@@ -1681,6 +2106,7 @@ export const App: React.FC = () => {
             onChangeSubTab={setInspectorSubTab}
             onCollapseDesktop={() => setInspectorOpen(false)}
             onSelectObject={handleSelectObject}
+            onToggleSelectObject={handleToggleSelectObject}
             onToggleEditSinglePart={handleToggleEditSinglePart}
             onGroupSceneObjects={handleGroupSceneObjects}
             onUngroupSelected={handleUngroupSelected}
@@ -1693,7 +2119,10 @@ export const App: React.FC = () => {
             onCommitHistory={handleCommitHistory}
             onDeleteObject={(id) => handleDeleteObject(id)}
             onDuplicateSelected={handleDuplicateSelected}
+            onOpenRepeatModal={() => setRepeatModalOpen(true)}
             onDropToFloor={handleDropToFloor}
+            onAssignFloor={handleAssignObjectFloor}
+            onUpdateSurfaceRule={handleUpdateSurfaceRule}
             onResetImportedMaterial={handleResetImportedMaterial}
           />
         )}
@@ -1701,8 +2130,11 @@ export const App: React.FC = () => {
         {mobileDrawerOpen && !walkthroughActive && (
           <InspectorPanel
             language={globalSettings.language}
+            studioMode={activeProject.mode}
             objects={objects}
             selectedId={selectedId}
+            selectedIds={selectedIds}
+            floors={floors}
             editSinglePartMode={editSinglePartMode}
             subdivStats={selectedSubdivStats}
             paintMode={paintMode}
@@ -1712,6 +2144,7 @@ export const App: React.FC = () => {
             isMobileDrawer
             onCloseMobile={() => setMobileDrawerOpen(false)}
             onSelectObject={handleSelectObject}
+            onToggleSelectObject={handleToggleSelectObject}
             onToggleEditSinglePart={handleToggleEditSinglePart}
             onGroupSceneObjects={handleGroupSceneObjects}
             onUngroupSelected={handleUngroupSelected}
@@ -1724,7 +2157,10 @@ export const App: React.FC = () => {
             onCommitHistory={handleCommitHistory}
             onDeleteObject={(id) => handleDeleteObject(id)}
             onDuplicateSelected={handleDuplicateSelected}
+            onOpenRepeatModal={() => setRepeatModalOpen(true)}
             onDropToFloor={handleDropToFloor}
+            onAssignFloor={handleAssignObjectFloor}
+            onUpdateSurfaceRule={handleUpdateSurfaceRule}
             onResetImportedMaterial={handleResetImportedMaterial}
           />
         )}
@@ -1736,6 +2172,7 @@ export const App: React.FC = () => {
           language={globalSettings.language}
           customAssets={customAssets}
           onSpawn={handleSpawn}
+          onSpawnModularItem={handleSpawnModularItem}
           onSpawnCustomAsset={handleSpawnCustomAsset}
           onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
           objectCount={objects.length}

@@ -20,11 +20,15 @@ import {
   Boxes,
   RotateCcw,
   LayoutGrid,
+  Repeat,
+  Building2,
+  Link2,
 } from 'lucide-react';
 import { getLocalizedShapeMeta } from '../i18n/shapeTranslations';
 import { TRANSLATIONS } from '../i18n/translations';
 import {
   AppLanguage,
+  BuildingFloorLayer,
   DEFAULT_SUBDIVISION_SETTINGS,
   isSubdivisionActive,
   normalizeSubdivisionSettings,
@@ -32,7 +36,9 @@ import {
   PaintInteractionMode,
   PrimitiveKind,
   SceneObjectData,
+  StudioMode,
   SubdivisionStats,
+  SurfacePlacementRule,
   Vec3,
 } from '../types/studio';
 import { PRIMITIVE_META } from '../engine/primitives';
@@ -119,8 +125,11 @@ function renderKindIcon(kind: PrimitiveKind) {
 
 interface InspectorPanelProps {
   language: AppLanguage;
+  studioMode: StudioMode;
   objects: SceneObjectData[];
   selectedId: string | null;
+  selectedIds: string[];
+  floors: BuildingFloorLayer[];
   editSinglePartMode: boolean;
   subdivStats: SubdivisionStats | null;
   paintMode: PaintInteractionMode;
@@ -131,6 +140,7 @@ interface InspectorPanelProps {
   onCloseMobile?: () => void;
   onCollapseDesktop?: () => void;
   onSelectObject: (id: string) => void;
+  onToggleSelectObject: (id: string) => void;
   onToggleEditSinglePart: (enabled: boolean) => void;
   onGroupSceneObjects: () => void;
   onUngroupSelected: () => void;
@@ -154,14 +164,20 @@ interface InspectorPanelProps {
   onCommitHistory: () => void;
   onDeleteObject: (id: string) => void;
   onDuplicateSelected: () => void;
+  onOpenRepeatModal: () => void;
   onDropToFloor: () => void;
+  onAssignFloor?: (objectId: string, floorId: string, moveY?: boolean) => void;
+  onUpdateSurfaceRule?: (objectId: string, rule: SurfacePlacementRule) => void;
   onResetImportedMaterial?: (id: string) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   language,
+  studioMode,
   objects,
   selectedId,
+  selectedIds,
+  floors,
   editSinglePartMode,
   subdivStats,
   paintMode,
@@ -172,6 +188,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onCloseMobile,
   onCollapseDesktop,
   onSelectObject,
+  onToggleSelectObject,
   onToggleEditSinglePart,
   onGroupSceneObjects,
   onUngroupSelected,
@@ -184,7 +201,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onCommitHistory,
   onDeleteObject,
   onDuplicateSelected,
+  onOpenRepeatModal,
   onDropToFloor,
+  onAssignFloor,
+  onUpdateSurfaceRule,
   onResetImportedMaterial,
 }) => {
   const t = TRANSLATIONS[language];
@@ -344,14 +364,19 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           ) : (
             <div className="outliner-list">
               {objects.map((obj) => {
-                const isSelected = obj.id === selectedId;
+                const isSelected =
+                  obj.id === selectedId || selectedIds.includes(obj.id);
                 const isGrouped = Boolean(obj.groupId);
                 return (
                   <div
                     key={obj.id}
                     className={`outliner-row ${isSelected ? 'selected' : ''}`}
-                    onClick={() => {
-                      onSelectObject(obj.id);
+                    onClick={(e) => {
+                      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                        onToggleSelectObject(obj.id);
+                      } else {
+                        onSelectObject(obj.id);
+                      }
                       if (isMobileDrawer) setMobileSection('inspector');
                     }}
                   >
@@ -506,6 +531,14 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 </button>
                 <button
                   type="button"
+                  className="mini-chip-btn"
+                  onClick={onOpenRepeatModal}
+                  title={t.repeatModalTitle}
+                >
+                  <Repeat size={13} />
+                </button>
+                <button
+                  type="button"
                   className="mini-chip-btn danger"
                   onClick={() => onDeleteObject(selected.id)}
                   title={`${t.delete} (Del)`}
@@ -513,6 +546,23 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   <Trash2 size={13} />
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* #6 Multi-Selection Summary & Quick Group Bar */}
+          {selectedIds.length >= 2 && (
+            <div className="group-Banner-controls">
+              <span className="multi-sel-summary">
+                {selectedIds.length} {t.multiSelectedCount}
+              </span>
+              <button
+                type="button"
+                className="group-ctrl-pill active"
+                onClick={onGroupSceneObjects}
+              >
+                <Link2 size={13} />
+                <span>{t.selGroupSelected}</span>
+              </button>
             </div>
           )}
 
@@ -733,6 +783,86 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       />
                     </div>
                   </div>
+
+                  {/* Buat Rumah Exclusive: #12 Story Floor Assignment & #4 Surface-Aware Rule */}
+                  {studioMode === 'house' && (
+                    <div className="transform-group-card">
+                      <div className="transform-card-header">
+                        <span className="transform-card-title">
+                          <Building2 size={13} />
+                          <span>{t.floorAssignLabel}</span>
+                        </span>
+                      </div>
+                      <div className="quick-angle-row" style={{ marginTop: 4 }}>
+                        {floors.map((fl) => (
+                          <button
+                            key={fl.id}
+                            type="button"
+                            className={`quick-angle-pill ${
+                              selected.floorId === fl.id ? 'active' : ''
+                            }`}
+                            onClick={() =>
+                              onAssignFloor?.(selected.id, fl.id, true)
+                            }
+                          >
+                            {fl.name} ({fl.elevation}m)
+                          </button>
+                        ))}
+                      </div>
+
+                      {onUpdateSurfaceRule && (
+                        <>
+                          <div
+                            className="grid-section-label"
+                            style={{ marginTop: 8 }}
+                          >
+                            {t.surfRuleSection}
+                          </div>
+                          <div
+                            className="quick-angle-row"
+                            style={{ marginTop: 4 }}
+                          >
+                            {(
+                              [
+                                { id: 'any', label: t.surfRuleAny },
+                                {
+                                  id: 'building-flat',
+                                  label: t.surfRuleBuilding,
+                                },
+                                {
+                                  id: 'ground-foliage',
+                                  label: t.surfRuleFoliage,
+                                },
+                                { id: 'slope-rock', label: t.surfRuleRock },
+                                {
+                                  id: 'floor-interior',
+                                  label: t.surfRuleInterior,
+                                },
+                              ] as Array<{
+                                id: SurfacePlacementRule;
+                                label: string;
+                              }>
+                            ).map((r) => (
+                              <button
+                                key={r.id}
+                                type="button"
+                                className={`quick-angle-pill ${
+                                  (selected.surfaceRule ?? 'any') === r.id
+                                    ? 'active'
+                                    : ''
+                                }`}
+                                onClick={() =>
+                                  onUpdateSurfaceRule(selected.id, r.id)
+                                }
+                              >
+                                {r.label}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </>
