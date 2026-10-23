@@ -3458,9 +3458,9 @@ export class ArchBuilderEngine {
           emissiveIntensity: emissiveInt,
         });
         const trimMat = new THREE.MeshStandardMaterial({
-          color: new THREE.Color('#e2e8f0'),
-          roughness: 0.68,
-          metalness: 0.06,
+          color: new THREE.Color('#cbd5e1'),
+          roughness: 0.62,
+          metalness: 0.08,
           transparent: fStyle.ghost,
           opacity: fStyle.ghost ? 0.22 : 1,
           emissive: emissiveCol,
@@ -3480,16 +3480,18 @@ export class ArchBuilderEngine {
         };
         const filletHolder = new THREE.Group();
         filletHolder.position.set(0, fStyle.baseY, 0);
+        const isTrimCorner =
+          fp.style === 'outer-quoin' || fp.style === 'inner-trim';
         const filletMesh = new THREE.Mesh(
           fg,
-          fp.style === 'outer-quoin' ? trimMat : dualMats
+          isTrimCorner ? trimMat : dualMats
         );
         filletMesh.castShadow = true;
         filletMesh.receiveShadow = true;
         filletMesh.userData = {
           archKind: 'wall',
           archId: wA.id,
-          hasDualWallFaces: fp.style !== 'outer-quoin',
+          hasDualWallFaces: !isTrimCorner,
         };
         filletHolder.add(filletMesh);
         filletGrp.add(filletHolder);
@@ -3925,9 +3927,9 @@ export class ArchBuilderEngine {
       );
     }
     const trimMat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color('#e2e8f0'),
-      roughness: 0.72,
-      metalness: 0.05,
+      color: new THREE.Color('#cbd5e1'),
+      roughness: 0.62,
+      metalness: 0.08,
       transparent: ghost,
       opacity: ghost ? 0.22 : 1,
       emissive: emissiveCol,

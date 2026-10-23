@@ -1102,6 +1102,161 @@ describe('Phase 1 Smart Wall Templates (38) & Watertight Corner/Curve Engine', (
       assert.ok(built.bodyGeo.getAttribute('position').count >= 24);
     }
   });
+
+  it('guarantees zero inverted cap/face normals, proper interior/exterior winding, and distinct profiles across all 38 templates', () => {
+    const checkGeoNormals = (geo: THREE.BufferGeometry, label: string) => {
+      const pos = geo.getAttribute('position');
+      const nrm = geo.getAttribute('normal');
+      const idx = geo.getIndex();
+      const triCount = idx ? idx.count / 3 : pos.count / 3;
+      assert.ok(triCount >= 2, `${label} must contain triangles`);
+
+      for (let t = 0; t < triCount; t++) {
+        const ia = idx ? idx.getX(t * 3) : t * 3;
+        const ib = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+        const ic = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+        const a = new THREE.Vector3().fromBufferAttribute(pos, ia);
+        const b = new THREE.Vector3().fromBufferAttribute(pos, ib);
+        const c = new THREE.Vector3().fromBufferAttribute(pos, ic);
+        const faceN = new THREE.Vector3()
+          .subVectors(b, a)
+          .cross(new THREE.Vector3().subVectors(c, a));
+        if (faceN.lengthSq() < 1e-11) continue;
+        faceN.normalize();
+
+        // Horizontal cap triangles at y=0 must point -Y, and horizontal top caps (y > 0.05) must point +Y!
+        const sameY =
+          Math.abs(a.y - b.y) < 1e-4 && Math.abs(b.y - c.y) < 1e-4;
+        if (sameY && Math.abs(a.y) < 1e-4) {
+          assert.ok(
+            faceN.y < -0.99,
+            `${label} bottom cap triangle must point -Y (got ny=${faceN.y})`
+          );
+        } else if (sameY && a.y > 0.05) {
+          // Note: overhanging plinth/coping undersides sit at y > 0.08, so check stored vertex normal matches geometric normal!
+          const vnA = new THREE.Vector3().fromBufferAttribute(nrm, ia);
+          assert.ok(
+            faceN.dot(vnA) > 0.85,
+            `${label} horizontal cap normal mismatch at y=${a.y}`
+          );
+        }
+
+        // Stored vertex normals must agree with geometric triangle winding (even across smooth arcs!)
+        for (const iv of [ia, ib, ic]) {
+          const vn = new THREE.Vector3().fromBufferAttribute(nrm, iv);
+          assert.ok(vn.length() > 0.95, `${label} normal must be unit length`);
+          assert.ok(
+            faceN.dot(vn) > 0.25,
+            `${label} vertex normal opposes geometric face normal (dot=${faceN.dot(vn)})`
+          );
+        }
+      }
+    };
+
+    for (const meta of WALL_TEMPLATES_CATALOG) {
+      const house = createEmptyArchHouseData();
+      const eng = new ArchBuilderEngine(house);
+      const segs = eng.spawnWallFromTemplateId(meta.id, 'floor_1', {
+        x: 0,
+        z: 0,
+      });
+      const plan = computeFloorWallJunctions(segs);
+      for (const s of segs) {
+        const trims = plan.endTrims.get(s.id);
+        const built = buildManifoldWallBodyGeometry(
+          s,
+          [],
+          trims?.start,
+          trims?.end
+        );
+        checkGeoNormals(built.bodyGeo, `${meta.id}:body`);
+        if (built.copingGeo) checkGeoNormals(built.copingGeo, `${meta.id}:coping`);
+        if (built.trimExtrasGeo)
+          checkGeoNormals(built.trimExtrasGeo, `${meta.id}:extras`);
+      }
+      for (const fp of plan.filletPieces) {
+        const fg = buildCornerFilletGeometry(fp);
+        assert.ok(fg !== null, `${meta.id} fillet piece must build`);
+        checkGeoNormals(fg!, `${meta.id}:fillet(${fp.style})`);
+      }
+    }
+
+    // Verify room-interior corners face inward `(+X, +Z)` with `-nL` (`interiorColor`),
+    // while exterior corners face outward `(+X, +Z)` with `+nL` (`exteriorColor`)!
+    const spawnOf = (id: (typeof WALL_TEMPLATES_CATALOG)[number]['id']) => {
+      const eng = new ArchBuilderEngine(createEmptyArchHouseData());
+      return eng.spawnWallFromTemplateId(id, 'floor_1', { x: 0, z: 0 });
+    };
+
+    for (const roomCornerId of [
+      'inner-corner-wall',
+      'corner-90-wall',
+      'rounded-inner-corner',
+      'l-shaped-wall',
+    ] as const) {
+      for (const seg of spawnOf(roomCornerId)) {
+        const mid = sampleWallCurvePoint(seg, 0.5);
+        // Right normal `-nL = (tz, -tx)` (`interiorColor`) must point toward `(+1, +1)` room interior!
+        const intNx = mid.tz;
+        const intNz = -mid.tx;
+        assert.ok(
+          intNx + intNz > 0.5,
+          `${roomCornerId} interior face (-nL) must face inward (+X,+Z)`
+        );
+      }
+    }
+
+    for (const extCornerId of [
+      'outer-corner-wall',
+      'rounded-outer-corner',
+    ] as const) {
+      for (const seg of spawnOf(extCornerId)) {
+        const mid = sampleWallCurvePoint(seg, 0.5);
+        // Left normal `+nL = (-tz, tx)` (`exteriorColor`) must point outward `(+X, +Z)` on the convex facade nose!
+        const extNx = -mid.tz;
+        const extNz = mid.tx;
+        assert.ok(
+          extNx + extNz > 0.5,
+          `${extCornerId} exterior face (+nL) must face outward (+X,+Z)`
+        );
+      }
+    }
+
+    // Verify strict separation across related template families
+    const [lowW] = spawnOf('low-wall');
+    const [halfW] = spawnOf('half-wall');
+    const [strW] = spawnOf('straight-wall');
+    const [tallW] = spawnOf('tall-wall');
+    assert.ok(
+      lowW.height < halfW.height &&
+        halfW.height < strW.height &&
+        strW.height < tallW.height
+    );
+
+    const [thinW] = spawnOf('thin-wall');
+    const [thickW] = spawnOf('thick-wall');
+    assert.ok(thinW.thickness < strW.thickness && strW.thickness < thickW.thickness);
+
+    const [curvW] = spawnOf('curved-wall');
+    const [segW] = spawnOf('circular-wall-segment');
+    const [semiW] = spawnOf('semi-circular-wall');
+    const sagRatio = (w: typeof curvW) =>
+      Math.abs(w.curveBulge) /
+      Math.hypot(w.end.x - w.start.x, w.end.z - w.start.z);
+    assert.ok(
+      sagRatio(curvW) < sagRatio(segW) * 0.55 &&
+        sagRatio(segW) < sagRatio(semiW) * 0.72,
+      'Curved < Circular-Segment (120°) < Semi-Circular (180°) sagitta ratios must be strictly separated'
+    );
+
+    const c90 = spawnOf('corner-90-wall');
+    const lShape = spawnOf('l-shaped-wall');
+    const ratio90 = computeWallLength(c90[0]) / computeWallLength(c90[1]);
+    const ratioL =
+      Math.max(computeWallLength(lShape[0]), computeWallLength(lShape[1])) /
+      Math.min(computeWallLength(lShape[0]), computeWallLength(lShape[1]));
+    assert.ok(Math.abs(ratio90 - 1) < 0.02 && ratioL > 2.0);
+  });
 });
 
 

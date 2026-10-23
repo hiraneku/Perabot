@@ -132,19 +132,22 @@ export function sampleAdvancedWallPath(
     return { x: px, z: pz, tx: dpx / dLen, tz: dpz / dLen };
   }
 
-  // 2. Straight Wall Body + C¹ Smooth Swept Hook Tip (`curved-end-wall`)
+  // 2. Straight Wall Body + C¹ Smooth 85° J-Hook Tip (`curved-end-wall`)
   if (mode === 'j-curve-end') {
-    const tSplit = 0.68;
-    // Slight counter-angle so straight 68% runs cleanly and final 32% sweeps smoothly into `wall.end`
+    const tSplit = 0.6;
     const sign = wall.curveBulge < 0 ? -1 : 1;
-    const biasRad = -0.19 * sign;
+    const mag = Math.min(
+      1.35,
+      Math.max(0.75, Math.abs(wall.curveBulge || 0.55) / 0.55)
+    );
+    const biasRad = -0.33 * mag * sign;
     const cosB = Math.cos(biasRad);
     const sinB = Math.sin(biasRad);
     const dirX = ux * cosB - uz * sinB;
     const dirZ = ux * sinB + uz * cosB;
 
-    const L1 = chord * 0.68;
-    const L2 = chord * 0.2;
+    const L1 = chord * 0.64;
+    const L2 = chord * 0.41 * mag;
     const splitX = x0 + dirX * L1;
     const splitZ = z0 + dirZ * L1;
     const ctrlX = x0 + dirX * (L1 + L2);
@@ -391,20 +394,34 @@ export function computeFloorWallJunctions(
       if (
         (cStyle === 'rounded-inner' ||
           cStyle === 'rounded-outer' ||
-          cStyle === 'outer-quoin') &&
+          cStyle === 'outer-quoin' ||
+          cStyle === 'inner-trim') &&
         betweenRad >= (32 * Math.PI) / 180 &&
         betweenRad <= (152 * Math.PI) / 180
       ) {
         if (cStyle === 'rounded-inner' || cStyle === 'rounded-outer') {
-          const avgT = (eA.halfT + eB.halfT);
+          const avgT = eA.halfT + eB.halfT;
           const reqRad =
             eA.wall.cornerRadius ??
             eB.wall.cornerRadius ??
-            (cStyle === 'rounded-inner' ? 0.34 : 0.38);
-          const maxPull = Math.min(eA.wallLen * 0.42, eB.wallLen * 0.42);
-          const pullback = Math.max(
-            avgT * 0.65,
-            Math.min(maxPull, reqRad)
+            (cStyle === 'rounded-inner' ? 0.52 : 0.52);
+          let maxPull = Math.min(eA.wallLen * 0.45, eB.wallLen * 0.45);
+          if (cStyle === 'rounded-outer') {
+            // Analytical throat-thickness guard: ensure outer bullnose arc never crosses sharp inner miter `mIn`!
+            const beta = Math.max(0.28, Math.min(1.4, betweenRad * 0.5));
+            const sinB = Math.sin(beta);
+            const tanB = Math.tan(beta);
+            const denomFactor = (tanB * (1 - sinB)) / Math.max(1e-4, sinB);
+            if (denomFactor > 1e-4) {
+              const maxDtan =
+                ((1 / sinB - 0.34) * avgT) / denomFactor;
+              const safeOuterPull = maxDtan - (avgT * 0.5) / tanB;
+              maxPull = Math.min(maxPull, Math.max(avgT * 0.65, safeOuterPull));
+            }
+          }
+          const pullback = Math.min(
+            maxPull,
+            Math.max(avgT * 0.65, reqRad)
           );
 
           const specA = endTrims.get(eA.wall.id)![eA.endpoint];
@@ -428,11 +445,11 @@ export function computeFloorWallJunctions(
             thickness: avgT,
           });
           continue;
-        } else if (cStyle === 'outer-quoin') {
+        } else if (cStyle === 'outer-quoin' || cStyle === 'inner-trim') {
           filletPieces.push({
-            id: `quoin_${eA.wall.floorId}_${cIdx}`,
+            id: `${cStyle}_${eA.wall.floorId}_${cIdx}`,
             floorId: eA.wall.floorId,
-            style: 'outer-quoin',
+            style: cStyle,
             vertex: { x: vx, z: vz },
             wallA: eA.wall,
             wallB: eB.wall,
@@ -442,7 +459,7 @@ export function computeFloorWallJunctions(
             height: Math.max(eA.wall.height, eB.wall.height),
             thickness: eA.halfT + eB.halfT,
           });
-          // Fall through so the two walls STILL sharp-miter 100% cleanly behind the quoin trim!
+          // Fall through so the two walls STILL sharp-miter 100% cleanly behind the corner trim!
         }
       }
     }
@@ -764,97 +781,165 @@ class DualWallMeshCollector {
   }
 
   /**
-   * Extrudes a simple convex/star-shaped 2D XZ polygon (CCW in standard math `(x, z)` where `nL = (-dz, dx)`)
+   * Extrudes ANY simple 2D XZ polygon (convex OR concave — using `THREE.ShapeUtils.triangulateShape` ear-clipping!)
    * vertically from `y0` to `y1`, with optional lateral lean `(leanX, leanZ)` proportional to `y`.
    */
   public addExtrudedPolygonBlock(
-    ringCCW: Array<{ x: number; z: number; edgeMat: 0 | 4 | 5 }>,
+    ringInput: Array<{
+      x: number;
+      z: number;
+      edgeMat: 0 | 4 | 5;
+      skipSide?: boolean;
+    }>,
     y0: number,
     y1: number,
     leanPerMeterX = 0,
     leanPerMeterZ = 0
   ): void {
-    const m = ringCCW.length;
-    if (m < 3 || y1 - y0 < 0.005) return;
+    const m = ringInput.length;
+    if (m < 3 || y1 - y0 < 0.004) return;
 
-    // Note on Three.js right-handed (X, Y, Z) winding:
-    // If `(x_i, z_i)` is CCW in `(X, Z)` (`x0=(0,0), x1=(1,0), x2=(1,1)` -> cross `dx1*dz2 - dz1*dx2 = +1`),
-    // then in 3D `(x, y, z)`: `(x1 - x0) × (x2 - x0) = (1,0,0) × (1,0,1) = (0, -1, 0)` (points DOWN -Y)!
-    // So:
-    // - TOP cap (+Y normal) uses REVERSED order `(0, i+1, i)`!
-    // - BOTTOM cap (-Y normal) uses FORWARD order `(0, i, i+1)`!
-    // - SIDE quad from `i` to `j = (i+1)%m`: `(B_i -> T_i -> T_j -> B_j)` has `(T_i - B_i) × (B_j - B_i) = (0,1,0) × (dx, 0, dz) = (dz, 0, -dx)` which points RIGHT/OUTWARD of a CCW `(x,z)` polygon!
-    // Wait: let's double-check! For `B0=(0,0,0) -> B1=(1,0,0)` on the bottom edge of `[0,1]×[0,1]`, outward is `-Z = (0, 0, -1)`.
-    // `(0, 1, 0) × (1, 0, 0) = (0, 0, -1)`! EXACT OUTWARD +100% VERIFIED!
-
-    const botPts = ringCCW.map((p) => [
-      p.x + leanPerMeterX * y0,
-      y0,
-      p.z + leanPerMeterZ * y0,
-    ] as [number, number, number]);
-    const topPts = ringCCW.map((p) => [
-      p.x + leanPerMeterX * y1,
-      y1,
-      p.z + leanPerMeterZ * y1,
-    ] as [number, number, number]);
-
-    // Centroid fan works cleanly for all our convex / star-shaped wall slices & caps!
-    let cxB = 0,
-      czB = 0,
-      cxT = 0,
-      czT = 0;
-    for (let i = 0; i < m; i++) {
-      cxB += botPts[i][0];
-      czB += botPts[i][2];
-      cxT += topPts[i][0];
-      czT += topPts[i][2];
-    }
-    cxB /= m;
-    czB /= m;
-    cxT /= m;
-    czT /= m;
-
+    // Ensure ring is oriented strictly CCW in 2D `(X, Z)` (`signedArea2D > 0`)!
+    let area2 = 0;
     for (let i = 0; i < m; i++) {
       const j = (i + 1) % m;
-      // Top cap (+Y)
-      this.addTri(
-        0,
-        cxT,
-        y1,
-        czT,
-        topPts[j][0],
-        y1,
-        topPts[j][2],
-        topPts[i][0],
-        y1,
-        topPts[i][2],
-        cxT * 0.5,
-        czT * 0.5,
-        topPts[j][0] * 0.5,
-        topPts[j][2] * 0.5,
-        topPts[i][0] * 0.5,
-        topPts[i][2] * 0.5
-      );
-      // Bottom cap (-Y)
-      this.addTri(
-        0,
-        cxB,
-        y0,
-        czB,
-        botPts[i][0],
-        y0,
-        botPts[i][2],
-        botPts[j][0],
-        y0,
-        botPts[j][2],
-        cxB * 0.5,
-        czB * 0.5,
-        botPts[i][0] * 0.5,
-        botPts[i][2] * 0.5,
-        botPts[j][0] * 0.5,
-        botPts[j][2] * 0.5
-      );
-      // Outward vertical/slanted side quad `(B_i -> T_i -> T_j -> B_j)`
+      area2 += ringInput[i].x * ringInput[j].z - ringInput[j].x * ringInput[i].z;
+    }
+    if (Math.abs(area2) < 1e-8) return;
+
+    const ringCCW =
+      area2 > 0
+        ? ringInput
+        : ringInput.map((_, idx) => {
+            const origIdx = (m - 1 - idx + m) % m;
+            const prevEdgeIdx = (origIdx - 1 + m) % m;
+            return {
+              x: ringInput[origIdx].x,
+              z: ringInput[origIdx].z,
+              edgeMat: ringInput[prevEdgeIdx].edgeMat,
+              skipSide: ringInput[prevEdgeIdx].skipSide,
+            };
+          });
+
+    const botPts = ringCCW.map(
+      (p) =>
+        [p.x + leanPerMeterX * y0, y0, p.z + leanPerMeterZ * y0] as [
+          number,
+          number,
+          number,
+        ]
+    );
+    const topPts = ringCCW.map(
+      (p) =>
+        [p.x + leanPerMeterX * y1, y1, p.z + leanPerMeterZ * y1] as [
+          number,
+          number,
+          number,
+        ]
+    );
+
+    // Ear-clipping triangulation handles ALL concave & convex polygons cleanly!
+    const contour2D = ringCCW.map((p) => new THREE.Vector2(p.x, p.z));
+    const triIndices = THREE.ShapeUtils.triangulateShape(contour2D, []);
+
+    for (const [ia, ib, ic] of triIndices) {
+      const tA = topPts[ia];
+      const tB = topPts[ib];
+      const tC = topPts[ic];
+      // Verify 3D Y-normal sign of `(B - A) × (C - A)`: `ny = (bz - az)*(cx - ax) - (bx - ax)*(cz - az)`
+      const ny =
+        (tB[2] - tA[2]) * (tC[0] - tA[0]) - (tB[0] - tA[0]) * (tC[2] - tA[2]);
+      if (Math.abs(ny) < 1e-10) continue;
+
+      if (ny > 0) {
+        // `(ia, ib, ic)` already points +Y (TOP), so `(ia, ic, ib)` points -Y (BOTTOM)
+        this.addTri(
+          0,
+          tA[0],
+          y1,
+          tA[2],
+          tB[0],
+          y1,
+          tB[2],
+          tC[0],
+          y1,
+          tC[2],
+          tA[0] * 0.5,
+          tA[2] * 0.5,
+          tB[0] * 0.5,
+          tB[2] * 0.5,
+          tC[0] * 0.5,
+          tC[2] * 0.5
+        );
+        const bA = botPts[ia];
+        const bB = botPts[ib];
+        const bC = botPts[ic];
+        this.addTri(
+          0,
+          bA[0],
+          y0,
+          bA[2],
+          bC[0],
+          y0,
+          bC[2],
+          bB[0],
+          y0,
+          bB[2],
+          bA[0] * 0.5,
+          bA[2] * 0.5,
+          bC[0] * 0.5,
+          bC[2] * 0.5,
+          bB[0] * 0.5,
+          bB[2] * 0.5
+        );
+      } else {
+        // `(ia, ic, ib)` points +Y (TOP), `(ia, ib, ic)` points -Y (BOTTOM)
+        this.addTri(
+          0,
+          tA[0],
+          y1,
+          tA[2],
+          tC[0],
+          y1,
+          tC[2],
+          tB[0],
+          y1,
+          tB[2],
+          tA[0] * 0.5,
+          tA[2] * 0.5,
+          tC[0] * 0.5,
+          tC[2] * 0.5,
+          tB[0] * 0.5,
+          tB[2] * 0.5
+        );
+        const bA = botPts[ia];
+        const bB = botPts[ib];
+        const bC = botPts[ic];
+        this.addTri(
+          0,
+          bA[0],
+          y0,
+          bA[2],
+          bB[0],
+          y0,
+          bB[2],
+          bC[0],
+          y0,
+          bC[2],
+          bA[0] * 0.5,
+          bA[2] * 0.5,
+          bB[0] * 0.5,
+          bB[2] * 0.5,
+          bC[0] * 0.5,
+          bC[2] * 0.5
+        );
+      }
+    }
+
+    // Outward vertical/slanted side quads `(B_i -> T_i -> T_j -> B_j)`
+    for (let i = 0; i < m; i++) {
+      if (ringCCW[i].skipSide) continue;
+      const j = (i + 1) % m;
       const segLen = Math.hypot(
         ringCCW[j].x - ringCCW[i].x,
         ringCCW[j].z - ringCCW[i].z
@@ -958,18 +1043,22 @@ export function buildManifoldWallBodyGeometry(
   // How much longitudinal span at free end(s) is reserved for sculpted end terminations
   const capSpanFor = (cap: WallEndCapKind, T: number): number => {
     switch (cap) {
+      case 'angled':
+        return Math.min(totalLen * 0.34, Math.max(0.32, T * 1.55));
       case 'beveled':
-        return Math.min(totalLen * 0.25, T * 0.42);
+        return Math.min(totalLen * 0.3, Math.max(0.14, T * 0.62));
       case 'rounded':
-        return Math.min(totalLen * 0.25, T * 0.5);
+        return Math.min(totalLen * 0.28, T * 0.5);
       case 'tapered':
-        return Math.min(totalLen * 0.34, Math.max(0.55, T * 2.4));
+        return Math.min(totalLen * 0.38, Math.max(0.95, T * 3.8));
       case 'pointed':
-        return Math.min(totalLen * 0.3, Math.max(0.22, T * 0.95));
+        return Math.min(totalLen * 0.34, Math.max(0.32, T * 1.35));
       case 'stepped':
-        return Math.min(totalLen * 0.42, 0.92);
+        return Math.min(totalLen * 0.46, 1.24);
       case 'pillar':
-        return Math.min(totalLen * 0.22, T * 0.95);
+        return Math.min(totalLen * 0.32, Math.max(0.38, T * 2.1));
+      case 'cap':
+        return Math.min(totalLen * 0.16, 0.055);
       default:
         return 0;
     }
@@ -1061,32 +1150,22 @@ export function buildManifoldWallBodyGeometry(
       let rX = st.x - st.nLx * h;
       let rZ = st.z - st.nLz * h;
 
-      // Apply exact start miter / angled free-end trim at the very beginning of the wall
+      // Apply exact start miter trim at the very beginning of the wall (scaled for `extraHalfT` trims!)
       if (i === 0 && sA <= 0.002) {
-        let trimL = startTrim.leftTrim;
-        let trimR = startTrim.rightTrim;
-        if (!startTrim.isConnected && applyStartCap && endCap === 'angled') {
-          trimL = h;
-          trimR = -h;
-        }
+        const miterScale = st.halfT > 1e-4 ? h / st.halfT : 1;
+        const trimL = startTrim.leftTrim * miterScale;
+        const trimR = startTrim.rightTrim * miterScale;
         lX += st.tx * trimL;
         lZ += st.tz * trimL;
         rX += st.tx * trimR;
         rZ += st.tz * trimR;
       }
 
-      // Apply exact end miter / angled free-end trim at the very end of the wall
+      // Apply exact end miter trim at the very end of the wall (scaled for `extraHalfT` trims!)
       if (i === steps && sB >= totalLen - 0.002) {
-        // Outgoing tangent at `end` into the wall is `(-st.tx, -st.tz)`!
-        // Note: in `computeFloorWallJunctions`, at `endpoint === 'end'`, outgoing tangent `t_end = (-st.tx, -st.tz)`.
-        // Its LEFT normal `nL_end = (-t_end.z, t_end.x) = (st.tz, -st.tx) = -st.nL` (which is the wall's RIGHT side `-nL`!),
-        // and its RIGHT normal `nR_end = +st.nL` (which is the wall's LEFT side `+nL`!)!
-        let trimWallLeft = endTrim.rightTrim;
-        let trimWallRight = endTrim.leftTrim;
-        if (!endTrim.isConnected && applyEndCap && endCap === 'angled') {
-          trimWallLeft = -h;
-          trimWallRight = h;
-        }
+        const miterScale = st.halfT > 1e-4 ? h / st.halfT : 1;
+        const trimWallLeft = endTrim.rightTrim * miterScale;
+        const trimWallRight = endTrim.leftTrim * miterScale;
         lX += -st.tx * trimWallLeft;
         lZ += -st.tz * trimWallLeft;
         rX += -st.tx * trimWallRight;
@@ -1345,6 +1424,13 @@ export function buildManifoldWallBodyGeometry(
   };
 
   // Emit main wall body spans (with exact Door & Window cutouts!)
+  const closeStartBodyJamb =
+    startTrim.filletPullback <= 0.001 &&
+    !(applyStartCap && capSpanFor(endCap, T0) > 0);
+  const closeEndBodyJamb =
+    endTrim.filletPullback <= 0.001 &&
+    !(applyEndCap && capSpanFor(endCap, T1) > 0);
+
   let cursor = sBodyStart;
   for (let idx = 0; idx < ops.length; idx++) {
     const item = ops[idx];
@@ -1353,7 +1439,7 @@ export function buildManifoldWallBodyGeometry(
         cursor,
         item.s0,
         { kind: 'full' },
-        cursor <= sBodyStart + 0.002 && !applyStartCap,
+        cursor <= sBodyStart + 0.002 && closeStartBodyJamb,
         true
       );
     }
@@ -1384,9 +1470,8 @@ export function buildManifoldWallBodyGeometry(
       cursor,
       sBodyEnd,
       { kind: 'full' },
-      cursor <= sBodyStart + 0.002 &&
-        !(applyStartCap && capSpanFor(endCap, T0) > 0),
-      !(applyEndCap && capSpanFor(endCap, T1) > 0)
+      cursor <= sBodyStart + 0.002 && closeStartBodyJamb,
+      closeEndBodyJamb
     );
   }
 
@@ -1400,9 +1485,7 @@ export function buildManifoldWallBodyGeometry(
     // Outward tangent pointing FROM `sBase` TOWARD tip
     const dirX = isEnd ? baseSt.tx : -baseSt.tx;
     const dirZ = isEnd ? baseSt.tz : -baseSt.tz;
-    // Left normal in `(X, Z)` CCW (`nL = (-dirZ, dirX)`):
-    // Note: when `isEnd === true`, `nL = baseSt.nL` (mat 4 on left, mat 5 on right).
-    // When `isEnd === false`, `dir = -baseSt.t`, so `(-dirZ, dirX) = -baseSt.nL` (mat 5 on its left, mat 4 on its right)!
+    // Left normal in `(X, Z)` CCW (`nL = (-dirZ, dirX)`)
     const leftX = -dirZ;
     const leftZ = dirX;
     const leftMat: 4 | 5 = isEnd ? 4 : 5;
@@ -1412,19 +1495,55 @@ export function buildManifoldWallBodyGeometry(
     const bx = baseSt.x;
     const bz = baseSt.z;
 
-    if (endCap === 'beveled' && span > 0.005) {
-      // 3-facet symmetric chamfered end
-      const noseH = h * 0.38;
-      // Polygon in CCW `(X, Z)` order: BaseRight -> NoseRight -> NoseLeft -> BaseLeft
-      // Wait: check CCW in `(X, Z)` where `+dir` is X' and `+left` is Z':
-      // `BaseRight (0, -h) -> NoseRight (span, -noseH) -> NoseLeft (span, +noseH) -> BaseLeft (0, +h)`:
-      // Signed area in `(dir, left)`: `(0*-noseH - -h*span) + (span*noseH - -noseH*span) + (span*h - noseH*0) + (0*-h - h*0) = h*span + 2*noseH*span + h*span > 0` (STRICTLY CCW!)
+    const pt3Cap = (
+      x: number,
+      y: number,
+      z: number
+    ): [number, number, number] => [
+      x + leanPerMeterX * y,
+      y,
+      z + leanPerMeterZ * y,
+    ];
+
+    if (endCap === 'angled' && span > 0.005) {
+      // Bold architectural diagonal slash end (`(0, -h) -> (span, -h) -> (0, +h)` in `(dir, left)`):
+      // Diagonal face points toward `(+dir, +left)` so it catches light dramatically in 3D & isometric previews!
       collector.addExtrudedPolygonBlock(
         [
           {
             x: bx - leftX * h,
             z: bz - leftZ * h,
             edgeMat: rightMat,
+          },
+          {
+            x: bx + dirX * span - leftX * h,
+            z: bz + dirZ * span - leftZ * h,
+            edgeMat: 0,
+          },
+          {
+            x: bx + leftX * h,
+            z: bz + leftZ * h,
+            edgeMat: 0,
+            skipSide: true,
+          },
+        ],
+        0,
+        topY,
+        leanPerMeterX,
+        leanPerMeterZ
+      );
+      return;
+    }
+
+    if (endCap === 'beveled' && span > 0.005) {
+      // Crisp 3-facet symmetric chamfered architectural end
+      const noseH = h * 0.28;
+      collector.addExtrudedPolygonBlock(
+        [
+          {
+            x: bx - leftX * h,
+            z: bz - leftZ * h,
+            edgeMat: 0,
           },
           {
             x: bx + dirX * span - leftX * noseH,
@@ -1434,12 +1553,13 @@ export function buildManifoldWallBodyGeometry(
           {
             x: bx + dirX * span + leftX * noseH,
             z: bz + dirZ * span + leftZ * noseH,
-            edgeMat: leftMat,
+            edgeMat: 0,
           },
           {
             x: bx + leftX * h,
             z: bz + leftZ * h,
             edgeMat: 0,
+            skipSide: true,
           },
         ],
         0,
@@ -1451,23 +1571,24 @@ export function buildManifoldWallBodyGeometry(
     }
 
     if (endCap === 'pointed' && span > 0.005) {
-      // Crisp symmetric V-prow pointed arrow end
+      // Crisp symmetric V-prow pointed arrow end (coherent trim facets with zero tip color seam!)
       collector.addExtrudedPolygonBlock(
         [
           {
             x: bx - leftX * h,
             z: bz - leftZ * h,
-            edgeMat: rightMat,
+            edgeMat: 0,
           },
           {
             x: bx + dirX * span,
             z: bz + dirZ * span,
-            edgeMat: leftMat,
+            edgeMat: 0,
           },
           {
             x: bx + leftX * h,
             z: bz + leftZ * h,
             edgeMat: 0,
+            skipSide: true,
           },
         ],
         0,
@@ -1479,7 +1600,7 @@ export function buildManifoldWallBodyGeometry(
     }
 
     if (endCap === 'tapered' && span > 0.005) {
-      const tipH = Math.max(0.022, h * 0.26);
+      const tipH = Math.max(0.022, h * 0.2);
       collector.addExtrudedPolygonBlock(
         [
           {
@@ -1501,6 +1622,7 @@ export function buildManifoldWallBodyGeometry(
             x: bx + leftX * h,
             z: bz + leftZ * h,
             edgeMat: 0,
+            skipSide: true,
           },
         ],
         0,
@@ -1512,66 +1634,190 @@ export function buildManifoldWallBodyGeometry(
     }
 
     if (endCap === 'rounded' && span > 0.005) {
-      // Smooth 20-segment 180° semicircular bullnose centered at `(bx + dir*(span - h), bz + dir*(span - h))`
+      // Smooth 24-segment 180° semicircular bullnose with analytical radial vertex normals!
       const r = h;
       const cx = bx + dirX * Math.max(0, span - r);
       const cz = bz + dirZ * Math.max(0, span - r);
-      const segs = 20;
-      const ring: Array<{ x: number; z: number; edgeMat: 0 | 4 | 5 }> = [];
+      const segs = 24;
+      const capRing: Array<{
+        x: number;
+        z: number;
+        edgeMat: 0 | 4 | 5;
+        skipSide?: boolean;
+      }> = [];
+
       if (span > r + 0.002) {
-        ring.push({
+        capRing.push({
           x: bx - leftX * h,
           z: bz - leftZ * h,
           edgeMat: rightMat,
         });
       }
+
+      const arcPts: Array<{
+        x: number;
+        z: number;
+        nx: number;
+        nz: number;
+      }> = [];
       for (let k = 0; k <= segs; k++) {
-        // Angle from `-π/2` (right `-left`) through `0` (`+dir` tip) to `+π/2` (`+left`) -> CCW in `(dir, left)`!
         const ang = -Math.PI * 0.5 + (Math.PI * k) / segs;
         const cosA = Math.cos(ang);
         const sinA = Math.sin(ang);
-        ring.push({
-          x: cx + dirX * (r * cosA) + leftX * (r * sinA),
-          z: cz + dirZ * (r * cosA) + leftZ * (r * sinA),
-          edgeMat: k < segs ? (sinA >= 0 ? leftMat : rightMat) : 0,
+        const nx = dirX * cosA + leftX * sinA;
+        const nz = dirZ * cosA + leftZ * sinA;
+        const px = cx + nx * r;
+        const pz = cz + nz * r;
+        arcPts.push({ x: px, z: pz, nx, nz });
+        capRing.push({
+          x: px,
+          z: pz,
+          edgeMat: 0,
+          skipSide: true,
         });
       }
+
       if (span > r + 0.002) {
-        ring.push({
+        // Need side edge from `arcPts[segs]` back to `(bx + left*h)`!
+        capRing[capRing.length - 1].skipSide = false;
+        capRing[capRing.length - 1].edgeMat = leftMat;
+        capRing.push({
           x: bx + leftX * h,
           z: bz + leftZ * h,
           edgeMat: 0,
+          skipSide: true,
         });
       }
+
+      // Emit exact ear-clipped top (+Y) & bottom (-Y) caps (plus any straight extension shoulders)
       collector.addExtrudedPolygonBlock(
-        ring,
+        capRing,
         0,
         topY,
         leanPerMeterX,
         leanPerMeterZ
       );
+
+      // Emit smooth radial-normal semicircular bullnose cylinder wall (`p0=botB, p1=botA, p2=topA, p3=topB` -> outward normal!)
+      for (let k = 0; k < segs; k++) {
+        const A = arcPts[k];
+        const B = arcPts[k + 1];
+        const u0 = (Math.PI * r * k) / segs * 0.5;
+        const u1 = (Math.PI * r * (k + 1)) / segs * 0.5;
+        collector.addQuad(
+          0,
+          pt3Cap(B.x, 0, B.z),
+          pt3Cap(A.x, 0, A.z),
+          pt3Cap(A.x, topY, A.z),
+          pt3Cap(B.x, topY, B.z),
+          u1,
+          0,
+          u0,
+          topY * 0.5,
+          [B.nx, 0, B.nz],
+          [A.nx, 0, A.nz]
+        );
+      }
       return;
     }
 
     if (endCap === 'stepped' && span > 0.01) {
-      // 4 crisp architectural stepped terrace tiers (`100% -> 76% -> 52% -> 28%` height)
-      const tiers = [0.82, 0.61, 0.4, 0.22];
+      // 4 watertight architectural stepped terrace tiers (`80% -> 60% -> 40% -> 22%`) with closed upper risers & stone tread caps!
+      const tiers = [0.8, 0.6, 0.4, 0.22];
       const stepW = span / tiers.length;
+      const tierHeights = tiers.map((f) => Math.max(0.2, topY * f));
+
+      // 1. Close the upper riser at `sBase` between `tierHeights[0]` and `topY` (`BL -> BR -> TR -> TL` points `+dir`!)
+      collector.addQuad(
+        0,
+        pt3Cap(bx + leftX * h, tierHeights[0], bz + leftZ * h),
+        pt3Cap(bx - leftX * h, tierHeights[0], bz - leftZ * h),
+        pt3Cap(bx - leftX * h, topY, bz - leftZ * h),
+        pt3Cap(bx + leftX * h, topY, bz + leftZ * h),
+        0,
+        tierHeights[0] * 0.5,
+        h,
+        topY * 0.5
+      );
+
       for (let tIdx = 0; tIdx < tiers.length; tIdx++) {
         const xA = bx + dirX * (stepW * tIdx);
         const zA = bz + dirZ * (stepW * tIdx);
         const xB = bx + dirX * (stepW * (tIdx + 1));
         const zB = bz + dirZ * (stepW * (tIdx + 1));
-        const tierH = Math.max(0.2, topY * tiers[tIdx]);
+        const tierH = tierHeights[tIdx];
+        const isLastStep = tIdx === tiers.length - 1;
+
         collector.addExtrudedPolygonBlock(
           [
             { x: xA - leftX * h, z: zA - leftZ * h, edgeMat: rightMat },
-            { x: xB - leftX * h, z: zB - leftZ * h, edgeMat: 0 },
+            {
+              x: xB - leftX * h,
+              z: zB - leftZ * h,
+              edgeMat: 0,
+              skipSide: !isLastStep,
+            },
             { x: xB + leftX * h, z: zB + leftZ * h, edgeMat: leftMat },
-            { x: xA + leftX * h, z: zA + leftZ * h, edgeMat: 0 },
+            {
+              x: xA + leftX * h,
+              z: zA + leftZ * h,
+              edgeMat: 0,
+              skipSide: true,
+            },
           ],
           0,
           tierH,
+          leanPerMeterX,
+          leanPerMeterZ
+        );
+
+        // Close exposed riser `[tierHeights[tIdx + 1] .. tierH]` at `xB` for non-final steps!
+        if (!isLastStep) {
+          const nextH = tierHeights[tIdx + 1];
+          collector.addQuad(
+            0,
+            pt3Cap(xB + leftX * h, nextH, zB + leftZ * h),
+            pt3Cap(xB - leftX * h, nextH, zB - leftZ * h),
+            pt3Cap(xB - leftX * h, tierH, zB - leftZ * h),
+            pt3Cap(xB + leftX * h, tierH, zB + leftZ * h),
+            0,
+            nextH * 0.5,
+            h,
+            tierH * 0.5
+          );
+        }
+
+        // Crisp overhanging stone coping tread on top of each step!
+        const treadHalf = h + 0.016;
+        const txA = xA + dirX * 0.002;
+        const tzA = zA + dirZ * 0.002;
+        const txB = xB + dirX * 0.016;
+        const tzB = zB + dirZ * 0.016;
+        copingCollector.addExtrudedPolygonBlock(
+          [
+            {
+              x: txA - leftX * treadHalf,
+              z: tzA - leftZ * treadHalf,
+              edgeMat: 0,
+            },
+            {
+              x: txB - leftX * treadHalf,
+              z: tzB - leftZ * treadHalf,
+              edgeMat: 0,
+            },
+            {
+              x: txB + leftX * treadHalf,
+              z: tzB + leftZ * treadHalf,
+              edgeMat: 0,
+            },
+            {
+              x: txA + leftX * treadHalf,
+              z: tzA + leftZ * treadHalf,
+              edgeMat: 0,
+            },
+          ],
+          tierH,
+          tierH + 0.034,
           leanPerMeterX,
           leanPerMeterZ
         );
@@ -1579,58 +1825,73 @@ export function buildManifoldWallBodyGeometry(
       return;
     }
 
-    if (endCap === 'pillar') {
-      // Integrated architectural square pier with molded base plinth & top capital
-      const pierHalf = Math.max(h * 1.65, 0.14);
-      const px = bx + dirX * Math.max(pierHalf * 0.55, span * 0.5);
-      const pz = bz + dirZ * Math.max(pierHalf * 0.55, span * 0.5);
-      const makeBoxRing = (
+    if (endCap === 'pillar' && span > 0.01) {
+      // Bold integrated square structural end-column rising proud above wall top, flush against `sBase`!
+      const pierHalfDepth = span * 0.5;
+      const pierHalfWidth = Math.max(h * 1.95, pierHalfDepth);
+      const px = bx + dirX * pierHalfDepth;
+      const pz = bz + dirZ * pierHalfDepth;
+      const makeRectRing = (
         cx: number,
         cz: number,
+        hd: number,
         hw: number,
         matSide: 0 | 4 | 5
       ) => [
         {
-          x: cx - dirX * hw - leftX * hw,
-          z: cz - dirZ * hw - leftZ * hw,
+          x: cx - dirX * hd - leftX * hw,
+          z: cz - dirZ * hd - leftZ * hw,
           edgeMat: matSide,
         },
         {
-          x: cx + dirX * hw - leftX * hw,
-          z: cz + dirZ * hw - leftZ * hw,
+          x: cx + dirX * hd - leftX * hw,
+          z: cz + dirZ * hd - leftZ * hw,
           edgeMat: matSide,
         },
         {
-          x: cx + dirX * hw + leftX * hw,
-          z: cz + dirZ * hw + leftZ * hw,
+          x: cx + dirX * hd + leftX * hw,
+          z: cz + dirZ * hd + leftZ * hw,
           edgeMat: matSide,
         },
         {
-          x: cx - dirX * hw + leftX * hw,
-          z: cz - dirZ * hw + leftZ * hw,
+          x: cx - dirX * hd + leftX * hw,
+          z: cz - dirZ * hd + leftZ * hw,
           edgeMat: matSide,
         },
       ];
-      // Pier shaft
+      // Pier shaft rising `+0.09m` above wall crest
       collector.addExtrudedPolygonBlock(
-        makeBoxRing(px, pz, pierHalf, 4),
+        makeRectRing(px, pz, pierHalfDepth, pierHalfWidth, 4),
         0,
-        topY + 0.04,
+        topY + 0.09,
         leanPerMeterX,
         leanPerMeterZ
       );
-      // Plinth base & top capital in trim extras
+      // Molded plinth base
       extrasCollector.addExtrudedPolygonBlock(
-        makeBoxRing(px, pz, pierHalf + 0.024, 0),
+        makeRectRing(
+          px,
+          pz,
+          pierHalfDepth + 0.028,
+          pierHalfWidth + 0.028,
+          0
+        ),
         0,
-        0.11,
+        0.14,
         leanPerMeterX,
         leanPerMeterZ
       );
-      extrasCollector.addExtrudedPolygonBlock(
-        makeBoxRing(px, pz, pierHalf + 0.028, 0),
-        topY + 0.04,
-        topY + 0.1,
+      // Proud overhanging capital crown
+      copingCollector.addExtrudedPolygonBlock(
+        makeRectRing(
+          px,
+          pz,
+          pierHalfDepth + 0.036,
+          pierHalfWidth + 0.036,
+          0
+        ),
+        topY + 0.09,
+        topY + 0.16,
         leanPerMeterX,
         leanPerMeterZ
       );
@@ -1638,36 +1899,56 @@ export function buildManifoldWallBodyGeometry(
     }
 
     if (endCap === 'cap') {
-      // Crisp proud end-casing wrap around the free end face
-      const capDepth = 0.055;
-      const capHalf = h + 0.018;
-      const ex = tipSt.x;
-      const ez = tipSt.z;
+      // Non-overlapping U-wrap architectural door-jamb / pilaster end casing hugging `sBase .. tipSt`!
+      const retDepth = Math.min(0.055, Math.max(0.02, totalLen * 0.1));
+      const cOut = h + 0.028;
+      const cIn = h + 0.001;
       extrasCollector.addExtrudedPolygonBlock(
         [
           {
-            x: ex - dirX * capDepth - leftX * capHalf,
-            z: ez - dirZ * capDepth - leftZ * capHalf,
+            x: bx - dirX * retDepth - leftX * cOut,
+            z: bz - dirZ * retDepth - leftZ * cOut,
             edgeMat: 0,
           },
           {
-            x: ex + dirX * 0.016 - leftX * capHalf,
-            z: ez + dirZ * 0.016 - leftZ * capHalf,
+            x: bx + dirX * span - leftX * cOut,
+            z: bz + dirZ * span - leftZ * cOut,
             edgeMat: 0,
           },
           {
-            x: ex + dirX * 0.016 + leftX * capHalf,
-            z: ez + dirZ * 0.016 + leftZ * capHalf,
+            x: bx + dirX * span + leftX * cOut,
+            z: bz + dirZ * span + leftZ * cOut,
             edgeMat: 0,
           },
           {
-            x: ex - dirX * capDepth + leftX * capHalf,
-            z: ez - dirZ * capDepth + leftZ * capHalf,
+            x: bx - dirX * retDepth + leftX * cOut,
+            z: bz - dirZ * retDepth + leftZ * cOut,
+            edgeMat: 0,
+          },
+          {
+            x: bx - dirX * retDepth + leftX * cIn,
+            z: bz - dirZ * retDepth + leftZ * cIn,
+            edgeMat: 0,
+          },
+          {
+            x: bx + leftX * cIn,
+            z: bz + leftZ * cIn,
+            edgeMat: 0,
+            skipSide: true,
+          },
+          {
+            x: bx - leftX * cIn,
+            z: bz - leftZ * cIn,
+            edgeMat: 0,
+          },
+          {
+            x: bx - dirX * retDepth - leftX * cIn,
+            z: bz - dirZ * retDepth - leftZ * cIn,
             edgeMat: 0,
           },
         ],
         0,
-        topY + 0.012,
+        topY + 0.022,
         leanPerMeterX,
         leanPerMeterZ
       );
@@ -1702,8 +1983,9 @@ export function buildManifoldWallBodyGeometry(
         bCur,
         sBodyEnd,
         { kind: 'fixed', y0: 0, y1: 0.085 },
-        bCur > sBodyStart + 0.01,
-        false,
+        bCur > sBodyStart + 0.01 ||
+          (!startTrim.isConnected && startTrim.filletPullback <= 0.001),
+        !endTrim.isConnected && endTrim.filletPullback <= 0.001,
         extrasCollector,
         0.012,
         { y0: 0, y1: 0.085 }
@@ -1817,60 +2099,97 @@ export function buildCornerFilletGeometry(
   const mOutZ = vertex.z + outNormAz * hA + tAz * hitOut.sA;
 
   if (spec.style === 'outer-quoin') {
-    // Crisp architectural corner quoin / trim column hugging the outer corner!
-    const qLen = Math.max(0.22, h * 2.1);
-    const qOut = 0.022;
-    const p0x = mOutX + outNormAx * qOut + outNormBx * qOut;
-    const p0z = mOutZ + outNormAz * qOut + outNormBz * qOut;
-    const pAx = p0x + tAx * qLen;
-    const pAz = p0z + tAz * qLen;
-    const pBx = p0x + tBx * qLen;
-    const pBz = p0z + tBz * qLen;
-    const thickQ = 0.042;
+    // Crisp architectural exterior corner pilaster / quoin column with base plinth & crown cap!
+    const buildQuoinRing = (qOut: number, thickQ: number, qLen: number) => {
+      const p0x = mOutX + outNormAx * qOut + outNormBx * qOut;
+      const p0z = mOutZ + outNormAz * qOut + outNormBz * qOut;
+      const pAx = p0x + tAx * qLen;
+      const pAz = p0z + tAz * qLen;
+      const pBx = p0x + tBx * qLen;
+      const pBz = p0z + tBz * qLen;
+      return [
+        { x: p0x, z: p0z, edgeMat: 0 as const },
+        { x: pBx, z: pBz, edgeMat: 0 as const },
+        {
+          x: pBx - outNormBx * thickQ,
+          z: pBz - outNormBz * thickQ,
+          edgeMat: 0 as const,
+        },
+        {
+          x: p0x - outNormAx * thickQ - outNormBx * thickQ,
+          z: p0z - outNormAz * thickQ - outNormBz * thickQ,
+          edgeMat: 0 as const,
+        },
+        {
+          x: pAx - outNormAx * thickQ,
+          z: pAz - outNormAz * thickQ,
+          edgeMat: 0 as const,
+        },
+        { x: pAx, z: pAz, edgeMat: 0 as const },
+      ];
+    };
 
-    const ringA =
-      cross > 0
-        ? [
-            { x: p0x, z: p0z, edgeMat: 0 as const },
-            { x: pBx, z: pBz, edgeMat: 0 as const },
-            {
-              x: pBx - outNormBx * thickQ,
-              z: pBz - outNormBz * thickQ,
-              edgeMat: 0 as const,
-            },
-            {
-              x: p0x - outNormAx * thickQ - outNormBx * thickQ,
-              z: p0z - outNormAz * thickQ - outNormBz * thickQ,
-              edgeMat: 0 as const,
-            },
-            {
-              x: pAx - outNormAx * thickQ,
-              z: pAz - outNormAz * thickQ,
-              edgeMat: 0 as const,
-            },
-            { x: pAx, z: pAz, edgeMat: 0 as const },
-          ]
-        : [
-            { x: p0x, z: p0z, edgeMat: 0 as const },
-            { x: pAx, z: pAz, edgeMat: 0 as const },
-            {
-              x: pAx - outNormAx * thickQ,
-              z: pAz - outNormAz * thickQ,
-              edgeMat: 0 as const,
-            },
-            {
-              x: p0x - outNormAx * thickQ - outNormBx * thickQ,
-              z: p0z - outNormAz * thickQ - outNormBz * thickQ,
-              edgeMat: 0 as const,
-            },
-            {
-              x: pBx - outNormBx * thickQ,
-              z: pBz - outNormBz * thickQ,
-              edgeMat: 0 as const,
-            },
-            { x: pBx, z: pBz, edgeMat: 0 as const },
-          ];
-    collector.addExtrudedPolygonBlock(ringA, 0, height + 0.015);
+    const qLen = Math.max(0.3, h * 2.8);
+    // Pilaster shaft
+    collector.addExtrudedPolygonBlock(
+      buildQuoinRing(0.036, 0.04, qLen),
+      0,
+      height + 0.025
+    );
+    // Grounded corner plinth
+    collector.addExtrudedPolygonBlock(
+      buildQuoinRing(0.052, 0.056, qLen + 0.024),
+      0,
+      0.14
+    );
+    // Proud corner crown cap
+    collector.addExtrudedPolygonBlock(
+      buildQuoinRing(0.056, 0.06, qLen + 0.028),
+      height + 0.025,
+      height + 0.08
+    );
+    return collector.buildGeometry();
+  }
+
+  if (spec.style === 'inner-trim') {
+    // Crisp interior corner cove / pilaster moulding hugging the concave room corner `mIn`!
+    const buildInnerTrimRing = (iOut: number, iLen: number) => {
+      const c0x = mInX - inNormAx * 0.002 - inNormBx * 0.002;
+      const c0z = mInZ - inNormAz * 0.002 - inNormBz * 0.002;
+      return [
+        { x: c0x, z: c0z, edgeMat: 0 as const },
+        { x: c0x + tAx * iLen, z: c0z + tAz * iLen, edgeMat: 0 as const },
+        {
+          x: mInX + tAx * iLen + inNormAx * iOut,
+          z: mInZ + tAz * iLen + inNormAz * iOut,
+          edgeMat: 0 as const,
+        },
+        {
+          x: mInX + inNormAx * iOut + inNormBx * iOut,
+          z: mInZ + inNormAz * iOut + inNormBz * iOut,
+          edgeMat: 0 as const,
+        },
+        {
+          x: mInX + tBx * iLen + inNormBx * iOut,
+          z: mInZ + tBz * iLen + inNormBz * iOut,
+          edgeMat: 0 as const,
+        },
+        { x: c0x + tBx * iLen, z: c0z + tBz * iLen, edgeMat: 0 as const },
+      ];
+    };
+
+    const iLen = Math.max(0.22, h * 2.2);
+    collector.addExtrudedPolygonBlock(
+      buildInnerTrimRing(0.032, iLen),
+      0,
+      height
+    );
+    // Subtle top interior corner crown block
+    collector.addExtrudedPolygonBlock(
+      buildInnerTrimRing(0.044, iLen + 0.018),
+      Math.max(0, height - 0.075),
+      height + 0.01
+    );
     return collector.buildGeometry();
   }
 
@@ -1890,55 +2209,61 @@ export function buildCornerFilletGeometry(
     (endA === 'start' ? inSignA : -inSignA) > 0 ? 4 : 5;
   const outerMat: 4 | 5 = innerMat === 4 ? 5 : 4;
 
-  const segs = 24;
-  // Build polygon in CCW `(X, Z)` order by checking signed area!
-  const rawPts: Array<{ x: number; z: number; edgeMat: 0 | 4 | 5 }> = [];
+  const segs = 28;
+  const rawPts: Array<{
+    x: number;
+    z: number;
+    edgeMat: 0 | 4 | 5;
+    skipSide?: boolean;
+  }> = [];
 
   if (spec.style === 'rounded-inner') {
-    // Outer boundary stays sharp 90° (`aOut -> mOut -> bOut`), inner boundary sweeps quadratic/circular Bezier `bIn -> mIn -> aIn`!
+    // Outer boundary stays sharp 90° (`aOut -> mOut -> bOut`), inner boundary sweeps TRUE circular arc `bIn -> mIn -> aIn`!
     rawPts.push({ x: aOutX, z: aOutZ, edgeMat: outerMat });
     rawPts.push({ x: mOutX, z: mOutZ, edgeMat: outerMat });
-    rawPts.push({ x: bOutX, z: bOutZ, edgeMat: 0 });
+    rawPts.push({ x: bOutX, z: bOutZ, edgeMat: 0, skipSide: true });
+    const ux1 = bInX - mInX;
+    const uz1 = bInZ - mInZ;
+    const ux2 = aInX - mInX;
+    const uz2 = aInZ - mInZ;
+    const l1 = Math.max(1e-4, Math.hypot(ux1, uz1));
+    const l2 = Math.max(1e-4, Math.hypot(ux2, uz2));
+    const cosAng = Math.max(
+      -0.98,
+      Math.min(0.98, (ux1 * ux2 + uz1 * uz2) / (l1 * l2))
+    );
+    const w = Math.sqrt(Math.max(0.05, (1 + cosAng) * 0.5));
     for (let i = 0; i <= segs; i++) {
       const u = i / segs;
       const omu = 1 - u;
-      // Exact rational quadratic Bezier with weight `w = cos(θ/2)` gives a 100% TRUE circular arc!
-      const ux1 = bInX - mInX;
-      const uz1 = bInZ - mInZ;
-      const ux2 = aInX - mInX;
-      const uz2 = aInZ - mInZ;
-      const l1 = Math.max(1e-4, Math.hypot(ux1, uz1));
-      const l2 = Math.max(1e-4, Math.hypot(ux2, uz2));
-      const cosAng = Math.max(
-        -0.98,
-        Math.min(0.98, (ux1 * ux2 + uz1 * uz2) / (l1 * l2))
-      );
-      const w = Math.sqrt(Math.max(0.05, (1 + cosAng) * 0.5));
       const denom = omu * omu + 2 * w * omu * u + u * u;
-      const px = (omu * omu * bInX + 2 * w * omu * u * mInX + u * u * aInX) / denom;
-      const pz = (omu * omu * bInZ + 2 * w * omu * u * mInZ + u * u * aInZ) / denom;
+      const px =
+        (omu * omu * bInX + 2 * w * omu * u * mInX + u * u * aInX) / denom;
+      const pz =
+        (omu * omu * bInZ + 2 * w * omu * u * mInZ + u * u * aInZ) / denom;
       rawPts.push({
         x: px,
         z: pz,
         edgeMat: i < segs ? innerMat : 0,
+        skipSide: i === segs,
       });
     }
   } else {
     // `rounded-outer`: Inner boundary stays sharp (`bIn -> mIn -> aIn`), outer boundary sweeps TRUE circular bullnose arc `aOut -> mOut -> bOut`!
+    const ux1 = aOutX - mOutX;
+    const uz1 = aOutZ - mOutZ;
+    const ux2 = bOutX - mOutX;
+    const uz2 = bOutZ - mOutZ;
+    const l1 = Math.max(1e-4, Math.hypot(ux1, uz1));
+    const l2 = Math.max(1e-4, Math.hypot(ux2, uz2));
+    const cosAng = Math.max(
+      -0.98,
+      Math.min(0.98, (ux1 * ux2 + uz1 * uz2) / (l1 * l2))
+    );
+    const w = Math.sqrt(Math.max(0.05, (1 + cosAng) * 0.5));
     for (let i = 0; i <= segs; i++) {
       const u = i / segs;
       const omu = 1 - u;
-      const ux1 = aOutX - mOutX;
-      const uz1 = aOutZ - mOutZ;
-      const ux2 = bOutX - mOutX;
-      const uz2 = bOutZ - mOutZ;
-      const l1 = Math.max(1e-4, Math.hypot(ux1, uz1));
-      const l2 = Math.max(1e-4, Math.hypot(ux2, uz2));
-      const cosAng = Math.max(
-        -0.98,
-        Math.min(0.98, (ux1 * ux2 + uz1 * uz2) / (l1 * l2))
-      );
-      const w = Math.sqrt(Math.max(0.05, (1 + cosAng) * 0.5));
       const denom = omu * omu + 2 * w * omu * u + u * u;
       const px =
         (omu * omu * aOutX + 2 * w * omu * u * mOutX + u * u * bOutX) / denom;
@@ -1948,36 +2273,15 @@ export function buildCornerFilletGeometry(
         x: px,
         z: pz,
         edgeMat: i < segs ? outerMat : 0,
+        skipSide: i === segs,
       });
     }
     rawPts.push({ x: bInX, z: bInZ, edgeMat: innerMat });
     rawPts.push({ x: mInX, z: mInZ, edgeMat: innerMat });
-    rawPts.push({ x: aInX, z: aInZ, edgeMat: 0 });
+    rawPts.push({ x: aInX, z: aInZ, edgeMat: 0, skipSide: true });
   }
 
-  // Ensure strictly CCW `(X, Z)` orientation (`signedArea > 0`)
-  let area2 = 0;
-  for (let i = 0; i < rawPts.length; i++) {
-    const j = (i + 1) % rawPts.length;
-    area2 += rawPts[i].x * rawPts[j].z - rawPts[j].x * rawPts[i].z;
-  }
-  if (area2 < 0) {
-    // Reverse vertices and shift edgeMat indices so each edge keeps its original segment material!
-    const n = rawPts.length;
-    const rev: Array<{ x: number; z: number; edgeMat: 0 | 4 | 5 }> = [];
-    for (let i = 0; i < n; i++) {
-      const origIdx = (n - 1 - i + n) % n;
-      const prevEdgeIdx = (origIdx - 1 + n) % n;
-      rev.push({
-        x: rawPts[origIdx].x,
-        z: rawPts[origIdx].z,
-        edgeMat: rawPts[prevEdgeIdx].edgeMat,
-      });
-    }
-    collector.addExtrudedPolygonBlock(rev, 0, height);
-  } else {
-    collector.addExtrudedPolygonBlock(rawPts, 0, height);
-  }
+  collector.addExtrudedPolygonBlock(rawPts, 0, height);
 
   return collector.buildGeometry();
 }
