@@ -43,6 +43,7 @@ interface TransformToolbarProps {
   collapsed: boolean;
   suppressRollouts?: boolean;
   wallEditAngleLock?: boolean;
+  wallAngleSnapStepDeg?: number;
   onToggleWallEditAngleLock?: () => void;
   onToggleCollapse: () => void;
   onChangeMode: (mode: TransformMode) => void;
@@ -72,6 +73,7 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
   collapsed,
   suppressRollouts = false,
   wallEditAngleLock = true,
+  wallAngleSnapStepDeg = 45,
   onToggleWallEditAngleLock,
   onToggleCollapse,
   onChangeMode,
@@ -233,11 +235,11 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
             type="button"
             className={`tool-btn ${wallEditAngleLock ? 'active' : ''}`}
             onClick={onToggleWallEditAngleLock}
-            title={t.wallEditAngleLockLabel}
+            title={`${t.wallEditAngleLockLabel} · ${wallAngleSnapStepDeg}°`}
           >
             <Compass size={16} />
             <span className="tool-label">
-              {wallEditAngleLock ? '90° ON' : 'Bebas'}
+              {wallEditAngleLock ? `${wallAngleSnapStepDeg}° ON` : t.wallEditAngleFreeBadge}
             </span>
           </button>
         )}

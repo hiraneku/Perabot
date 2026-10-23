@@ -1616,7 +1616,7 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     photoTwoPointLabel: 'Perspektif 2-Titik Arsitektur (Garis Dinding Tegak Lurus)',
     touchLoupeSettingLabel: 'Kaca Pembesar Presisi Sentuh Saat Geser Sudut',
 
-    wallEditAngleLockLabel: 'Kunci Sudut Dinding (0°/45°/90°)',
+    wallEditAngleLockLabel: 'Kunci Sudut Dinding (interval dapat diatur)',
     wallEditAngleLockedBadge: 'Kunci Sudut: Aktif',
     wallEditAngleFreeBadge: 'Kunci Sudut: Bebas',
     archDrawModeBtn: 'Mode Pasang',
@@ -2451,7 +2451,7 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     photoTwoPointLabel: 'Architectural 2-Point Perspective (Plumb Vertical Lines)',
     touchLoupeSettingLabel: 'Touch Precision Magnifier Loupe While Dragging',
 
-    wallEditAngleLockLabel: 'Wall Angle Lock (0°/45°/90°)',
+    wallEditAngleLockLabel: 'Wall Angle Lock (configurable increment)',
     wallEditAngleLockedBadge: 'Angle Lock: ON',
     wallEditAngleFreeBadge: 'Angle Lock: Free',
     archDrawModeBtn: 'Place Mode',
@@ -3277,7 +3277,7 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     photoTwoPointLabel: '建築2点透視補正（垂直ラインを真っ直ぐ保つ）',
     touchLoupeSettingLabel: 'タッチ移動時の精密拡大ルーペを表示',
 
-    wallEditAngleLockLabel: '壁の角度ロック (0°/45°/90°)',
+    wallEditAngleLockLabel: '壁の角度ロック（間隔を設定可能）',
     wallEditAngleLockedBadge: '角度ロック: ON',
     wallEditAngleFreeBadge: '角度ロック: 自由',
     archDrawModeBtn: '配置モード',

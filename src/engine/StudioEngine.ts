@@ -1481,7 +1481,6 @@ export class StudioEngine {
 
   public setWallEditAngleLock(locked: boolean): void {
     this.wallEditAngleLock = locked;
-    this.wallDrawDefaults.angleSnap = locked;
     this.emitState();
   }
 
@@ -4791,7 +4790,7 @@ export class StudioEngine {
             effectiveRawXZ,
             this.activeFloorId,
             this.wallChainStart,
-            this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
+            this.wallDrawDefaults.angleSnap,
             snapStep,
             magnet.point,
             magnet.adaptiveWorldRadius,
@@ -5345,7 +5344,7 @@ export class StudioEngine {
             magnet.point ?? rawXZ!,
             this.activeFloorId,
             anchorPt,
-            this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
+            this.wallDrawDefaults.angleSnap,
             snapStep,
             magnet.point,
             magnet.adaptiveWorldRadius,
@@ -5658,7 +5657,7 @@ export class StudioEngine {
             curXZ,
             this.activeFloorId,
             startXZ,
-            this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
+            this.wallDrawDefaults.angleSnap,
             0.05,
             null,
             0,
@@ -6039,7 +6038,8 @@ export class StudioEngine {
           snapStep,
           null,
           0,
-          this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
+          this.wallDrawDefaults.activeTemplateId === 'diagonal-wall',
+          this.wallDrawDefaults.angleSnapStepDeg
         );
 
         if (!this.wallChainStart) {

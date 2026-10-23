@@ -2849,6 +2849,7 @@ export const App: React.FC = () => {
               canUngroup={canUngroupSelection}
               collapsed={leftSidebarCollapsed}
               wallEditAngleLock={wallEditAngleLock}
+              wallAngleSnapStepDeg={wallDefaults.angleSnapStepDeg}
               onToggleWallEditAngleLock={handleToggleWallEditAngleLock}
               onToggleCollapse={() => setLeftSidebarCollapsed((v) => !v)}
               onChangeMode={handleChangeMode}
