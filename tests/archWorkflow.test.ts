@@ -28,6 +28,7 @@ import {
   buildCornerFilletGeometry,
   buildManifoldWallBodyGeometry,
   computeFloorWallJunctions,
+  sampleAdvancedWallPathAtDistance,
 } from '../src/engine/WallGeometryEngine';
 import {
   WALL_TEMPLATES_CATALOG,
@@ -959,6 +960,81 @@ describe('Advanced Wall Editing & Transform Constraints', () => {
     );
     assert.ok(Math.abs(locked.angleDeg - 30) <= 1);
     assert.ok(Math.abs(locked.lengthM - 2) < 0.01);
+  });
+
+  it('sweeps cubic wall geometry by physical arc length so opening positions and curved baseboards track the wall', () => {
+    const wall = makeWall('curve-opening', { x: -2, z: 0 }, { x: 2, z: 0 }, {
+      pathMode: 'cubic-bezier',
+      bezierControl1Along: 0.12,
+      bezierControl1Offset: 1.2,
+      bezierControl2Along: 0.58,
+      bezierControl2Offset: -0.8,
+      thickness: 0.22,
+      hasBaseboard: true,
+    });
+    const quarterDistances = [0, 0.25, 0.5, 0.75, 1].map((ratio) =>
+      sampleAdvancedWallPathAtDistance(wall, ratio)
+    );
+    const spans = quarterDistances.slice(1).map((point, i) =>
+      Math.hypot(point.x - quarterDistances[i].x, point.z - quarterDistances[i].z)
+    );
+    assert.ok(Math.max(...spans) - Math.min(...spans) < 0.14,
+      `Equal physical-distance stations should be evenly distributed: ${spans.join(', ')}`);
+
+    const opening: ArchOpeningItem = {
+      id: 'curve-window', wallId: wall.id, floorId: wall.floorId, kind: 'window-std',
+      offsetRatio: 0.5, width: 0.9, height: 1.2, sillHeight: 0.9,
+      frameColor: '#334155', openingMaterialId: 'mat_window_glass',
+    };
+    const withOpening = buildManifoldWallBodyGeometry(wall, [opening]);
+    const withoutOpening = buildManifoldWallBodyGeometry(wall, []);
+    assert.ok(withOpening.bodyGeo.getAttribute('position').count > 0);
+    assert.ok(withOpening.trimExtrasGeo, 'Curved wall baseboard should be generated as a separate swept mesh');
+    assert.ok(withOpening.trimExtrasGeo!.getAttribute('position').count > 0);
+    assert.ok(withoutOpening.bodyGeo.getAttribute('position').count > 0);
+
+    const middle = sampleAdvancedWallPathAtDistance(wall, 0.5);
+    const normal = new THREE.Vector3(-middle.tz, 0, middle.tx);
+    const ray = new THREE.Raycaster(
+      new THREE.Vector3(middle.x + normal.x, 1.5, middle.z + normal.z),
+      normal.clone().negate(), 0, 2
+    );
+    const wallMesh = new THREE.Mesh(withOpening.bodyGeo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    wallMesh.updateMatrixWorld(true);
+    assert.equal(ray.intersectObject(wallMesh).length, 0,
+      'Ray through the window opening must pass through the curved wall');
+    wallMesh.material.dispose();
+    withOpening.bodyGeo.dispose(); withOpening.trimExtrasGeo!.dispose();
+    withoutOpening.bodyGeo.dispose();
+  });
+
+  it('joins a curved wall cleanly to a straight wall using endpoint tangents and keeps junction trims valid', () => {
+    const curved = makeWall('junction-curve', { x: -2, z: 0 }, { x: 0, z: 0 }, {
+      pathMode: 'cubic-bezier',
+      bezierControl1Along: 0.3,
+      bezierControl1Offset: 0.35,
+      bezierControl2Along: 0.75,
+      bezierControl2Offset: 0,
+      cornerStyle: 'rounded-outer',
+      cornerRadius: 0.12,
+      hasBaseboard: true,
+    });
+    const straight = makeWall('junction-straight', { x: 0, z: 0 }, { x: 0, z: 2 });
+    const plan = computeFloorWallJunctions([curved, straight]);
+    const curvedTrim = plan.endTrims.get(curved.id);
+    const straightTrim = plan.endTrims.get(straight.id);
+    assert.ok(curvedTrim && straightTrim);
+    assert.equal(curvedTrim!.end.isConnected, true);
+    assert.equal(straightTrim!.start.isConnected, true);
+    for (const wall of [curved, straight]) {
+      const trims = plan.endTrims.get(wall.id)!;
+      const geometry = buildManifoldWallBodyGeometry(wall, [], trims.start, trims.end);
+      assert.ok(geometry.bodyGeo.getAttribute('position').count > 0);
+      geometry.bodyGeo.dispose();
+      geometry.trimExtrasGeo?.dispose();
+      geometry.copingGeo?.dispose();
+    }
+    for (const fillet of plan.filletPieces) buildCornerFilletGeometry(fillet)?.dispose();
   });
 
   it('supports detailed, frame-relative cubic Bézier wall curves with smooth tangents and manifold output', () => {

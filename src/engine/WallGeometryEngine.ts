@@ -241,6 +241,50 @@ export function sampleAdvancedWallPath(
   };
 }
 
+const WALL_ARC_LENGTH_SAMPLES = 96;
+
+/** Maps normalized physical distance along the path to its native curve parameter.
+ * Curve parameters are not generally proportional to arc length (notably cubic Béziers),
+ * while openings, thickness transitions and swept geometry are specified in metres.
+ */
+export function createAdvancedWallDistanceSampler(
+  wall: Parameters<typeof sampleAdvancedWallPath>[0]
+): (distanceRatio: number) => PathSample2D {
+  const isCurved = Math.abs(wall.curveBulge) >= 0.015 ||
+    wall.pathMode === 's-curve' || wall.pathMode === 'j-curve-end' ||
+    wall.pathMode === 'cubic-bezier' || wall.endCap === 'curved';
+  if (!isCurved) {
+    return (distanceRatio: number) =>
+      sampleAdvancedWallPath(wall, Math.max(0, Math.min(1, distanceRatio)));
+  }
+  const points: PathSample2D[] = [sampleAdvancedWallPath(wall, 0)];
+  const cumulative = [0];
+  for (let i = 1; i <= WALL_ARC_LENGTH_SAMPLES; i++) {
+    const point = sampleAdvancedWallPath(wall, i / WALL_ARC_LENGTH_SAMPLES);
+    const prev = points[i - 1];
+    cumulative.push(cumulative[i - 1] + Math.hypot(point.x - prev.x, point.z - prev.z));
+    points.push(point);
+  }
+  const total = cumulative[WALL_ARC_LENGTH_SAMPLES];
+  return (distanceRatio: number) => {
+    const target = Math.max(0, Math.min(1, distanceRatio)) * total;
+    let upper = 1;
+    while (upper < cumulative.length - 1 && cumulative[upper] < target) upper++;
+    const lower = upper - 1;
+    const segment = cumulative[upper] - cumulative[lower];
+    const fraction = segment > 1e-10 ? (target - cumulative[lower]) / segment : 0;
+    const t = (lower + fraction) / WALL_ARC_LENGTH_SAMPLES;
+    return sampleAdvancedWallPath(wall, t);
+  };
+}
+
+export function sampleAdvancedWallPathAtDistance(
+  wall: Parameters<typeof sampleAdvancedWallPath>[0],
+  distanceRatio: number
+): PathSample2D {
+  return createAdvancedWallDistanceSampler(wall)(distanceRatio);
+}
+
 export function computeAdvancedWallLength(
   wall: Pick<
     ArchWallSegment,
@@ -265,11 +309,10 @@ export function computeAdvancedWallLength(
     wall.endCap === 'curved';
   if (!isCurved) return chord;
 
-  const steps = 32;
   let sum = 0;
   let prev = sampleAdvancedWallPath(wall, 0);
-  for (let i = 1; i <= steps; i++) {
-    const cur = sampleAdvancedWallPath(wall, i / steps);
+  for (let i = 1; i <= WALL_ARC_LENGTH_SAMPLES; i++) {
+    const cur = sampleAdvancedWallPath(wall, i / WALL_ARC_LENGTH_SAMPLES);
     sum += Math.hypot(cur.x - prev.x, cur.z - prev.z);
     prev = cur;
   }
@@ -1130,10 +1173,13 @@ export function buildManifoldWallBodyGeometry(
     .filter((o) => o.s1 - o.s0 >= 0.18)
     .sort((a, b) => a.s0 - b.s0);
 
+  // Reuse one arc-length lookup for every geometry station; cubic curve parameter t is non-linear in metres.
+  const sampleAtDistance = createAdvancedWallDistanceSampler(wall);
+
   // Helper: sample centerline, half-thickness, and top height at arc-length `s ∈ [0, totalLen]`
   const stationAtS = (s: number) => {
     const u = Math.max(0, Math.min(1, s / totalLen));
-    const pt = sampleAdvancedWallPath(wall, u);
+    const pt = sampleAtDistance(u);
     const halfT = (T0 + (T1 - T0) * u) * 0.5;
     const hTop = H0 + (H1 - H0) * u;
     const nLx = -pt.tz;
