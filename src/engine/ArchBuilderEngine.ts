@@ -1100,6 +1100,11 @@ function buildStaircaseGroup(
   return grp;
 }
 
+export interface WallVertexBinding {
+  wallId: string;
+  endpoint: 'start' | 'end';
+}
+
 export class ArchBuilderEngine {
   /** Exportable 3D architectural meshes (Walls, Cutout Doors/Windows, Room Floors, Stairs, Roofs) */
   public readonly structuralGroup = new THREE.Group();
@@ -1116,6 +1121,9 @@ export class ArchBuilderEngine {
   private selection: ArchSelection = null;
   private selections: Array<NonNullable<ArchSelection>> = [];
   private isBlueprint2D = false;
+  private showAllWallEndpointsIn3D = false;
+  private hudAngleLockOnText = 'Kunci Sudut ON';
+  private hudAngleLockFreeText = 'Sudut Bebas';
 
   constructor(initialData: ArchHouseData) {
     this.structuralGroup.name = 'PerabotArchitecturalStructure';
@@ -1142,6 +1150,15 @@ export class ArchBuilderEngine {
 
   public getSelection(): ArchSelection {
     return this.selection;
+  }
+
+  public setShowAllWallEndpointsIn3D(active: boolean): void {
+    this.showAllWallEndpointsIn3D = active;
+  }
+
+  public setHudAngleLockLabels(onText: string, freeText: string): void {
+    if (onText) this.hudAngleLockOnText = onText;
+    if (freeText) this.hudAngleLockFreeText = freeText;
   }
 
   public setSelection(sel: ArchSelection): void {
@@ -1277,7 +1294,9 @@ export class ArchBuilderEngine {
     floorId: string,
     anchorStart: Vec2XZ | null,
     angleSnap: boolean,
-    gridStep: number
+    gridStep: number,
+    forcedEndpointSnap?: Vec2XZ | null,
+    extraEndpointRadiusM = 0
   ): {
     point: Vec2XZ;
     snappedEndpoint: boolean;
@@ -1292,24 +1311,40 @@ export class ArchBuilderEngine {
     let snappedWallBody = false;
     const guideLines: Array<{ from: Vec2XZ; to: Vec2XZ }> = [];
 
+    // 0. Screen-space / 3D-corner magnetic capture override (eliminates 3D wall height parallax & zoom-out thumb misses!)
+    if (
+      forcedEndpointSnap &&
+      (!anchorStart ||
+        Math.hypot(
+          forcedEndpointSnap.x - anchorStart.x,
+          forcedEndpointSnap.z - anchorStart.z
+        ) >= 0.05)
+    ) {
+      x = forcedEndpointSnap.x;
+      z = forcedEndpointSnap.z;
+      snappedEndpoint = true;
+    }
+
     // 1. Endpoint Magnet on the active floor
-    const ENDPOINT_RADIUS = 0.32;
+    const ENDPOINT_RADIUS = Math.max(0.38, extraEndpointRadiusM);
     let bestDist = ENDPOINT_RADIUS;
-    for (const w of this.data.walls) {
-      if (w.floorId !== floorId) continue;
-      for (const pt of [w.start, w.end]) {
-        if (
-          anchorStart &&
-          Math.hypot(pt.x - anchorStart.x, pt.z - anchorStart.z) < 0.05
-        ) {
-          continue;
-        }
-        const d = Math.hypot(pt.x - rawXZ.x, pt.z - rawXZ.z);
-        if (d < bestDist) {
-          bestDist = d;
-          x = pt.x;
-          z = pt.z;
-          snappedEndpoint = true;
+    if (!snappedEndpoint) {
+      for (const w of this.data.walls) {
+        if (w.floorId !== floorId) continue;
+        for (const pt of [w.start, w.end]) {
+          if (
+            anchorStart &&
+            Math.hypot(pt.x - anchorStart.x, pt.z - anchorStart.z) < 0.05
+          ) {
+            continue;
+          }
+          const d = Math.hypot(pt.x - rawXZ.x, pt.z - rawXZ.z);
+          if (d < bestDist) {
+            bestDist = d;
+            x = pt.x;
+            z = pt.z;
+            snappedEndpoint = true;
+          }
         }
       }
     }
@@ -1561,7 +1596,7 @@ export class ArchBuilderEngine {
             Math.hypot(w.end.x - cleanStart.x, w.end.z - cleanStart.z) < 0.08))
     );
     if (dup) {
-      this.selection = { kind: 'wall', id: dup.id };
+      this.setSelection({ kind: 'wall', id: dup.id });
       return dup;
     }
 
@@ -1633,7 +1668,7 @@ export class ArchBuilderEngine {
           lastCreated = subW;
         }
         if (lastCreated) {
-          this.selection = { kind: 'wall', id: lastCreated.id };
+          this.setSelection({ kind: 'wall', id: lastCreated.id });
         }
         return lastCreated;
       }
@@ -1667,7 +1702,7 @@ export class ArchBuilderEngine {
         defaults.style === 'railing' ? undefined : 'mat_paint_interior',
     };
     this.data.walls.push(wall);
-    this.selection = { kind: 'wall', id: wall.id };
+    this.setSelection({ kind: 'wall', id: wall.id });
     return wall;
   }
 
@@ -1787,10 +1822,35 @@ export class ArchBuilderEngine {
     );
   }
 
+  public clampOpeningsToWall(wall: ArchWallSegment): void {
+    const wallLen = Math.max(0.25, computeWallLength(wall));
+    const maxW = Math.max(0.35, wallLen - 0.24);
+    for (const op of this.data.openings) {
+      if (op.wallId !== wall.id) continue;
+      if (op.width > maxW) {
+        op.width = round3(maxW);
+      }
+      const maxH = Math.max(0.4, wall.height - 0.12);
+      if (op.height > maxH) {
+        op.height = round3(maxH);
+      }
+      const maxSill = Math.max(0, wall.height - op.height - 0.06);
+      if (op.sillHeight > maxSill) {
+        op.sillHeight = round3(maxSill);
+      }
+      const minRatio = Math.min(0.48, (op.width * 0.5 + 0.06) / wallLen);
+      const maxRatio = Math.max(0.52, 1 - minRatio);
+      op.offsetRatio = round3(
+        Math.max(minRatio, Math.min(maxRatio, op.offsetRatio))
+      );
+    }
+  }
+
   public updateWall(id: string, patch: Partial<ArchWallSegment>): boolean {
     const w = this.data.walls.find((x) => x.id === id);
     if (!w) return false;
     Object.assign(w, patch);
+    this.clampOpeningsToWall(w);
     return true;
   }
 
@@ -1815,6 +1875,73 @@ export class ArchBuilderEngine {
   }
 
   /**
+   * Captures the exact wall endpoint binding(s) ONCE at drag start (`pointerdown`) so dragging a wall
+   * across/onto another wall NEVER kidnaps or welds bystander walls!
+   * When one or more walls are explicitly selected and touch `vertexXZ`, ONLY those selected wall(s)
+   * are bound — so dragging a selected wall away from an overlapped wall leaves the other wall untouched.
+   */
+  public captureWallVertexBindings(
+    floorId: string,
+    vertexXZ: Vec2XZ
+  ): WallVertexBinding[] {
+    const EPS = 0.095;
+    const allAtVertex: WallVertexBinding[] = [];
+    const selectedWallIds = new Set(
+      this.selections.filter((s) => s.kind === 'wall').map((s) => s.id)
+    );
+    if (this.selection?.kind === 'wall') {
+      selectedWallIds.add(this.selection.id);
+    }
+
+    for (const w of this.data.walls) {
+      if (w.floorId !== floorId) continue;
+      if (Math.hypot(w.start.x - vertexXZ.x, w.start.z - vertexXZ.z) <= EPS) {
+        allAtVertex.push({ wallId: w.id, endpoint: 'start' });
+      } else if (
+        Math.hypot(w.end.x - vertexXZ.x, w.end.z - vertexXZ.z) <= EPS
+      ) {
+        allAtVertex.push({ wallId: w.id, endpoint: 'end' });
+      }
+    }
+
+    if (selectedWallIds.size > 0) {
+      const selectedMatches = allAtVertex.filter((b) =>
+        selectedWallIds.has(b.wallId)
+      );
+      if (selectedMatches.length > 0) {
+        return selectedMatches;
+      }
+    }
+
+    return allAtVertex;
+  }
+
+  /**
+   * Moves ONLY the pre-captured `bindings` to `newXZ` (zero mid-drag bystander welding!).
+   */
+  public applyWallVertexBindings(
+    bindings: ReadonlyArray<WallVertexBinding>,
+    newXZ: Vec2XZ
+  ): number {
+    let moved = 0;
+    const cleanPt = { x: round3(newXZ.x), z: round3(newXZ.z) };
+    for (const b of bindings) {
+      const w = this.data.walls.find((x) => x.id === b.wallId);
+      if (!w) continue;
+      if (b.endpoint === 'start') {
+        if (Math.hypot(w.end.x - cleanPt.x, w.end.z - cleanPt.z) < 0.2) continue;
+        w.start = { ...cleanPt };
+      } else {
+        if (Math.hypot(w.start.x - cleanPt.x, w.start.z - cleanPt.z) < 0.2) continue;
+        w.end = { ...cleanPt };
+      }
+      this.clampOpeningsToWall(w);
+      moved++;
+    }
+    return moved;
+  }
+
+  /**
    * Moves ALL wall endpoints connected to `oldXZ` on `floorId` simultaneously (Direct Viewport Node Drag!)
    */
   public moveConnectedWallVertex(
@@ -1828,9 +1955,11 @@ export class ArchBuilderEngine {
       if (w.floorId !== floorId) continue;
       if (Math.hypot(w.start.x - oldXZ.x, w.start.z - oldXZ.z) <= EPS) {
         w.start = { x: round3(newXZ.x), z: round3(newXZ.z) };
+        this.clampOpeningsToWall(w);
         moved++;
       } else if (Math.hypot(w.end.x - oldXZ.x, w.end.z - oldXZ.z) <= EPS) {
         w.end = { x: round3(newXZ.x), z: round3(newXZ.z) };
+        this.clampOpeningsToWall(w);
         moved++;
       }
     }
@@ -1934,12 +2063,61 @@ export class ArchBuilderEngine {
         ? Math.min(preset.sillHeight, Math.max(0, wall.height - height - 0.1))
         : 0;
 
+    const minRatio = Math.min(0.45, (width * 0.5 + 0.08) / Math.max(0.5, wallLen));
+    const maxRatio = Math.max(0.55, 1 - minRatio);
+    let cleanRatio = Math.max(minRatio, Math.min(maxRatio, offsetRatio));
+
+    // Prevent accidental duplicate stacked doors/windows at the same spot on the wall!
+    const existingOnWall = this.data.openings.filter((o) => o.wallId === wall.id);
+    const overlapsAt = (r: number) =>
+      existingOnWall.find(
+        (ex) =>
+          Math.abs(r - ex.offsetRatio) * wallLen <
+          (width + ex.width) * 0.5 + 0.08
+      );
+
+    const directHit = overlapsAt(cleanRatio);
+    if (directHit) {
+      // If user clicked almost directly on an existing opening of the same kind, select it instead of stacking!
+      if (
+        directHit.kind === kind &&
+        Math.abs(cleanRatio - directHit.offsetRatio) * wallLen <
+          directHit.width * 0.38
+      ) {
+        this.setSelection({ kind: 'opening', id: directHit.id });
+        return directHit;
+      }
+      // Try finding the nearest non-overlapping slot along this wall
+      let foundFree: number | null = null;
+      for (let step = 1; step <= 18; step++) {
+        const delta = step * 0.05;
+        for (const cand of [cleanRatio + delta, cleanRatio - delta]) {
+          if (cand < minRatio || cand > maxRatio) continue;
+          if (!overlapsAt(cand)) {
+            foundFree = cand;
+            break;
+          }
+        }
+        if (foundFree !== null) break;
+      }
+      if (foundFree === null) {
+        // Wall has no remaining free span: replace/update the hit opening cleanly rather than Z-fighting!
+        directHit.kind = kind;
+        directHit.width = round3(width);
+        directHit.height = round3(height);
+        directHit.sillHeight = round3(sill);
+        this.setSelection({ kind: 'opening', id: directHit.id });
+        return directHit;
+      }
+      cleanRatio = foundFree;
+    }
+
     const item: ArchOpeningItem = {
       id: `open_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       wallId: wall.id,
       floorId: wall.floorId,
       kind,
-      offsetRatio: Math.max(0.12, Math.min(0.88, offsetRatio)),
+      offsetRatio: round3(cleanRatio),
       width: round3(width),
       height: round3(height),
       sillHeight: round3(sill),
@@ -1953,7 +2131,7 @@ export class ArchBuilderEngine {
           : 'mat_window_alu_glass',
     };
     this.data.openings.push(item);
-    this.selection = { kind: 'opening', id: item.id };
+    this.setSelection({ kind: 'opening', id: item.id });
     return item;
   }
 
@@ -3077,32 +3255,39 @@ export class ArchBuilderEngine {
         }
       }
 
-      // 2D Blueprint Architectural Wall Length Dimension Label
+      // 2D Blueprint Architectural Wall Length Dimension Label (with overlap de-duplication!)
       if (this.isBlueprint2D && activeFl && wall.floorId === activeFl.id) {
         const lenM = computeWallLength(wall);
         if (lenM >= 0.4) {
           const mid = sampleWallCurvePoint(wall, 0.5);
           const nx = -mid.tz;
           const nz = mid.tx;
+          let lx = mid.x + nx * 0.28;
+          let lz = mid.z + nz * 0.28;
+          // If another label is already very close to (lx, lz), flip to opposite normal side or nudge cleanly
+          const collides = this.labelsGroup.children.some(
+            (ch) => Math.hypot(ch.position.x - lx, ch.position.z - lz) < 0.42
+          );
+          if (collides) {
+            lx = mid.x - nx * 0.34;
+            lz = mid.z - nz * 0.34;
+          }
           const dimSprite = makeLabelSprite(`${lenM.toFixed(2)} m`, undefined, {
             bg: 'rgba(15, 23, 42, 0.88)',
             border: 'rgba(148, 163, 184, 0.55)',
             titleColor: '#e2e8f0',
             scale: 0.78,
           });
-          dimSprite.position.set(
-            mid.x + nx * 0.28,
-            fStyle.baseY + wall.height + 0.25,
-            mid.z + nz * 0.28
-          );
+          dimSprite.position.set(lx, fStyle.baseY + wall.height + 0.25, lz);
           this.labelsGroup.add(dimSprite);
         }
       }
     }
 
-    // Add seamless Corner Junction Columns + Draggable Corner Node Handles!
-    // In 3D Studio, ONLY selected walls display prominent glowing corner handles so unselected walls stay crisp and unmistakable.
-    // In 2D Denah, selected walls display bright Amber/Cyan handles and unselected joints show subtle blueprint nodes.
+    // Add seamless Corner Junction Columns + Draggable / Magnetic Corner Node Handles!
+    // - In 3D Studio `select` mode: ONLY selected walls display prominent glowing corner handles.
+    // - In 3D Studio `draw-wall` / `draw-room` mode (`showAllWallEndpointsIn3D = true`): ALL active-floor wall endpoints display crisp magnetic target beacons so snapping from existing wall ends is effortless!
+    // - In 2D Denah: selected walls display bright Amber handles and unselected joints show subtle blueprint nodes.
     const selectedWallCornerKeys = new Set<string>();
     for (const w of this.data.walls) {
       if (!activeFl || w.floorId !== activeFl.id) continue;
@@ -3116,7 +3301,9 @@ export class ArchBuilderEngine {
     for (const w of this.data.walls) {
       if (!activeFl || w.floorId !== activeFl.id) continue;
       const wallSelected = this.isElementSelected('wall', w.id).selected;
-      if (!this.isBlueprint2D && !wallSelected) continue;
+      if (!this.isBlueprint2D && !wallSelected && !this.showAllWallEndpointsIn3D) {
+        continue;
+      }
 
       for (const pt of [w.start, w.end]) {
         const hk = `${Math.round(pt.x * 20)}:${Math.round(pt.z * 20)}`;
@@ -3124,10 +3311,13 @@ export class ArchBuilderEngine {
         handleAddedKeys.add(hk);
 
         const isActiveCorner = selectedWallCornerKeys.has(hk);
+        const isDrawBeacon = !isActiveCorner && this.showAllWallEndpointsIn3D;
         const handleRadius = isActiveCorner
           ? this.isBlueprint2D
             ? 0.24
             : 0.19
+          : isDrawBeacon
+          ? 0.17
           : 0.12;
         const hGeo = new THREE.CylinderGeometry(
           handleRadius,
@@ -3136,9 +3326,13 @@ export class ArchBuilderEngine {
           20
         );
         const hMat = new THREE.MeshBasicMaterial({
-          color: isActiveCorner ? '#fbbf24' : '#38bdf8',
+          color: isActiveCorner
+            ? '#fbbf24'
+            : isDrawBeacon
+            ? '#10b981'
+            : '#38bdf8',
           transparent: true,
-          opacity: isActiveCorner ? 0.96 : 0.48,
+          opacity: isActiveCorner ? 0.96 : isDrawBeacon ? 0.88 : 0.48,
           depthTest: false,
         });
         const hMesh = new THREE.Mesh(hGeo, hMat);
@@ -3153,6 +3347,7 @@ export class ArchBuilderEngine {
           floorId: activeFl.id,
           nodeX: pt.x,
           nodeZ: pt.z,
+          wallHeight: w.height,
         };
         this.handlesGroup.add(hMesh);
       }
@@ -3533,8 +3728,9 @@ export class ArchBuilderEngine {
           ? Math.min(1, 0.32 / Math.max(0.4, fullH))
           : 1;
 
+        const baseY = (child.userData.baseY as number | undefined) ?? 0;
         for (const sub of child.children) {
-          // wallHolder for straight walls sits at local y = baseY!
+          // wallHolder / curvedHolder / segHolder sits at local y = baseY!
           if (sub.type === 'Group') {
             sub.scale.y = cutRatio;
             for (const opChild of sub.children) {
@@ -3547,6 +3743,10 @@ export class ArchBuilderEngine {
                 }
               }
             }
+          } else if ((sub as THREE.Mesh).isMesh) {
+            // Railing vertical posts sit directly under grp
+            sub.scale.y = cutRatio;
+            sub.position.y = baseY + fullH * cutRatio * 0.5;
           }
         }
         continue;
@@ -3902,7 +4102,8 @@ export class ArchBuilderEngine {
     baseY: number,
     defaults: WallDrawDefaults,
     hoverPoint: Vec2XZ | null,
-    guideLines?: Array<{ from: Vec2XZ; to: Vec2XZ }>
+    guideLines?: Array<{ from: Vec2XZ; to: Vec2XZ }>,
+    isEndpointLocked = false
   ): void {
     disposeObjectTree(this.previewGroup);
     this.previewGroup.clear();
@@ -3927,19 +4128,56 @@ export class ArchBuilderEngine {
       this.previewGroup.add(gLine);
     }
 
+    if (start) {
+      const anchorDot = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.14, 0.14, 0.12, 20),
+        new THREE.MeshBasicMaterial({
+          color: '#fbbf24',
+          transparent: true,
+          opacity: 0.96,
+          depthTest: false,
+        })
+      );
+      anchorDot.position.set(start.x, baseY + 0.07, start.z);
+      anchorDot.renderOrder = 26;
+      anchorDot.raycast = () => {};
+      this.previewGroup.add(anchorDot);
+    }
+
     if (hoverPoint) {
-      const ringGeo = new THREE.RingGeometry(0.11, 0.17, 24);
+      const ringGeo = new THREE.RingGeometry(
+        isEndpointLocked ? 0.15 : 0.11,
+        isEndpointLocked ? 0.25 : 0.17,
+        28
+      );
       ringGeo.rotateX(-Math.PI * 0.5);
       const ringMat = new THREE.MeshBasicMaterial({
-        color: '#38bdf8',
+        color: isEndpointLocked ? '#10b981' : '#38bdf8',
         transparent: true,
-        opacity: 0.9,
+        opacity: 0.95,
         depthTest: false,
       });
       const ring = new THREE.Mesh(ringGeo, ringMat);
-      ring.position.set(hoverPoint.x, baseY + 0.03, hoverPoint.z);
+      ring.position.set(hoverPoint.x, baseY + 0.04, hoverPoint.z);
+      ring.renderOrder = 26;
       ring.raycast = () => {};
       this.previewGroup.add(ring);
+
+      if (isEndpointLocked) {
+        const coreDot = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.11, 0.11, 0.14, 20),
+          new THREE.MeshBasicMaterial({
+            color: '#34d399',
+            transparent: true,
+            opacity: 0.96,
+            depthTest: false,
+          })
+        );
+        coreDot.position.set(hoverPoint.x, baseY + 0.08, hoverPoint.z);
+        coreDot.renderOrder = 27;
+        coreDot.raycast = () => {};
+        this.previewGroup.add(coreDot);
+      }
     }
 
     if (!start || !end) return;
@@ -4274,7 +4512,8 @@ export class ArchBuilderEngine {
     currentVertexXZ: Vec2XZ,
     rawTargetXZ: Vec2XZ,
     angleLock: boolean,
-    gridStep = 0.05
+    gridStep = 0.05,
+    explicitBindings?: ReadonlyArray<WallVertexBinding>
   ): {
     point: Vec2XZ;
     snappedEndpoint: boolean;
@@ -4286,18 +4525,50 @@ export class ArchBuilderEngine {
     const anchors: Vec2XZ[] = [];
     const otherNodes: Vec2XZ[] = [];
 
-    for (const w of this.data.walls) {
-      if (w.floorId !== floorId) continue;
-      const startMatches =
-        Math.hypot(w.start.x - currentVertexXZ.x, w.start.z - currentVertexXZ.z) <= EPS;
-      const endMatches =
-        Math.hypot(w.end.x - currentVertexXZ.x, w.end.z - currentVertexXZ.z) <= EPS;
-      if (startMatches && !endMatches) {
-        anchors.push({ ...w.end });
-      } else if (endMatches && !startMatches) {
-        anchors.push({ ...w.start });
-      } else {
-        otherNodes.push({ ...w.start }, { ...w.end });
+    if (explicitBindings && explicitBindings.length > 0) {
+      const boundStartIds = new Set(
+        explicitBindings
+          .filter((b) => b.endpoint === 'start')
+          .map((b) => b.wallId)
+      );
+      const boundEndIds = new Set(
+        explicitBindings
+          .filter((b) => b.endpoint === 'end')
+          .map((b) => b.wallId)
+      );
+
+      for (const w of this.data.walls) {
+        if (w.floorId !== floorId) continue;
+        const isBoundStart = boundStartIds.has(w.id);
+        const isBoundEnd = boundEndIds.has(w.id);
+        if (isBoundStart && !isBoundEnd) {
+          anchors.push({ ...w.end });
+        } else if (isBoundEnd && !isBoundStart) {
+          anchors.push({ ...w.start });
+        } else if (!isBoundStart && !isBoundEnd) {
+          otherNodes.push({ ...w.start }, { ...w.end });
+        }
+      }
+    } else {
+      for (const w of this.data.walls) {
+        if (w.floorId !== floorId) continue;
+        const startMatches =
+          Math.hypot(
+            w.start.x - currentVertexXZ.x,
+            w.start.z - currentVertexXZ.z
+          ) <= EPS;
+        const endMatches =
+          Math.hypot(
+            w.end.x - currentVertexXZ.x,
+            w.end.z - currentVertexXZ.z
+          ) <= EPS;
+        if (startMatches && !endMatches) {
+          anchors.push({ ...w.end });
+        } else if (endMatches && !startMatches) {
+          anchors.push({ ...w.start });
+        } else {
+          otherNodes.push({ ...w.start }, { ...w.end });
+        }
       }
     }
 
@@ -4463,7 +4734,7 @@ export class ArchBuilderEngine {
     if (lengthM !== null && angleDeg !== null) {
       const badge = makeLabelSprite(
         `${lengthM.toFixed(2)} m · ${angleDeg}°`,
-        angleLocked ? 'Kunci Sudut ON' : 'Sudut Bebas',
+        angleLocked ? this.hudAngleLockOnText : this.hudAngleLockFreeText,
         {
           bg: angleLocked ? 'rgba(69, 26, 3, 0.92)' : 'rgba(15, 23, 42, 0.92)',
           border: lineColor,
@@ -4611,6 +4882,69 @@ export class ArchBuilderEngine {
   }
 
   /**
+   * Computes magnetic endpoint-alignment delta `(dx, dz)` when moving wall(s) via the RGB Move Gizmo,
+   * snapping moved wall corners cleanly against stationary wall corners WITHOUT merging/welding IDs!
+   */
+  public computeWallTranslateSnapDelta(
+    items: Array<NonNullable<ArchSelection>>,
+    rawDx: number,
+    rawDz: number,
+    magnetRadius = 0.26
+  ): {
+    dx: number;
+    dz: number;
+    snappedPoint: Vec2XZ | null;
+  } {
+    const movingWallIds = new Set(
+      items.filter((it) => it.kind === 'wall').map((it) => it.id)
+    );
+    if (movingWallIds.size === 0 || magnetRadius <= 0) {
+      return { dx: rawDx, dz: rawDz, snappedPoint: null };
+    }
+
+    const movingWalls = this.data.walls.filter((w) => movingWallIds.has(w.id));
+    if (movingWalls.length === 0) {
+      return { dx: rawDx, dz: rawDz, snappedPoint: null };
+    }
+
+    let bestDist = magnetRadius;
+    let bestAdjX = 0;
+    let bestAdjZ = 0;
+    let snappedPoint: Vec2XZ | null = null;
+
+    for (const mw of movingWalls) {
+      const candidatePts: Vec2XZ[] = [
+        { x: mw.start.x + rawDx, z: mw.start.z + rawDz },
+        { x: mw.end.x + rawDx, z: mw.end.z + rawDz },
+      ];
+      for (const sw of this.data.walls) {
+        if (sw.floorId !== mw.floorId || movingWallIds.has(sw.id)) continue;
+        for (const targetPt of [sw.start, sw.end]) {
+          for (const cp of candidatePts) {
+            const d = Math.hypot(targetPt.x - cp.x, targetPt.z - cp.z);
+            if (d < bestDist) {
+              bestDist = d;
+              bestAdjX = targetPt.x - cp.x;
+              bestAdjZ = targetPt.z - cp.z;
+              snappedPoint = { ...targetPt };
+            }
+          }
+        }
+      }
+    }
+
+    if (snappedPoint) {
+      return {
+        dx: round3(rawDx + bestAdjX),
+        dz: round3(rawDz + bestAdjZ),
+        snappedPoint,
+      };
+    }
+
+    return { dx: rawDx, dz: rawDz, snappedPoint: null };
+  }
+
+  /**
    * Translates selected architectural elements in 3D space (Move Gizmo, Keyboard Nudges, Repeat Array).
    */
   public translateArchElements(
@@ -4752,6 +5086,7 @@ export class ArchBuilderEngine {
       };
       w.height = round3(Math.max(0.3, Math.min(16, dims.y)));
       w.thickness = round3(Math.max(0.06, Math.min(1.5, dims.z)));
+      this.clampOpeningsToWall(w);
       return true;
     }
 

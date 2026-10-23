@@ -7004,16 +7004,23 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 11px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(56, 189, 248, 0.55);
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.48);
   color: #e0f2fe;
   font-size: 11.5px;
   font-weight: 500;
-  max-width: 100%;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+  max-width: calc(100vw - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.32);
+}
+
+.arch-tool-hint-pill::-webkit-scrollbar {
+  display: none;
 }
 
 .arch-tool-hint-pill span {
@@ -8024,27 +8031,40 @@ html[data-theme='daylight'] .agb-save-asset-btn {
 
 .arch-pending-commit-bar,
 .arch-quick-action-bar {
+  pointer-events: auto;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(56, 189, 248, 0.42);
+  flex-wrap: nowrap;
+  gap: 5px;
+  padding: 4px 7px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.44);
   backdrop-filter: blur(12px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.36);
+  max-width: calc(100vw - 24px);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.arch-pending-commit-bar::-webkit-scrollbar,
+.arch-quick-action-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .arch-commit-ok-btn {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   gap: 5px;
-  padding: 5px 12px;
-  border-radius: 999px;
+  padding: 5px 11px;
+  border-radius: 9px;
   border: 1px solid rgba(52, 211, 153, 0.75);
   background: linear-gradient(135deg, #059669, #10b981);
   color: #ffffff;
-  font-size: 11.8px;
+  font-size: 11.6px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -8052,13 +8072,15 @@ html[data-theme='daylight'] .agb-save-asset-btn {
 .arch-commit-cancel-btn {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   gap: 4px;
-  padding: 5px 11px;
-  border-radius: 999px;
+  padding: 5px 10px;
+  border-radius: 9px;
   border: 1px solid rgba(148, 163, 184, 0.38);
   background: rgba(30, 41, 59, 0.85);
   color: #e2e8f0;
-  font-size: 11.5px;
+  font-size: 11.4px;
   font-weight: 600;
   cursor: pointer;
 }
@@ -8066,13 +8088,15 @@ html[data-theme='daylight'] .agb-save-asset-btn {
 .arch-qa-btn {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   gap: 5px;
-  padding: 4px 10px;
-  border-radius: 999px;
+  padding: 5px 9px;
+  border-radius: 9px;
   border: 1px solid rgba(148, 163, 184, 0.32);
-  background: rgba(30, 41, 59, 0.78);
+  background: rgba(30, 41, 59, 0.82);
   color: #e2e8f0;
-  font-size: 11.4px;
+  font-size: 11.3px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.14s ease, border-color 0.14s ease;
@@ -9143,22 +9167,30 @@ html[data-theme='daylight'] .agb-save-asset-btn {
 .quick-dim-pill {
   position: absolute;
   left: 50%;
-  bottom: 92px;
+  bottom: 12px;
   transform: translateX(-50%);
   z-index: 26;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  flex-wrap: nowrap;
+  gap: 7px;
+  padding: 5px 12px;
   border-radius: 999px;
   background: rgba(15, 23, 42, 0.9);
   backdrop-filter: blur(10px);
   border: 1px solid rgba(148, 163, 184, 0.28);
   color: #f8fafc;
-  font-size: 12px;
+  font-size: 11.6px;
   font-weight: 600;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.34);
   max-width: calc(100vw - 24px);
+}
+
+.quick-dim-pill::-webkit-scrollbar {
+  display: none;
 }
 
 .quick-dim-pill.clickable {
@@ -9282,25 +9314,57 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   cursor: pointer;
 }
 
-/* Floating 2.2x Touch Precision Magnifier Loupe */
+/* Floating 2.8x Retina Touch Precision Magnifier Loupe */
 .touch-precision-loupe {
   position: fixed;
   z-index: 95;
-  width: 108px;
-  height: 108px;
+  width: 118px;
+  height: 118px;
   transform: translate(-50%, -50%);
   border-radius: 50%;
   overflow: hidden;
-  border: 2.5px solid #34d399;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 0 2px rgba(15, 23, 42, 0.85);
+  border: 2.5px solid #38bdf8;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.58), 0 0 0 2px rgba(15, 23, 42, 0.9);
   pointer-events: none;
   background: #0f172a;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.touch-precision-loupe.is-snapped {
+  border-color: #10b981;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.58),
+    0 0 0 2px rgba(15, 23, 42, 0.9),
+    0 0 16px rgba(16, 185, 129, 0.5);
 }
 
 .touch-precision-loupe canvas {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.touch-loupe-tag {
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  transform: translateX(-50%);
+  padding: 1.5px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #f8fafc;
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: 102px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.touch-precision-loupe.is-snapped .touch-loupe-tag {
+  background: rgba(6, 78, 59, 0.94);
+  border-color: rgba(52, 211, 153, 0.72);
+  color: #a7f3d0;
 }
 
 /* Walkthrough Gen-2 Dual-Pad & Interactive Proximity HUD */
@@ -9377,7 +9441,7 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   }
 
   .quick-dim-pill {
-    bottom: 72px;
+    bottom: 10px;
   }
 }
 
@@ -9386,11 +9450,22 @@ html[data-theme='daylight'] .agb-save-asset-btn {
    ========================================================= */
 
 /* #1 Left Toolbar Never Collides with Buat Rumah Utility Bar (.arch-studio-hud) */
-.left-toolbar .toolbar-collapse-icon-btn {
+.toolbar-collapse-sticky-head {
   position: sticky;
-  top: 0;
-  z-index: 4;
-  background: var(--bg-panel-solid);
+  top: -5px;
+  z-index: 5;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 2px;
+  background: var(--bg-panel);
+  border-radius: 7px 7px 0 0;
+  flex-shrink: 0;
+}
+
+.left-toolbar .toolbar-collapse-icon-btn {
+  background: transparent;
   border-radius: 7px;
   flex-shrink: 0;
 }
@@ -9402,6 +9477,7 @@ html[data-theme='daylight'] .agb-save-asset-btn {
 
 .left-toolbar-expand-tab.house-mode {
   top: 58px;
+  transform: none;
 }
 
 .left-toolbar-shell.house-mode .select-rollout-bar {
@@ -9560,6 +9636,7 @@ html[data-theme='daylight'] .agb-save-asset-btn {
 
   .left-toolbar-expand-tab.house-mode {
     top: 54px;
+    transform: none;
   }
 
   .left-toolbar-shell.house-mode .select-rollout-bar {
@@ -9575,10 +9652,15 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   }
 
   .arch-tool-hint-pill {
-    flex-wrap: wrap;
-    justify-content: center;
-    max-width: calc(100vw - 74px);
-    margin-left: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    max-width: calc(100vw - 20px);
+    padding: 4px 7px;
+    gap: 5px;
+  }
+
+  .arch-tool-hint-pill .arch-hint-text.hide-on-compact {
+    display: none;
   }
 }
 

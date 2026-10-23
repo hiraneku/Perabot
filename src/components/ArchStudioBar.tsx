@@ -380,7 +380,7 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
         </div>
       )}
 
-      {/* Smart Draw vs Pan/Zoom Disambiguation + Angle Lock Pill */}
+      {/* Compact Single-Row Draw / Pan Disambiguation Strip (Zero Duplicate Controls, Zero Viewport Bloat) */}
       {activeHint && !pendingArchCommit && (
         <div className="arch-tool-hint-pill">
           {(archTool === 'draw-wall' ||
@@ -394,9 +394,10 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
                     !archNavPanMode ? 'active' : ''
                   }`}
                   onClick={() => onToggleArchNavPanMode(false)}
+                  title={t.archDrawModeBtn}
                 >
                   <BrickWall size={12} />
-                  <span>{t.archDrawModeBtn}</span>
+                  <span>{t.archDrawModeCompact}</span>
                 </button>
                 <button
                   type="button"
@@ -404,32 +405,23 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
                     archNavPanMode ? 'active' : ''
                   }`}
                   onClick={() => onToggleArchNavPanMode(true)}
+                  title={t.archPanZoomModeBtn}
                 >
                   <Hand size={12} />
-                  <span>{t.archPanZoomModeBtn}</span>
+                  <span>{t.archPanModeCompact}</span>
                 </button>
               </div>
             )}
 
-          {archTool === 'draw-wall' && onToggleWallEditAngleLock && (
-            <button
-              type="button"
-              className={`arch-angle-toggle-chip ${
-                wallEditAngleLock ? 'active' : ''
-              }`}
-              onClick={onToggleWallEditAngleLock}
-              title={t.wallEditAngleLockLabel}
-            >
-              <Compass size={12} />
-              <span>
-                {wallEditAngleLock
-                  ? t.wallEditAngleLockedBadge
-                  : t.wallEditAngleFreeBadge}
-              </span>
-            </button>
-          )}
-
-          <span className="arch-hint-text">
+          <span
+            className={`arch-hint-text ${
+              archTool === 'draw-wall' ||
+              archTool === 'draw-room' ||
+              archTool === 'place-opening'
+                ? 'hide-on-compact'
+                : ''
+            }`}
+          >
             {archNavPanMode ? t.archTwoFingerHint : activeHint}
           </span>
 
@@ -458,6 +450,7 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
                   type="button"
                   className="arch-exact-commit-btn"
                   onClick={submitExactWall}
+                  title={t.archApplyLengthBtn}
                 >
                   <Check size={12} />
                   <span>{t.archApplyLengthBtn}</span>

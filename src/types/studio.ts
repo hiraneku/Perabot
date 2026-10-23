@@ -1351,6 +1351,16 @@ export const MAGNET_RADIUS_MAP: Record<MagnetStrength, number> = {
   strong: 0.36,
 };
 
+export interface TouchLoupeState {
+  active: boolean;
+  clientX: number;
+  clientY: number;
+  targetX: number;
+  targetY: number;
+  snapped?: boolean;
+  label?: string | null;
+}
+
 export const MATERIAL_PRESETS: MaterialPreset[] = [
   { id: 'plaster', label: 'Dinding Putih', labelEn: 'White Wall', labelJa: 'ホワイト壁', color: '#e5e7eb', roughness: 0.78, metalness: 0.04 },
   { id: 'concrete', label: 'Beton Ekspos', labelEn: 'Raw Concrete', labelJa: 'コンクリート', color: '#94a3b8', roughness: 0.85, metalness: 0.06 },

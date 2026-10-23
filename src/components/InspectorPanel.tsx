@@ -1789,7 +1789,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         <span className="studio-photo-check-box">
                           {selRoom.isVoid && <Check size={12} />}
                         </span>
-                        <span>Void Mezzanine</span>
+                        <span>{t.roomVoidLabel}</span>
                       </label>
                     </div>
                   )}
@@ -2538,8 +2538,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 </div>
               )}
 
-              {/* Procedural Surface Texture Pattern (True RGB Preserving!) */}
-              {selected && !selected.modelAssetId && (
+              {/* Procedural Surface Texture Pattern (True RGB Preserving — Scene Objects + Smart Walls, Roofs & Rooms!) */}
+              {((selected && !selected.modelAssetId) ||
+                selWall ||
+                selRoof ||
+                selRoom) && (
                 <div className="point-light-inspector-card">
                   <div className="subdiv-row-head">
                     <span className="prop-label">{t.patternSectionTitle}</span>
@@ -2557,27 +2560,66 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         { id: 'roof-tile', label: t.patternRoofTile },
                       ] as const
                     ).map((pt) => {
-                      const isPat =
-                        (selected.proceduralPattern ?? 'none') === pt.id;
+                      const activePat: ProceduralPatternKind = selected
+                        ? (selected.proceduralPattern ?? 'none')
+                        : selWall
+                        ? wallColorSide === 'int'
+                          ? (selWall.interiorPattern ?? 'none')
+                          : (selWall.exteriorPattern ?? 'none')
+                        : selRoof
+                        ? (selRoof.roofPattern ?? 'none')
+                        : selRoom
+                        ? (selRoom.floorPattern ?? 'none')
+                        : 'none';
+                      const isPat = activePat === pt.id;
                       return (
                         <button
                           key={pt.id}
                           type="button"
                           className={`pattern-chip-btn ${isPat ? 'active' : ''}`}
-                          onClick={() =>
-                            onUpdateMaterial(
-                              selected.id,
-                              { proceduralPattern: pt.id },
-                              true
-                            )
-                          }
+                          onClick={() => {
+                            if (selected) {
+                              onUpdateMaterial(
+                                selected.id,
+                                { proceduralPattern: pt.id },
+                                true
+                              );
+                            } else if (selWall) {
+                              const wp: Partial<ArchWallSegment> = {};
+                              if (
+                                wallColorSide === 'both' ||
+                                wallColorSide === 'ext'
+                              ) {
+                                wp.exteriorPattern = pt.id;
+                              }
+                              if (
+                                wallColorSide === 'both' ||
+                                wallColorSide === 'int'
+                              ) {
+                                wp.interiorPattern = pt.id;
+                              }
+                              onUpdateArchWall?.(selWall.id, wp, true);
+                            } else if (selRoof) {
+                              onUpdateArchRoof?.(
+                                selRoof.id,
+                                { roofPattern: pt.id },
+                                true
+                              );
+                            } else if (selRoom) {
+                              onUpdateArchRoomMeta?.(
+                                selRoom.id,
+                                { floorPattern: pt.id },
+                                true
+                              );
+                            }
+                          }}
                         >
                           {pt.label}
                         </button>
                       );
                     })}
                   </div>
-                  {(selected.proceduralPattern ?? 'none') !== 'none' && (
+                  {selected && (selected.proceduralPattern ?? 'none') !== 'none' && (
                     <>
                       <div className="slider-row" style={{ marginTop: 8 }}>
                         <div className="slider-head">

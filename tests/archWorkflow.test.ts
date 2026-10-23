@@ -806,3 +806,118 @@ describe('System 7: Architect Life × Blender Unification & Existing-Wall Angle 
   });
 });
 
+describe('Wave 1 & Wave 2 Precision Architecture Mechanics', () => {
+  it('prevents bystander wall-kidnapping mid-drag and detaches single selected wall cleanly from shared corners', () => {
+    const house = createEmptyArchHouseData();
+    house.walls = [
+      makeWall('w_drag', { x: 0, z: 0 }, { x: 2, z: 0 }),
+      makeWall('w_bystander', { x: 4, z: 0 }, { x: 4, z: 3 }),
+      makeWall('w_shared_other', { x: 2, z: 0 }, { x: 2, z: 3 }),
+    ];
+    const eng = new ArchBuilderEngine(house);
+
+    // Select ONLY `w_drag` at shared corner (2, 0)
+    eng.setSelection({ kind: 'wall', id: 'w_drag' });
+    const bindings = eng.captureWallVertexBindings('floor_1', { x: 2, z: 0 });
+    assert.equal(
+      bindings.length,
+      1,
+      'Selecting only w_drag must bind ONLY w_drag (never w_shared_other)'
+    );
+    assert.equal(bindings[0].wallId, 'w_drag');
+    assert.equal(bindings[0].endpoint, 'end');
+
+    // Drag w_drag.end DIRECTLY onto w_bystander.start (4, 0), then away to (6, 2)!
+    eng.applyWallVertexBindings(bindings, { x: 4, z: 0 });
+    eng.applyWallVertexBindings(bindings, { x: 6, z: 2 });
+
+    const walls = eng.getData().walls;
+    const wDrag = walls.find((w) => w.id === 'w_drag')!;
+    const wBystander = walls.find((w) => w.id === 'w_bystander')!;
+    const wSharedOther = walls.find((w) => w.id === 'w_shared_other')!;
+
+    assert.deepEqual(wDrag.end, { x: 6, z: 2 });
+    assert.deepEqual(
+      wBystander.start,
+      { x: 4, z: 0 },
+      'Bystander wall crossed mid-drag must NEVER be kidnapped!'
+    );
+    assert.deepEqual(
+      wSharedOther.start,
+      { x: 2, z: 0 },
+      'Unselected wall at original shared corner must stay undisturbed!'
+    );
+  });
+
+  it('locks onto forcedEndpointSnap and aligns wall Move Gizmo magnetically without merging wall IDs', () => {
+    const house = createEmptyArchHouseData();
+    house.walls = [
+      makeWall('w_target', { x: 0, z: 0 }, { x: 3, z: 0 }),
+      makeWall('w_moving', { x: 5, z: 2 }, { x: 8, z: 2 }),
+    ];
+    const eng = new ArchBuilderEngine(house);
+
+    // Screen-space forcedEndpointSnap overrides floor raycast offset in 3D perspective
+    const snapped = eng.snapWallPoint(
+      { x: 3.65, z: 0.55 },
+      'floor_1',
+      null,
+      true,
+      0.1,
+      { x: 3, z: 0 },
+      0.8
+    );
+    assert.deepEqual(snapped.point, { x: 3, z: 0 });
+    assert.equal(snapped.snappedEndpoint, true);
+
+    // Move Gizmo near w_target.end (3, 0): moving w_moving.start (5, 2) by (-1.88, -1.92) -> (3.12, 0.08) within 0.26m!
+    const gizmoSnap = eng.computeWallTranslateSnapDelta(
+      [{ kind: 'wall', id: 'w_moving' }],
+      -1.88,
+      -1.92,
+      0.26
+    );
+    assert.deepEqual(gizmoSnap.snappedPoint, { x: 3, z: 0 });
+    assert.equal(gizmoSnap.dx, -2);
+    assert.equal(gizmoSnap.dz, -2);
+    assert.equal(eng.getData().walls.length, 2);
+  });
+
+  it('prevents overlapping duplicate openings and clamps openings safely when shortening a wall', () => {
+    const house = createEmptyArchHouseData();
+    house.walls = [makeWall('w_host', { x: 0, z: 0 }, { x: 3.4, z: 0 })];
+    const eng = new ArchBuilderEngine(house);
+
+    const op1 = eng.addOpeningOnWall('w_host', 'door-single', 0.35);
+    assert.ok(op1 !== null);
+
+    // 1. Accidental double-tap at the exact same spot (0.35) selects & returns existing op1 without duplicating!
+    const dupTap = eng.addOpeningOnWall('w_host', 'door-single', 0.35);
+    assert.equal(dupTap?.id, op1!.id);
+    assert.equal(eng.getData().openings.length, 1);
+
+    // 2. Placing a window partially overlapping op1 (at 0.45 on 3.4m wall) nudges cleanly into a non-overlapping slot!
+    const op2 = eng.addOpeningOnWall('w_host', 'window-std', 0.45);
+    assert.ok(op2 !== null);
+    assert.notEqual(op2!.id, op1!.id);
+    assert.equal(eng.getData().openings.length, 2);
+    assert.ok(
+      Math.abs(op2!.offsetRatio - op1!.offsetRatio) * 3.4 >=
+        (op1!.width + op2!.width) * 0.5 - 0.01,
+      'Second opening must nudge clear of first opening without overlapping'
+    );
+
+    // 3. Shortening a single-door wall clamps the door safely inside the new wall span
+    eng.deleteArchElementByKindAndId('opening', op2!.id);
+    eng.updateOpening(op1!.id, { width: 1.8, offsetRatio: 0.85 });
+    eng.setArchElementExactDimensions(
+      { kind: 'wall', id: 'w_host' },
+      { x: 1.5, y: 3.0, z: 0.15 }
+    );
+    const clampedOp = eng.getData().openings.find((o) => o.id === op1!.id)!;
+    assert.ok(clampedOp.width <= 1.28);
+    assert.ok(clampedOp.offsetRatio >= 0.3 && clampedOp.offsetRatio <= 0.7);
+  });
+});
+
+

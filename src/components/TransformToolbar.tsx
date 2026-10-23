@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   MousePointer2,
   RotateCw,
@@ -41,6 +41,7 @@ interface TransformToolbarProps {
   selectedCount: number;
   canUngroup: boolean;
   collapsed: boolean;
+  suppressRollouts?: boolean;
   wallEditAngleLock?: boolean;
   onToggleWallEditAngleLock?: () => void;
   onToggleCollapse: () => void;
@@ -69,6 +70,7 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
   selectedCount,
   canUngroup,
   collapsed,
+  suppressRollouts = false,
   wallEditAngleLock = true,
   onToggleWallEditAngleLock,
   onToggleCollapse,
@@ -88,6 +90,19 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
   const t = TRANSLATIONS[language];
   const [selectRolloutOpen, setSelectRolloutOpen] = useState(false);
   const [axisRolloutOpen, setAxisRolloutOpen] = useState(false);
+
+  useEffect(() => {
+    if (suppressRollouts) {
+      setSelectRolloutOpen(false);
+      setAxisRolloutOpen(false);
+    }
+  }, [suppressRollouts]);
+
+  useEffect(() => {
+    if (mode !== 'select') {
+      setSelectRolloutOpen(false);
+    }
+  }, [mode]);
 
   if (collapsed) {
     return (
@@ -124,17 +139,18 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
         className={`left-toolbar ${studioMode === 'house' ? 'house-mode' : ''}`}
         aria-label={t.tabTransform}
       >
-        <button
-          type="button"
-          className="toolbar-collapse-icon-btn"
-          onClick={onToggleCollapse}
-          title={t.hideLeftToolbar}
-          aria-label={t.hideLeftToolbar}
-        >
-          <ChevronLeft size={18} />
-        </button>
-
-        <div className="toolbar-sep" />
+        <div className="toolbar-collapse-sticky-head">
+          <button
+            type="button"
+            className="toolbar-collapse-icon-btn"
+            onClick={onToggleCollapse}
+            title={t.hideLeftToolbar}
+            aria-label={t.hideLeftToolbar}
+          >
+            <ChevronLeft size={18} />
+          </button>
+          <div className="toolbar-sep" />
+        </div>
 
         {/* #6 Select Button with Horizontal Right-Expanding Rollout Indicator */}
         <button

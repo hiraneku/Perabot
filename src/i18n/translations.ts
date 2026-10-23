@@ -795,6 +795,18 @@ export interface StudioStrings {
   archSelectedRoomTitle: string;
   archBakeWallHint: string;
   photoRenderedResBadge: string;
+
+  // Holistic Polish: Compact Draw Bar, Endpoint Snap Readout & Full HUD Localization
+  archDrawModeCompact: string;
+  archPanModeCompact: string;
+  archEndpointSnappedBadge: string;
+  wallInnerFaceLabel: string;
+  wallOuterFaceLabel: string;
+  angleLockHudOn: string;
+  angleLockHudFree: string;
+  freeRotateHud: string;
+  gridScaleHud: string;
+  roomVoidLabel: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -1606,6 +1618,17 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     archBakeWallHint:
       'Ubah dinding ini menjadi blok 3D bebas jika ingin menerapkan Subdivisi panel atau pemotongan Boolean CSG.',
     photoRenderedResBadge: 'Resolusi Aktif',
+
+    archDrawModeCompact: 'Pasang',
+    archPanModeCompact: 'Geser Layar',
+    archEndpointSnappedBadge: 'Ujung Terkunci',
+    wallInnerFaceLabel: 'Dinding Dalam',
+    wallOuterFaceLabel: 'Dinding Luar',
+    angleLockHudOn: 'Kunci Sudut ON',
+    angleLockHudFree: 'Sudut Bebas',
+    freeRotateHud: 'Putar Sudut Bebas',
+    gridScaleHud: 'Skala Grid',
+    roomVoidLabel: 'Void Mezzanine (Lubang Lantai)',
   },
 
   en: {
@@ -2416,6 +2439,17 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     archBakeWallHint:
       'Convert this smart wall into a freeform 3D mesh block to apply panel Subdivision or CSG Boolean cuts.',
     photoRenderedResBadge: 'Output Size',
+
+    archDrawModeCompact: 'Place',
+    archPanModeCompact: 'Pan View',
+    archEndpointSnappedBadge: 'Corner Locked',
+    wallInnerFaceLabel: 'Inner Wall',
+    wallOuterFaceLabel: 'Outer Wall',
+    angleLockHudOn: 'Angle Lock ON',
+    angleLockHudFree: 'Free Angle',
+    freeRotateHud: 'Free Rotation',
+    gridScaleHud: 'Grid Scale',
+    roomVoidLabel: 'Void Mezzanine (Open Floor)',
   },
 
   ja: {
@@ -3217,6 +3251,17 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     archBakeWallHint:
       'このスマート壁を自由編集メッシュに変換すると、サブディビジョン分割やCSGブーリアンくり抜きを適用できます。',
     photoRenderedResBadge: '出力解像度',
+
+    archDrawModeCompact: '配置',
+    archPanModeCompact: '視点移動',
+    archEndpointSnappedBadge: '端点ロック',
+    wallInnerFaceLabel: '内壁',
+    wallOuterFaceLabel: '外壁',
+    angleLockHudOn: '角度ロック ON',
+    angleLockHudFree: '自由角度',
+    freeRotateHud: '自由回転',
+    gridScaleHud: 'グリッド拡縮',
+    roomVoidLabel: '吹き抜け（ボイド床）',
   },
 };
 

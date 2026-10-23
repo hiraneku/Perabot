@@ -110,6 +110,7 @@ import {
   SurfacePlacementRule,
   SurfaceSettings,
   TerrainSculptSettings,
+  TouchLoupeState,
   TransformMode,
   TransformSpace,
   ValidationAutoFixAction,
@@ -478,11 +479,15 @@ export const App: React.FC = () => {
     useState<WalkthroughInteractPrompt | null>(null);
   const [walkGhostMode, setWalkGhostMode] = useState(false);
   const [walkEyeHeight, setWalkEyeHeight] = useState(1.65);
-  const [touchLoupeState, setTouchLoupeState] = useState<{
-    active: boolean;
-    clientX: number;
-    clientY: number;
-  }>({ active: false, clientX: 0, clientY: 0 });
+  const [touchLoupeState, setTouchLoupeState] = useState<TouchLoupeState>({
+    active: false,
+    clientX: 0,
+    clientY: 0,
+    targetX: 0,
+    targetY: 0,
+    snapped: false,
+    label: null,
+  });
   const [profileStudioModal, setProfileStudioModal] = useState<{
     open: boolean;
     editTargetId: string | null;
@@ -572,6 +577,16 @@ export const App: React.FC = () => {
     engineRef.current?.setThemeCanvasColor(themeSpec.canvasBg);
     engineRef.current?.setGraphicsQuality(globalSettings.graphicsQuality);
     engineRef.current?.setOrbitSensitivity(globalSettings.orbitSensitivity);
+    const locStr = TRANSLATIONS[globalSettings.language];
+    engineRef.current?.setHudLabels({
+      angleLockOn: locStr.angleLockHudOn,
+      angleLockFree: locStr.angleLockHudFree,
+      freeRotate: locStr.freeRotateHud,
+      gridScale: locStr.gridScaleHud,
+      wallInner: locStr.wallInnerFaceLabel,
+      wallOuter: locStr.wallOuterFaceLabel,
+      endpointLocked: locStr.archEndpointSnappedBadge,
+    });
     engineRef.current?.setDefaultRoomPrefix(
       globalSettings.language === 'ja'
         ? '部屋'
@@ -862,6 +877,16 @@ export const App: React.FC = () => {
       STUDIO_THEMES[0];
     engine.setThemeCanvasColor(themeSpec.canvasBg);
     engine.setGraphicsQuality(globalSettings.graphicsQuality);
+    const initStr = TRANSLATIONS[globalSettings.language];
+    engine.setHudLabels({
+      angleLockOn: initStr.angleLockHudOn,
+      angleLockFree: initStr.angleLockHudFree,
+      freeRotate: initStr.freeRotateHud,
+      gridScale: initStr.gridScaleHud,
+      wallInner: initStr.wallInnerFaceLabel,
+      wallOuter: initStr.wallOuterFaceLabel,
+      endpointLocked: initStr.archEndpointSnappedBadge,
+    });
     engine.setOrbitSensitivity(globalSettings.orbitSensitivity);
 
     const projMood = activeProject.scene.lightingMood || lightingMood;
@@ -1940,6 +1965,13 @@ export const App: React.FC = () => {
   const handleSetArchTool = useCallback((tool: ArchSubTool) => {
     setArchTool(tool);
     engineRef.current?.setArchTool(tool);
+    if (
+      tool !== 'select' &&
+      typeof window !== 'undefined' &&
+      window.innerWidth <= 920
+    ) {
+      setActiveArchPhase(null);
+    }
   }, []);
 
   const handleChangeWallDefaults = useCallback(
@@ -2397,7 +2429,7 @@ export const App: React.FC = () => {
         return;
       }
 
-      if (e.shiftKey && key === 'd') {
+      if ((e.shiftKey || e.ctrlKey || e.metaKey) && key === 'd') {
         e.preventDefault();
         handleDuplicateSelected();
         return;
@@ -2429,6 +2461,12 @@ export const App: React.FC = () => {
           if (paintMode !== 'none') {
             setPaintMode('none');
             engineRef.current?.setPaintInteraction('none');
+          } else if (pendingArchCommit) {
+            engineRef.current?.cancelPendingArchCommit();
+          } else if (universalMeasureActive) {
+            engineRef.current?.setUniversalMeasureMode(false);
+          } else if (archTool !== 'select') {
+            handleSetArchTool('select');
           }
           break;
         case 'delete':
@@ -2477,6 +2515,10 @@ export const App: React.FC = () => {
     handleCameraPreset,
     handleSelectAll,
     handleGroupSceneObjects,
+    pendingArchCommit,
+    universalMeasureActive,
+    archTool,
+    handleSetArchTool,
   ]);
 
   const formatValidationWarning = (status: PlacementValidationStatus): string => {
@@ -2603,8 +2645,19 @@ export const App: React.FC = () => {
         gridSettings={gridSettings}
         inspectorOpen={inspectorOpen}
         isFullscreen={isFullscreen}
-        hasSelection={Boolean(selectedId)}
-        objectCount={objects.length}
+        hasSelection={
+          Boolean(selectedId) ||
+          Boolean(activeProject.mode === 'house' && archSelection)
+        }
+        objectCount={
+          objects.length +
+          (activeProject.mode === 'house'
+            ? archData.walls.length +
+              archData.openings.length +
+              archData.stairs.length +
+              archData.roofs.length
+            : 0)
+        }
         hasExportableContent={
           objects.length > 0 ||
           archData.walls.length > 0 ||
@@ -2718,6 +2771,9 @@ export const App: React.FC = () => {
               selectionSubMode={selectionSubMode}
               axisLock={axisLock}
               space={transformSpace}
+              suppressRollouts={
+                activeProject.mode === 'house' && archTool !== 'select'
+              }
               hasSelection={
                 Boolean(selectedId) ||
                 selectedArchItems.some((s) => s.kind !== 'room')
@@ -2942,31 +2998,40 @@ export const App: React.FC = () => {
           />
 
           {/* Universal 3D Tape Measure Readout & Selected Object Quick Meter Input Pill */}
-          {!walkthroughActive && !dragFeedback.active && (
-            <QuickDimensionPill
-              t={t}
-              universalMeasureActive={universalMeasureActive}
-              measuredSpan={measuredSpan}
-              onClearMeasure={() => engineRef.current?.clearUniversalMeasure()}
-              onExitMeasure={() =>
-                engineRef.current?.setUniversalMeasureMode(false)
-              }
-              selectedDimensions={selectedExactDimensions}
-              isObjectLocked={Boolean(
-                selectedId && objects.find((o) => o.id === selectedId)?.locked
-              )}
-              onApplyExactDimensions={(dims) =>
-                handleSetExactDimensions(dims, false)
-              }
-            />
-          )}
+          {!walkthroughActive &&
+            !dragFeedback.active &&
+            (universalMeasureActive ||
+              !(activeProject.mode === 'house' && archTool !== 'select')) && (
+              <QuickDimensionPill
+                t={t}
+                universalMeasureActive={universalMeasureActive}
+                measuredSpan={measuredSpan}
+                onClearMeasure={() =>
+                  engineRef.current?.clearUniversalMeasure()
+                }
+                onExitMeasure={() =>
+                  engineRef.current?.setUniversalMeasureMode(false)
+                }
+                selectedDimensions={selectedExactDimensions}
+                isObjectLocked={Boolean(
+                  selectedId && objects.find((o) => o.id === selectedId)?.locked
+                )}
+                onApplyExactDimensions={(dims) =>
+                  handleSetExactDimensions(dims, false)
+                }
+              />
+            )}
 
-          {/* Touch Precision Magnifier Loupe above thumb while snapping */}
+          {/* Touch Precision Magnifier Loupe locked onto exact 3D snapped point */}
           <TouchLoupeOverlay
             enabled={globalSettings.touchLoupe !== false}
             active={touchLoupeState.active}
             clientX={touchLoupeState.clientX}
             clientY={touchLoupeState.clientY}
+            targetX={touchLoupeState.targetX}
+            targetY={touchLoupeState.targetY}
+            snapped={touchLoupeState.snapped}
+            label={touchLoupeState.label}
             getSourceCanvas={() =>
               engineRef.current?.getCanvasElement() ?? null
             }
