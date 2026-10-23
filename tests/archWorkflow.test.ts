@@ -28,6 +28,7 @@ import {
   buildCornerFilletGeometry,
   buildManifoldWallBodyGeometry,
   computeFloorWallJunctions,
+  sampleAdvancedWallPath,
   sampleAdvancedWallPathAtDistance,
 } from '../src/engine/WallGeometryEngine';
 import {
@@ -1006,6 +1007,50 @@ describe('Advanced Wall Editing & Transform Constraints', () => {
     wallMesh.material.dispose();
     withOpening.bodyGeo.dispose(); withOpening.trimExtrasGeo!.dispose();
     withoutOpening.bodyGeo.dispose();
+  });
+
+  it('closes both rounded-corner end seams without projecting spikes beyond the corner envelope', () => {
+    for (const style of ['rounded-inner', 'rounded-outer'] as const) {
+      const first = makeWall(`${style}-a`, { x: -2, z: 0 }, { x: 0, z: 0 }, {
+        cornerStyle: style, cornerRadius: 0.35,
+      });
+      const second = makeWall(`${style}-b`, { x: 0, z: 0 }, { x: 0, z: 2 }, {
+        cornerStyle: style, cornerRadius: 0.35,
+      });
+      const plan = computeFloorWallJunctions([first, second]);
+      assert.equal(plan.filletPieces.length, 1);
+      const spec = plan.filletPieces[0];
+      const geo = buildCornerFilletGeometry(spec)!;
+      const positions = geo.getAttribute('position');
+      for (let i = 0; i < positions.count; i++) {
+        const x = positions.getX(i);
+        const y = positions.getY(i);
+        const z = positions.getZ(i);
+        assert.ok(Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z));
+        assert.ok(Math.abs(x) < 1 && Math.abs(z) < 1,
+          `${style} corner geometry must remain local to the joint (vertex ${x}, ${z})`);
+      }
+
+      const wall = spec.wallA;
+      const atStart = spec.endA === 'start';
+      const endpointTangent = sampleAdvancedWallPath(wall, atStart ? 0 : 1);
+      const intoX = atStart ? endpointTangent.tx : -endpointTangent.tx;
+      const intoZ = atStart ? endpointTangent.tz : -endpointTangent.tz;
+      const center = {
+        x: spec.vertex.x + intoX * spec.pullback,
+        z: spec.vertex.z + intoZ * spec.pullback,
+      };
+      const ray = new THREE.Raycaster(
+        new THREE.Vector3(center.x + intoX * 0.2, 1.5, center.z + intoZ * 0.2),
+        new THREE.Vector3(-intoX, 0, -intoZ), 0, 0.5
+      );
+      const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+      mesh.updateMatrixWorld(true);
+      assert.ok(ray.intersectObject(mesh).length > 0,
+        `${style} fillet must close the wall-end cross-section instead of leaving a raster seam`);
+      mesh.material.dispose();
+      geo.dispose();
+    }
   });
 
   it('joins a curved wall cleanly to a straight wall using endpoint tangents and keeps junction trims valid', () => {

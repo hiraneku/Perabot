@@ -2307,7 +2307,9 @@ export function buildCornerFilletGeometry(
     // Outer boundary stays sharp 90° (`aOut -> mOut -> bOut`), inner boundary sweeps TRUE circular arc `bIn -> mIn -> aIn`!
     rawPts.push({ x: aOutX, z: aOutZ, edgeMat: outerMat });
     rawPts.push({ x: mOutX, z: mOutZ, edgeMat: outerMat });
-    rawPts.push({ x: bOutX, z: bOutZ, edgeMat: 0, skipSide: true });
+    // Close the fillet's B-end cross-section. The adjoining swept wall deliberately omits
+    // its end jamb at a rounded joint, so leaving this edge open exposes a hairline raster gap.
+    rawPts.push({ x: bOutX, z: bOutZ, edgeMat: 0 });
     const ux1 = bInX - mInX;
     const uz1 = bInZ - mInZ;
     const ux2 = aInX - mInX;
@@ -2331,7 +2333,6 @@ export function buildCornerFilletGeometry(
         x: px,
         z: pz,
         edgeMat: i < segs ? innerMat : 0,
-        skipSide: i === segs,
       });
     }
   } else {
@@ -2359,12 +2360,11 @@ export function buildCornerFilletGeometry(
         x: px,
         z: pz,
         edgeMat: i < segs ? outerMat : 0,
-        skipSide: i === segs,
       });
     }
     rawPts.push({ x: bInX, z: bInZ, edgeMat: innerMat });
     rawPts.push({ x: mInX, z: mInZ, edgeMat: innerMat });
-    rawPts.push({ x: aInX, z: aInZ, edgeMat: 0, skipSide: true });
+    rawPts.push({ x: aInX, z: aInZ, edgeMat: 0 });
   }
 
   collector.addExtrudedPolygonBlock(rawPts, 0, height);
