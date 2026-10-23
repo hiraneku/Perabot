@@ -444,7 +444,12 @@ export const App: React.FC = () => {
   );
   const [detectedRooms, setDetectedRooms] = useState<ArchDetectedRoom[]>([]);
   const [archSelection, setArchSelection] = useState<ArchSelection>(null);
+  const [selectedArchItems, setSelectedArchItems] = useState<
+    Array<NonNullable<ArchSelection>>
+  >([]);
   const [archTool, setArchTool] = useState<ArchSubTool>('select');
+  const [archNavPanMode, setArchNavPanMode] = useState(false);
+  const [wallEditAngleLock, setWallEditAngleLock] = useState(true);
   const [isBlueprint2D, setIsBlueprint2D] = useState(false);
   const [cameraLensFov, setCameraLensFov] = useState(46);
   const [wallDefaults, setWallDefaults] = useState<WallDrawDefaults>({
@@ -796,7 +801,10 @@ export const App: React.FC = () => {
           setArchData(state.archData);
           setDetectedRooms(state.detectedRooms);
           setArchSelection(state.archSelection);
+          setSelectedArchItems(state.selectedArchItems);
           setArchTool(state.archTool);
+          setArchNavPanMode(state.archNavPanMode);
+          setWallEditAngleLock(state.wallEditAngleLock);
           setIsBlueprint2D(state.isBlueprint2D);
           setCameraLensFov(state.cameraLensFov);
           setIsArchActivelyDrawing(state.isArchActivelyDrawing);
@@ -1480,12 +1488,42 @@ export const App: React.FC = () => {
 
   const handleOpenSelectedArchProps = useCallback(() => {
     if (!archSelection) return;
-    if (archSelection.kind === 'wall') setActiveArchPhase('walls');
-    else if (archSelection.kind === 'opening' || archSelection.kind === 'stair')
-      setActiveArchPhase('openings');
-    else if (archSelection.kind === 'roof') setActiveArchPhase('roofs');
-    else if (archSelection.kind === 'room') setActiveArchPhase('finishing');
+    setInspectorSubTab('transform');
+    if (window.innerWidth < 768) {
+      setMobileDrawerOpen(true);
+    } else {
+      setInspectorOpen(true);
+    }
   }, [archSelection]);
+
+  const handleToggleWallEditAngleLock = useCallback(() => {
+    setWallEditAngleLock((prev) => {
+      const next = !prev;
+      engineRef.current?.setWallEditAngleLock(next);
+      setWallDefaults((wd) => {
+        const nextWd = { ...wd, angleSnap: next };
+        engineRef.current?.setWallDrawDefaults(nextWd);
+        return nextWd;
+      });
+      return next;
+    });
+  }, []);
+
+  const handleToggleArchNavPanMode = useCallback((panOnly: boolean) => {
+    setArchNavPanMode(panOnly);
+    engineRef.current?.setArchNavPanMode(panOnly);
+  }, []);
+
+  const handleSelectArchElement = useCallback(
+    (sel: ArchSelection, additive = false) => {
+      engineRef.current?.selectArchElement(sel, additive);
+    },
+    []
+  );
+
+  const handleToggleDoorOpen = useCallback((openingId: string) => {
+    engineRef.current?.toggleArchDoorOpen(openingId);
+  }, []);
 
   const handleToggleObjectLock = useCallback((id: string) => {
     engineRef.current?.toggleObjectLocked(id);
@@ -1517,9 +1555,11 @@ export const App: React.FC = () => {
   );
 
   const selectedExactDimensions = useMemo(() => {
-    if (!selectedId) return null;
+    if (!selectedId && (!archSelection || archSelection.kind === 'room')) {
+      return null;
+    }
     return engineRef.current?.getSelectedCombinedDimensions() ?? null;
-  }, [objects, selectedId, selectedIds]);
+  }, [objects, selectedId, selectedIds, archData, archSelection]);
 
   const handleExportAssetsPack = useCallback(async () => {
     const count = await downloadCustomAssetsPack();
@@ -2275,10 +2315,14 @@ export const App: React.FC = () => {
 
   const handleDeleteObject = useCallback(
     (id?: string) => {
-      engineRef.current?.deleteObject(id);
-      showToast(t.delete);
+      if (id || selectedId || selectedIds.length > 0) {
+        engineRef.current?.deleteObject(id);
+        showToast(t.delete);
+      } else if (engineRef.current?.deleteSelectedArchItem()) {
+        showToast(t.delete);
+      }
     },
-    [showToast, t.delete]
+    [selectedId, selectedIds.length, showToast, t.delete]
   );
 
   const handleDuplicateSelected = useCallback(() => {
@@ -2669,14 +2713,20 @@ export const App: React.FC = () => {
           {!walkthroughActive && (
             <TransformToolbar
               language={globalSettings.language}
+              studioMode={activeProject.mode}
               mode={transformMode}
               selectionSubMode={selectionSubMode}
               axisLock={axisLock}
               space={transformSpace}
-              hasSelection={Boolean(selectedId)}
-              selectedCount={selectedIds.length}
+              hasSelection={
+                Boolean(selectedId) ||
+                selectedArchItems.some((s) => s.kind !== 'room')
+              }
+              selectedCount={selectedIds.length + selectedArchItems.length}
               canUngroup={canUngroupSelection}
               collapsed={leftSidebarCollapsed}
+              wallEditAngleLock={wallEditAngleLock}
+              onToggleWallEditAngleLock={handleToggleWallEditAngleLock}
               onToggleCollapse={() => setLeftSidebarCollapsed((v) => !v)}
               onChangeMode={handleChangeMode}
               onChangeSelectionSubMode={handleChangeSelectionSubMode}
@@ -2695,7 +2745,12 @@ export const App: React.FC = () => {
 
           {/* #5 Duplicate & Repeat Placement Live 3D Array Modal */}
           <RepeatArrayModal
-            open={repeatModalOpen && Boolean(selectedId) && !walkthroughActive}
+            open={
+              repeatModalOpen &&
+              (Boolean(selectedId) ||
+                selectedArchItems.some((s) => s.kind !== 'room')) &&
+              !walkthroughActive
+            }
             language={globalSettings.language}
             studioMode={activeProject.mode}
             onPreview={handlePreviewRepeatArray}
@@ -2715,9 +2770,16 @@ export const App: React.FC = () => {
                 }}
                 isBlueprint2D={isBlueprint2D}
                 onToggleBlueprint2D={handleToggleBlueprint2D}
+                onZoom2DIn={() => engineRef.current?.zoomViewportBy(0.72)}
+                onZoom2DOut={() => engineRef.current?.zoomViewportBy(1.38)}
+                onReset2DZoom={() => engineRef.current?.resetBlueprint2DZoom()}
                 archTool={archTool}
                 onSetArchTool={handleSetArchTool}
                 onResetToSelectTool={() => handleSetArchTool('select')}
+                archNavPanMode={archNavPanMode}
+                onToggleArchNavPanMode={handleToggleArchNavPanMode}
+                wallEditAngleLock={wallEditAngleLock}
+                onToggleWallEditAngleLock={handleToggleWallEditAngleLock}
                 detectedRoomCount={detectedRooms.length}
                 onCommitExactWallLength={handleCommitExactWallLength}
                 pendingArchCommit={pendingArchCommit}
@@ -2725,6 +2787,7 @@ export const App: React.FC = () => {
                 onCancelPendingCommit={handleCancelPendingArchCommit}
                 archSelection={archSelection}
                 onRotateSelectedArch={handleRotateSelectedArch90}
+                onDuplicateSelectedArch={handleDuplicateSelected}
                 onDeleteSelectedArch={handleDeleteSelectedArch}
                 onOpenSelectedArchProps={handleOpenSelectedArchProps}
                 workflowOpen={archWorkflowOpen}
@@ -3027,15 +3090,18 @@ export const App: React.FC = () => {
           )}
 
           {/* Controlled Rotation Quick Bar */}
-          {!walkthroughActive && transformMode === 'rotate' && selectedId && (
-            <RotationControlBar
-              language={globalSettings.language}
-              rotationSnapDeg={snapSettings.rotationSnapDeg}
-              onChangeRotationSnap={handleChangeRotationSnap}
-              onRotateStep={handleRotateStep}
-              onResetRotation={handleResetRotation}
-            />
-          )}
+          {!walkthroughActive &&
+            transformMode === 'rotate' &&
+            (Boolean(selectedId) ||
+              Boolean(archSelection && archSelection.kind !== 'room')) && (
+              <RotationControlBar
+                language={globalSettings.language}
+                rotationSnapDeg={snapSettings.rotationSnapDeg}
+                onChangeRotationSnap={handleChangeRotationSnap}
+                onRotateStep={handleRotateStep}
+                onResetRotation={handleResetRotation}
+              />
+            )}
 
           {/* In-Place Custom Asset Re-Editing Banner */}
           {!walkthroughActive && editingCustomAsset && (
@@ -3180,6 +3246,28 @@ export const App: React.FC = () => {
                 ? handleUpdateObjectConstructionMaterial
                 : undefined
             }
+            archData={activeProject.mode === 'house' ? archData : undefined}
+            detectedRooms={
+              activeProject.mode === 'house' ? detectedRooms : undefined
+            }
+            archSelection={
+              activeProject.mode === 'house' ? archSelection : null
+            }
+            selectedArchItems={
+              activeProject.mode === 'house' ? selectedArchItems : undefined
+            }
+            wallEditAngleLock={wallEditAngleLock}
+            onToggleWallEditAngleLock={handleToggleWallEditAngleLock}
+            onSelectArchElement={handleSelectArchElement}
+            onUpdateArchWall={handleUpdateArchWall}
+            onUpdateArchOpening={handleUpdateArchOpening}
+            onToggleDoorOpen={handleToggleDoorOpen}
+            onUpdateArchStair={handleUpdateArchStair}
+            onUpdateArchRoof={handleUpdateArchRoof}
+            onUpdateArchRoomMeta={handleUpdateArchRoomMeta}
+            onRotateSelectedArch={handleRotateSelectedArch90}
+            onDeleteSelectedArch={handleDeleteSelectedArch}
+            onBakeSelectedWall={handleBakeSelectedWall}
           />
         )}
 
@@ -3238,6 +3326,28 @@ export const App: React.FC = () => {
                 ? handleUpdateObjectConstructionMaterial
                 : undefined
             }
+            archData={activeProject.mode === 'house' ? archData : undefined}
+            detectedRooms={
+              activeProject.mode === 'house' ? detectedRooms : undefined
+            }
+            archSelection={
+              activeProject.mode === 'house' ? archSelection : null
+            }
+            selectedArchItems={
+              activeProject.mode === 'house' ? selectedArchItems : undefined
+            }
+            wallEditAngleLock={wallEditAngleLock}
+            onToggleWallEditAngleLock={handleToggleWallEditAngleLock}
+            onSelectArchElement={handleSelectArchElement}
+            onUpdateArchWall={handleUpdateArchWall}
+            onUpdateArchOpening={handleUpdateArchOpening}
+            onToggleDoorOpen={handleToggleDoorOpen}
+            onUpdateArchStair={handleUpdateArchStair}
+            onUpdateArchRoof={handleUpdateArchRoof}
+            onUpdateArchRoomMeta={handleUpdateArchRoomMeta}
+            onRotateSelectedArch={handleRotateSelectedArch90}
+            onDeleteSelectedArch={handleDeleteSelectedArch}
+            onBakeSelectedWall={handleBakeSelectedWall}
           />
         )}
       </main>
@@ -3255,7 +3365,15 @@ export const App: React.FC = () => {
           onExportAssetsPack={handleExportAssetsPack}
           onImportAssetsPackFile={(f) => void handleImportAssetsPack(f)}
           onOpenCustomProfileStudio={() => handleOpenCustomProfileModal(false)}
-          objectCount={objects.length}
+          objectCount={
+            objects.length +
+            (activeProject.mode === 'house'
+              ? archData.walls.length +
+                archData.openings.length +
+                archData.stairs.length +
+                archData.roofs.length
+              : 0)
+          }
           drawerOpen={mobileDrawerOpen}
           onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}
         />
@@ -3393,6 +3511,11 @@ export const App: React.FC = () => {
         projectName={activeProject.name}
         t={t}
         onCapture={handleCaptureStudioPhoto}
+        onCaptureAsync={(opts) =>
+          engineRef.current
+            ? engineRef.current.captureStudioPhotoAsync(opts)
+            : Promise.resolve(null)
+        }
         onClose={() => setPhotoStudioOpen(false)}
         onSavedToast={(msg) => showToast(msg)}
       />

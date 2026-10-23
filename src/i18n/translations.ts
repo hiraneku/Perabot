@@ -777,6 +777,24 @@ export interface StudioStrings {
   photoRes4kLabel: string;
   photoTwoPointLabel: string;
   touchLoupeSettingLabel: string;
+
+  // 7-Point Architect Life × Blender Unification & Touch UX Fixes
+  wallEditAngleLockLabel: string;
+  wallEditAngleLockedBadge: string;
+  wallEditAngleFreeBadge: string;
+  archDrawModeBtn: string;
+  archPanZoomModeBtn: string;
+  archTwoFingerHint: string;
+  zoomIn2DBtn: string;
+  zoomOut2DBtn: string;
+  zoomReset2DBtn: string;
+  archOutlinerFolder: string;
+  archSelectedOpeningTitle: string;
+  archSelectedStairTitle: string;
+  archSelectedRoofTitle: string;
+  archSelectedRoomTitle: string;
+  archBakeWallHint: string;
+  photoRenderedResBadge: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -1570,6 +1588,24 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     photoRes4kLabel: '4K Ultra HD (3840 × 2160)',
     photoTwoPointLabel: 'Perspektif 2-Titik Arsitektur (Garis Dinding Tegak Lurus)',
     touchLoupeSettingLabel: 'Kaca Pembesar Presisi Sentuh Saat Geser Sudut',
+
+    wallEditAngleLockLabel: 'Kunci Sudut Dinding (0°/45°/90°)',
+    wallEditAngleLockedBadge: 'Kunci Sudut: Aktif',
+    wallEditAngleFreeBadge: 'Kunci Sudut: Bebas',
+    archDrawModeBtn: 'Mode Pasang',
+    archPanZoomModeBtn: 'Geser & Zoom Layar',
+    archTwoFingerHint: '2 jari untuk zoom & geser kapan saja',
+    zoomIn2DBtn: 'Perbesar Denah (+)',
+    zoomOut2DBtn: 'Perkecil Denah (-)',
+    zoomReset2DBtn: 'Pusatkan Denah',
+    archOutlinerFolder: 'Struktur Bangunan',
+    archSelectedOpeningTitle: 'Pintu / Jendela',
+    archSelectedStairTitle: 'Tangga Bangunan',
+    archSelectedRoofTitle: 'Atap Bangunan',
+    archSelectedRoomTitle: 'Ruangan Lantai',
+    archBakeWallHint:
+      'Ubah dinding ini menjadi blok 3D bebas jika ingin menerapkan Subdivisi panel atau pemotongan Boolean CSG.',
+    photoRenderedResBadge: 'Resolusi Aktif',
   },
 
   en: {
@@ -2362,6 +2398,24 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     photoRes4kLabel: '4K Ultra HD (3840 × 2160)',
     photoTwoPointLabel: 'Architectural 2-Point Perspective (Plumb Vertical Lines)',
     touchLoupeSettingLabel: 'Touch Precision Magnifier Loupe While Dragging',
+
+    wallEditAngleLockLabel: 'Wall Angle Lock (0°/45°/90°)',
+    wallEditAngleLockedBadge: 'Angle Lock: ON',
+    wallEditAngleFreeBadge: 'Angle Lock: Free',
+    archDrawModeBtn: 'Place Mode',
+    archPanZoomModeBtn: 'Pan & Zoom View',
+    archTwoFingerHint: '2 fingers to zoom & pan anytime',
+    zoomIn2DBtn: 'Zoom In Plan (+)',
+    zoomOut2DBtn: 'Zoom Out Plan (-)',
+    zoomReset2DBtn: 'Reset Plan Zoom',
+    archOutlinerFolder: 'Building Structure',
+    archSelectedOpeningTitle: 'Door / Window',
+    archSelectedStairTitle: 'Building Stair',
+    archSelectedRoofTitle: 'Building Roof',
+    archSelectedRoomTitle: 'Floor Room',
+    archBakeWallHint:
+      'Convert this smart wall into a freeform 3D mesh block to apply panel Subdivision or CSG Boolean cuts.',
+    photoRenderedResBadge: 'Output Size',
   },
 
   ja: {
@@ -3145,6 +3199,24 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     photoRes4kLabel: '4K Ultra HD (3840 × 2160)',
     photoTwoPointLabel: '建築2点透視補正（垂直ラインを真っ直ぐ保つ）',
     touchLoupeSettingLabel: 'タッチ移動時の精密拡大ルーペを表示',
+
+    wallEditAngleLockLabel: '壁の角度ロック (0°/45°/90°)',
+    wallEditAngleLockedBadge: '角度ロック: ON',
+    wallEditAngleFreeBadge: '角度ロック: 自由',
+    archDrawModeBtn: '配置モード',
+    archPanZoomModeBtn: '画面移動・ズーム',
+    archTwoFingerHint: '2本指でいつでもズーム＆移動',
+    zoomIn2DBtn: '平面図を拡大 (+)',
+    zoomOut2DBtn: '平面図を縮小 (-)',
+    zoomReset2DBtn: '表示をリセット',
+    archOutlinerFolder: '建築構造エレメント',
+    archSelectedOpeningTitle: 'ドア・窓開口部',
+    archSelectedStairTitle: '階段ユニット',
+    archSelectedRoofTitle: '屋根ユニット',
+    archSelectedRoomTitle: '部屋スラブ',
+    archBakeWallHint:
+      'このスマート壁を自由編集メッシュに変換すると、サブディビジョン分割やCSGブーリアンくり抜きを適用できます。',
+    photoRenderedResBadge: '出力解像度',
   },
 };
 

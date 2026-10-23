@@ -3,19 +3,23 @@ import {
   BrickWall,
   Check,
   ClipboardList,
+  Compass,
+  Copy,
   DoorOpen,
   Eraser,
+  Hand,
   Home,
   Layers2,
+  Maximize,
   MousePointer,
   PaintBucket,
   RotateCw,
-  Ruler,
   SlidersHorizontal,
-  SquareDashed,
   Sun,
   Trash2,
   X,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 import { StudioStrings } from '../i18n/translations';
 import {
@@ -31,9 +35,16 @@ interface ArchStudioBarProps {
   onSelectPhase: (phase: ArchBuildPhase | null) => void;
   isBlueprint2D: boolean;
   onToggleBlueprint2D: (next: boolean) => void;
+  onZoom2DIn?: () => void;
+  onZoom2DOut?: () => void;
+  onReset2DZoom?: () => void;
   archTool: ArchSubTool;
   onSetArchTool: (tool: ArchSubTool) => void;
   onResetToSelectTool: () => void;
+  archNavPanMode?: boolean;
+  onToggleArchNavPanMode?: (panOnly: boolean) => void;
+  wallEditAngleLock?: boolean;
+  onToggleWallEditAngleLock?: () => void;
   detectedRoomCount: number;
   onCommitExactWallLength?: (meters: number) => void;
   pendingArchCommit?: PendingArchCommit | null;
@@ -41,6 +52,7 @@ interface ArchStudioBarProps {
   onCancelPendingCommit?: () => void;
   archSelection?: ArchSelection;
   onRotateSelectedArch?: () => void;
+  onDuplicateSelectedArch?: () => void;
   onDeleteSelectedArch?: () => void;
   onOpenSelectedArchProps?: () => void;
   workflowOpen?: boolean;
@@ -54,9 +66,16 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
   onSelectPhase,
   isBlueprint2D,
   onToggleBlueprint2D,
+  onZoom2DIn,
+  onZoom2DOut,
+  onReset2DZoom,
   archTool,
   onSetArchTool,
   onResetToSelectTool,
+  archNavPanMode = false,
+  onToggleArchNavPanMode,
+  wallEditAngleLock = true,
+  onToggleWallEditAngleLock,
   detectedRoomCount,
   onCommitExactWallLength,
   pendingArchCommit,
@@ -64,6 +83,7 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
   onCancelPendingCommit,
   archSelection,
   onRotateSelectedArch,
+  onDuplicateSelectedArch,
   onDeleteSelectedArch,
   onOpenSelectedArchProps,
   workflowOpen,
@@ -127,6 +147,7 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
   };
 
   const canRotateSel =
+    archSelection?.kind === 'wall' ||
     archSelection?.kind === 'opening' ||
     archSelection?.kind === 'roof' ||
     archSelection?.kind === 'stair';
@@ -144,6 +165,45 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
           <Layers2 size={14} />
           <span>{isBlueprint2D ? t.archView2DBtn : t.archView3DBtn}</span>
         </button>
+
+        {/* Dedicated 1-Tap 2D Denah Zoom In / Out / Fit Controls */}
+        {isBlueprint2D && (
+          <div className="arch-2d-zoom-group" role="group">
+            {onZoom2DIn && (
+              <button
+                type="button"
+                className="arch-2d-zoom-btn"
+                onClick={onZoom2DIn}
+                title={t.zoomIn2DBtn}
+                aria-label={t.zoomIn2DBtn}
+              >
+                <ZoomIn size={14} />
+              </button>
+            )}
+            {onZoom2DOut && (
+              <button
+                type="button"
+                className="arch-2d-zoom-btn"
+                onClick={onZoom2DOut}
+                title={t.zoomOut2DBtn}
+                aria-label={t.zoomOut2DBtn}
+              >
+                <ZoomOut size={14} />
+              </button>
+            )}
+            {onReset2DZoom && (
+              <button
+                type="button"
+                className="arch-2d-zoom-btn"
+                onClick={onReset2DZoom}
+                title={t.zoomReset2DBtn}
+                aria-label={t.zoomReset2DBtn}
+              >
+                <Maximize size={13} />
+              </button>
+            )}
+          </div>
+        )}
 
         <span className="arch-strip-divider" />
 
@@ -245,6 +305,25 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
       {/* #12 Selected Arch Element Floating Quick-Action Bar */}
       {!pendingArchCommit && archTool === 'select' && archSelection && (
         <div className="arch-quick-action-bar">
+          {/* #7 Wall Angle Lock ON/OFF Pill right on Selected Wall */}
+          {archSelection.kind === 'wall' && onToggleWallEditAngleLock && (
+            <button
+              type="button"
+              className={`arch-qa-btn ${
+                wallEditAngleLock ? 'angle-locked' : ''
+              }`}
+              onClick={onToggleWallEditAngleLock}
+              title={t.wallEditAngleLockLabel}
+            >
+              <Compass size={13} />
+              <span>
+                {wallEditAngleLock
+                  ? t.wallEditAngleLockedBadge
+                  : t.wallEditAngleFreeBadge}
+              </span>
+            </button>
+          )}
+
           {canRotateSel && onRotateSelectedArch && (
             <button
               type="button"
@@ -264,6 +343,19 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
               </span>
             </button>
           )}
+
+          {archSelection.kind !== 'room' && onDuplicateSelectedArch && (
+            <button
+              type="button"
+              className="arch-qa-btn"
+              onClick={onDuplicateSelectedArch}
+              title={t.copy}
+            >
+              <Copy size={13} />
+              <span>{t.copy}</span>
+            </button>
+          )}
+
           {onOpenSelectedArchProps && (
             <button
               type="button"
@@ -288,48 +380,90 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
         </div>
       )}
 
+      {/* Smart Draw vs Pan/Zoom Disambiguation + Angle Lock Pill */}
       {activeHint && !pendingArchCommit && (
         <div className="arch-tool-hint-pill">
-          {archTool === 'measure' ? (
-            <Ruler size={13} />
-          ) : archTool === 'draw-room' ? (
-            <SquareDashed size={13} />
-          ) : archTool === 'erase-arch' ? (
-            <Eraser size={13} />
-          ) : (
-            <BrickWall size={13} />
-          )}
-          <span>{activeHint}</span>
+          {(archTool === 'draw-wall' ||
+            archTool === 'draw-room' ||
+            archTool === 'place-opening') &&
+            onToggleArchNavPanMode && (
+              <div className="arch-draw-pan-switch" role="group">
+                <button
+                  type="button"
+                  className={`arch-mode-seg-btn ${
+                    !archNavPanMode ? 'active' : ''
+                  }`}
+                  onClick={() => onToggleArchNavPanMode(false)}
+                >
+                  <BrickWall size={12} />
+                  <span>{t.archDrawModeBtn}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`arch-mode-seg-btn is-pan ${
+                    archNavPanMode ? 'active' : ''
+                  }`}
+                  onClick={() => onToggleArchNavPanMode(true)}
+                >
+                  <Hand size={12} />
+                  <span>{t.archPanZoomModeBtn}</span>
+                </button>
+              </div>
+            )}
 
-          {archTool === 'draw-wall' && onCommitExactWallLength && (
-            <div className="arch-exact-len-inline">
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.25"
-                min="0.25"
-                max="40"
-                value={exactLenDraft}
-                onChange={(e) => setExactLenDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    submitExactWall();
-                  }
-                }}
-                aria-label={t.archExactLengthPlaceholder}
-              />
-              <span className="arch-exact-unit">m</span>
-              <button
-                type="button"
-                className="arch-exact-commit-btn"
-                onClick={submitExactWall}
-              >
-                <Check size={12} />
-                <span>{t.archApplyLengthBtn}</span>
-              </button>
-            </div>
+          {archTool === 'draw-wall' && onToggleWallEditAngleLock && (
+            <button
+              type="button"
+              className={`arch-angle-toggle-chip ${
+                wallEditAngleLock ? 'active' : ''
+              }`}
+              onClick={onToggleWallEditAngleLock}
+              title={t.wallEditAngleLockLabel}
+            >
+              <Compass size={12} />
+              <span>
+                {wallEditAngleLock
+                  ? t.wallEditAngleLockedBadge
+                  : t.wallEditAngleFreeBadge}
+              </span>
+            </button>
           )}
+
+          <span className="arch-hint-text">
+            {archNavPanMode ? t.archTwoFingerHint : activeHint}
+          </span>
+
+          {archTool === 'draw-wall' &&
+            !archNavPanMode &&
+            onCommitExactWallLength && (
+              <div className="arch-exact-len-inline">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.25"
+                  min="0.25"
+                  max="40"
+                  value={exactLenDraft}
+                  onChange={(e) => setExactLenDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      submitExactWall();
+                    }
+                  }}
+                  aria-label={t.archExactLengthPlaceholder}
+                />
+                <span className="arch-exact-unit">m</span>
+                <button
+                  type="button"
+                  className="arch-exact-commit-btn"
+                  onClick={submitExactWall}
+                >
+                  <Check size={12} />
+                  <span>{t.archApplyLengthBtn}</span>
+                </button>
+              </div>
+            )}
 
           <button
             type="button"

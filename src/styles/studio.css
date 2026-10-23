@@ -9381,6 +9381,208 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   }
 }
 
+/* =========================================================
+   7-Point Architect Life × Blender Unification & Mobile UX Fixes
+   ========================================================= */
+
+/* #1 Left Toolbar Never Collides with Buat Rumah Utility Bar (.arch-studio-hud) */
+.left-toolbar .toolbar-collapse-icon-btn {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--bg-panel-solid);
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+
+.left-toolbar.house-mode {
+  top: 58px;
+  max-height: calc(100% - 68px);
+}
+
+.left-toolbar-expand-tab.house-mode {
+  top: 58px;
+}
+
+.left-toolbar-shell.house-mode .select-rollout-bar {
+  top: 98px;
+}
+
+.left-toolbar-shell.house-mode .axis-rollout-bar {
+  top: 314px;
+}
+
+/* #2 Studio 4K Photo Live Resolution Badge & 3-Column Aspect Row */
+.studio-photo-preview-frame {
+  position: relative;
+}
+
+.studio-photo-res-badge {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.84);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+.studio-photo-aspect-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+/* #5 2D Denah Zoom In / Out / Fit Controls & Smart Draw vs Pan Switch */
+.arch-2d-zoom-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  flex-shrink: 0;
+}
+
+.arch-2d-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #bae6fd;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.arch-2d-zoom-btn:hover,
+.arch-2d-zoom-btn:active {
+  background: rgba(56, 189, 248, 0.22);
+  color: #ffffff;
+}
+
+.arch-draw-pan-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  flex-shrink: 0;
+}
+
+.arch-mode-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.arch-mode-seg-btn.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+}
+
+.arch-mode-seg-btn.is-pan.active {
+  background: #059669;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.45);
+}
+
+/* #7 Wall Angle Lock Chip & Active Selected-Wall Button */
+.arch-angle-toggle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(30, 41, 59, 0.75);
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.arch-angle-toggle-chip.active {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(251, 191, 36, 0.75);
+  color: #fde68a;
+}
+
+.arch-qa-btn.angle-locked {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(251, 191, 36, 0.72);
+  color: #fde68a;
+}
+
+.arch-hint-text {
+  font-size: 11.5px;
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subdiv-split-cta-btn.active {
+  border-color: rgba(251, 191, 36, 0.75);
+  background: rgba(245, 158, 11, 0.2);
+  color: #fef08a;
+}
+
+@media (max-width: 767px) {
+  .left-toolbar.house-mode {
+    top: 54px;
+    max-height: calc(100% - 62px);
+  }
+
+  .left-toolbar-expand-tab.house-mode {
+    top: 54px;
+  }
+
+  .left-toolbar-shell.house-mode .select-rollout-bar {
+    top: 90px;
+  }
+
+  .left-toolbar-shell.house-mode .axis-rollout-bar {
+    top: 266px;
+  }
+
+  .studio-photo-aspect-row {
+    grid-template-columns: 1fr;
+  }
+
+  .arch-tool-hint-pill {
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: calc(100vw - 74px);
+    margin-left: auto;
+  }
+}
+
+
 
 
 

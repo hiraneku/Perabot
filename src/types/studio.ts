@@ -415,6 +415,13 @@ export interface StudioSnapshotOptions {
   shadingOverride?: ViewportShadingMode;
 }
 
+export interface StudioPhotoCaptureResult {
+  previewUrl: string;
+  blob: Blob | null;
+  width: number;
+  height: number;
+}
+
 export interface ObjectPointLightConfig {
   enabled: boolean;
   color: string;

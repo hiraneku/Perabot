@@ -1114,6 +1114,7 @@ export class ArchBuilderEngine {
   private detectedRooms: ArchDetectedRoom[] = [];
   private ceilingMeshes: Array<{ mesh: THREE.Mesh; ceilingY: number; floorId: string }> = [];
   private selection: ArchSelection = null;
+  private selections: Array<NonNullable<ArchSelection>> = [];
   private isBlueprint2D = false;
 
   constructor(initialData: ArchHouseData) {
@@ -1145,6 +1146,99 @@ export class ArchBuilderEngine {
 
   public setSelection(sel: ArchSelection): void {
     this.selection = sel;
+    this.selections = sel ? [sel] : [];
+  }
+
+  public getSelections(): Array<NonNullable<ArchSelection>> {
+    return [...this.selections];
+  }
+
+  public setSelections(items: Array<NonNullable<ArchSelection>>): void {
+    const dedup: Array<NonNullable<ArchSelection>> = [];
+    const seen = new Set<string>();
+    for (const it of items) {
+      const k = `${it.kind}:${it.id}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        dedup.push(it);
+      }
+    }
+    this.selections = dedup;
+    this.selection = dedup.length > 0 ? dedup[dedup.length - 1] : null;
+  }
+
+  public toggleSelection(item: NonNullable<ArchSelection>): ArchSelection {
+    const idx = this.selections.findIndex(
+      (s) => s.kind === item.kind && s.id === item.id
+    );
+    if (idx >= 0) {
+      this.selections.splice(idx, 1);
+    } else {
+      this.selections.push(item);
+    }
+    this.selection =
+      this.selections.length > 0
+        ? this.selections[this.selections.length - 1]
+        : null;
+    return this.selection;
+  }
+
+  public isElementSelected(
+    kind: NonNullable<ArchSelection>['kind'],
+    id: string
+  ): { selected: boolean; primary: boolean } {
+    const primary =
+      this.selection?.kind === kind && this.selection.id === id;
+    if (primary) return { selected: true, primary: true };
+    const selected = this.selections.some(
+      (s) => s.kind === kind && s.id === id
+    );
+    return { selected, primary: false };
+  }
+
+  private attachSelectionOutline(
+    root: THREE.Object3D,
+    isPrimary: boolean
+  ): void {
+    const edgeColor = isPrimary ? '#fbbf24' : '#38bdf8';
+    const xrayColor = isPrimary ? '#fde047' : '#7dd3fc';
+    const meshes: THREE.Mesh[] = [];
+    root.traverse((node) => {
+      if ((node as THREE.Mesh).isMesh && !node.name.startsWith('__selEdge')) {
+        meshes.push(node as THREE.Mesh);
+      }
+    });
+    for (const m of meshes) {
+      if (!m.geometry) continue;
+      const edges = new THREE.EdgesGeometry(m.geometry, 24);
+      const solidLine = new THREE.LineSegments(
+        edges,
+        new THREE.LineBasicMaterial({
+          color: edgeColor,
+          transparent: true,
+          opacity: 0.98,
+          depthTest: true,
+        })
+      );
+      solidLine.name = '__selEdgeSolid';
+      solidLine.renderOrder = 19;
+      solidLine.raycast = () => {};
+      m.add(solidLine);
+
+      const xrayLine = new THREE.LineSegments(
+        edges.clone(),
+        new THREE.LineBasicMaterial({
+          color: xrayColor,
+          transparent: true,
+          opacity: 0.36,
+          depthTest: false,
+        })
+      );
+      xrayLine.name = '__selEdgeXray';
+      xrayLine.renderOrder = 20;
+      xrayLine.raycast = () => {};
+      m.add(xrayLine);
+    }
   }
 
   public setBlueprint2DMode(active: boolean): void {
@@ -2763,8 +2857,8 @@ export class ArchBuilderEngine {
         shape.holes.push(insetHole);
       }
 
-      const isRoomSelected =
-        this.selection?.kind === 'room' && this.selection.id === room.id;
+      const roomSelInfo = this.isElementSelected('room', room.id);
+      const isRoomSelected = roomSelInfo.selected;
 
       const floorGeo = new THREE.ExtrudeGeometry(shape, {
         depth: 0.06,
@@ -2779,9 +2873,9 @@ export class ArchBuilderEngine {
         transparent: fStyle.ghost,
         opacity: fStyle.ghost ? 0.2 : 1,
         emissive: isRoomSelected
-          ? new THREE.Color('#3b82f6')
+          ? new THREE.Color(roomSelInfo.primary ? '#f59e0b' : '#0284c7')
           : new THREE.Color('#000000'),
-        emissiveIntensity: isRoomSelected ? 0.18 : 0,
+        emissiveIntensity: isRoomSelected ? 0.28 : 0,
       });
       if (!fStyle.ghost && room.floorPattern && room.floorPattern !== 'none') {
         applyProceduralPatternToMaterial(floorMat, room.floorPattern, 0.75, 0.75);
@@ -2796,6 +2890,9 @@ export class ArchBuilderEngine {
         archId: room.id,
         floorId: room.floorId,
       };
+      if (isRoomSelected) {
+        this.attachSelectionOutline(slabMesh, roomSelInfo.primary);
+      }
       this.structuralGroup.add(slabMesh);
 
       // Smart Auto-Hide Ceiling (with automatic Stairwell holes, Double-Height Void holes, & Skylight holes!)
@@ -2936,14 +3033,17 @@ export class ArchBuilderEngine {
       const fStyle = resolveFloorDrawStyle(wall.floorId);
       if (!fStyle.visible) continue;
 
-      const isWallSel =
-        this.selection?.kind === 'wall' && this.selection.id === wall.id;
+      const wallSelInfo = this.isElementSelected('wall', wall.id);
+      const isWallSel = wallSelInfo.selected;
       const wallGroup = this.buildSingleWallWithCutouts(
         wall,
         fStyle.baseY,
         fStyle.ghost,
         isWallSel
       );
+      if (isWallSel) {
+        this.attachSelectionOutline(wallGroup, wallSelInfo.primary);
+      }
       const midSample = sampleWallCurvePoint(wall, 0.5);
       wallGroup.userData.wallMidX = midSample.x;
       wallGroup.userData.wallMidZ = midSample.z;
@@ -3000,35 +3100,54 @@ export class ArchBuilderEngine {
       }
     }
 
-    // Add seamless Corner Junction Columns + Draggable Blue Corner Node Handles on Active Floor!
+    // Add seamless Corner Junction Columns + Draggable Corner Node Handles!
+    // In 3D Studio, ONLY selected walls display prominent glowing corner handles so unselected walls stay crisp and unmistakable.
+    // In 2D Denah, selected walls display bright Amber/Cyan handles and unselected joints show subtle blueprint nodes.
+    const selectedWallCornerKeys = new Set<string>();
+    for (const w of this.data.walls) {
+      if (!activeFl || w.floorId !== activeFl.id) continue;
+      if (!this.isElementSelected('wall', w.id).selected) continue;
+      for (const pt of [w.start, w.end]) {
+        selectedWallCornerKeys.add(`${Math.round(pt.x * 20)}:${Math.round(pt.z * 20)}`);
+      }
+    }
+
     const handleAddedKeys = new Set<string>();
     for (const w of this.data.walls) {
       if (!activeFl || w.floorId !== activeFl.id) continue;
+      const wallSelected = this.isElementSelected('wall', w.id).selected;
+      if (!this.isBlueprint2D && !wallSelected) continue;
+
       for (const pt of [w.start, w.end]) {
         const hk = `${Math.round(pt.x * 20)}:${Math.round(pt.z * 20)}`;
         if (handleAddedKeys.has(hk)) continue;
         handleAddedKeys.add(hk);
 
-        const handleRadius = this.isBlueprint2D ? 0.2 : 0.15;
+        const isActiveCorner = selectedWallCornerKeys.has(hk);
+        const handleRadius = isActiveCorner
+          ? this.isBlueprint2D
+            ? 0.24
+            : 0.19
+          : 0.12;
         const hGeo = new THREE.CylinderGeometry(
           handleRadius,
           handleRadius,
-          0.12,
-          18
+          isActiveCorner ? 0.16 : 0.1,
+          20
         );
         const hMat = new THREE.MeshBasicMaterial({
-          color: '#38bdf8',
+          color: isActiveCorner ? '#fbbf24' : '#38bdf8',
           transparent: true,
-          opacity: 0.9,
+          opacity: isActiveCorner ? 0.96 : 0.48,
           depthTest: false,
         });
         const hMesh = new THREE.Mesh(hGeo, hMat);
         hMesh.position.set(
           pt.x,
-          activeFl.elevation + (this.isBlueprint2D ? w.height + 0.15 : 0.08),
+          activeFl.elevation + (this.isBlueprint2D ? w.height + 0.16 : 0.1),
           pt.z
         );
-        hMesh.renderOrder = 22;
+        hMesh.renderOrder = isActiveCorner ? 24 : 21;
         hMesh.userData = {
           archHandleKind: 'wall-node',
           floorId: activeFl.id,
@@ -3102,9 +3221,11 @@ export class ArchBuilderEngine {
     for (const stair of this.data.stairs) {
       const fStyle = resolveFloorDrawStyle(stair.floorId);
       if (!fStyle.visible) continue;
-      const isSel =
-        this.selection?.kind === 'stair' && this.selection.id === stair.id;
-      const sGrp = buildStaircaseGroup(stair, isSel);
+      const stairSelInfo = this.isElementSelected('stair', stair.id);
+      const sGrp = buildStaircaseGroup(stair, stairSelInfo.selected);
+      if (stairSelInfo.selected) {
+        this.attachSelectionOutline(sGrp, stairSelInfo.primary);
+      }
       this.structuralGroup.add(sGrp);
     }
 
@@ -3113,9 +3234,11 @@ export class ArchBuilderEngine {
       for (const roof of this.data.roofs) {
         const fStyle = resolveFloorDrawStyle(roof.floorId);
         if (!fStyle.visible) continue;
-        const isSel =
-          this.selection?.kind === 'roof' && this.selection.id === roof.id;
-        const rGrp = buildParametricRoofGroup(roof, isSel);
+        const roofSelInfo = this.isElementSelected('roof', roof.id);
+        const rGrp = buildParametricRoofGroup(roof, roofSelInfo.selected);
+        if (roofSelInfo.selected) {
+          this.attachSelectionOutline(rGrp, roofSelInfo.primary);
+        }
         this.structuralGroup.add(rGrp);
       }
     }
@@ -3649,9 +3772,11 @@ export class ArchBuilderEngine {
 
       for (const op of wallOps) {
         const pt = sampleWallCurvePoint(wall, op.offsetRatio);
-        const isOpSel =
-          this.selection?.kind === 'opening' && this.selection.id === op.id;
-        const opGrp = buildOpeningAssembly(op, wall.thickness, isOpSel);
+        const opSelInfo = this.isElementSelected('opening', op.id);
+        const opGrp = buildOpeningAssembly(op, wall.thickness, opSelInfo.selected);
+        if (opSelInfo.selected) {
+          this.attachSelectionOutline(opGrp, opSelInfo.primary);
+        }
         opGrp.position.set(pt.x, op.sillHeight, pt.z);
         opGrp.rotation.y = -Math.atan2(pt.tz, pt.tx);
         curvedHolder.add(opGrp);
@@ -3734,9 +3859,15 @@ export class ArchBuilderEngine {
       }
 
       // Mount 3D Door / Window / Archway inside the cutout!
-      const isOpSel =
-        this.selection?.kind === 'opening' && this.selection.id === item.op.id;
-      const opMeshGrp = buildOpeningAssembly(item.op, wall.thickness, isOpSel);
+      const opSelInfo = this.isElementSelected('opening', item.op.id);
+      const opMeshGrp = buildOpeningAssembly(
+        item.op,
+        wall.thickness,
+        opSelInfo.selected
+      );
+      if (opSelInfo.selected) {
+        this.attachSelectionOutline(opMeshGrp, opSelInfo.primary);
+      }
       opMeshGrp.position.set(item.centerS, item.op.sillHeight, 0);
       wallHolder.add(opMeshGrp);
 
@@ -4130,6 +4261,683 @@ export class ArchBuilderEngine {
     );
     badge.position.set(mid.x, mid.y + 0.35, mid.z);
     this.measureGroup.add(badge);
+  }
+
+  /**
+   * #7 Angle Lock & Endpoint Welding for ALREADY-CREATED Walls!
+   * Computes snapped corner position relative to connected opposite wall anchor(s),
+   * supporting both strict 0°/45°/90° angle lock (including exact L-corner ortho intersections)
+   * and smooth freeform editing when `angleLock` is toggled OFF.
+   */
+  public snapExistingWallVertexDrag(
+    floorId: string,
+    currentVertexXZ: Vec2XZ,
+    rawTargetXZ: Vec2XZ,
+    angleLock: boolean,
+    gridStep = 0.05
+  ): {
+    point: Vec2XZ;
+    snappedEndpoint: boolean;
+    angleDeg: number | null;
+    lengthM: number | null;
+    anchor: Vec2XZ | null;
+  } {
+    const EPS = 0.085;
+    const anchors: Vec2XZ[] = [];
+    const otherNodes: Vec2XZ[] = [];
+
+    for (const w of this.data.walls) {
+      if (w.floorId !== floorId) continue;
+      const startMatches =
+        Math.hypot(w.start.x - currentVertexXZ.x, w.start.z - currentVertexXZ.z) <= EPS;
+      const endMatches =
+        Math.hypot(w.end.x - currentVertexXZ.x, w.end.z - currentVertexXZ.z) <= EPS;
+      if (startMatches && !endMatches) {
+        anchors.push({ ...w.end });
+      } else if (endMatches && !startMatches) {
+        anchors.push({ ...w.start });
+      } else {
+        otherNodes.push({ ...w.start }, { ...w.end });
+      }
+    }
+
+    // 1. Always allow welding onto another existing wall corner within 0.28m
+    let nearestNode: Vec2XZ | null = null;
+    let nearestDist = 0.28;
+    for (const nd of otherNodes) {
+      const d = Math.hypot(nd.x - rawTargetXZ.x, nd.z - rawTargetXZ.z);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestNode = nd;
+      }
+    }
+    if (nearestNode) {
+      const a0 = anchors[0] ?? null;
+      const angleDeg = a0
+        ? Math.round(
+            ((Math.atan2(nearestNode.z - a0.z, nearestNode.x - a0.x) * 180) /
+              Math.PI +
+              360) %
+              360
+          )
+        : null;
+      const lengthM = a0
+        ? round3(Math.hypot(nearestNode.x - a0.x, nearestNode.z - a0.z))
+        : null;
+      return {
+        point: { x: round3(nearestNode.x), z: round3(nearestNode.z) },
+        snappedEndpoint: true,
+        angleDeg,
+        lengthM,
+        anchor: a0,
+      };
+    }
+
+    const step = gridStep > 0 ? gridStep : 0.01;
+    let px = rawTargetXZ.x;
+    let pz = rawTargetXZ.z;
+
+    if (angleLock && anchors.length > 0) {
+      // 2a. If 2+ walls share this corner, check exact 90° L-corner orthogonal intersections first!
+      if (anchors.length >= 2) {
+        const a1 = anchors[0];
+        const a2 = anchors[1];
+        const candidates: Vec2XZ[] = [
+          { x: a1.x, z: a2.z },
+          { x: a2.x, z: a1.z },
+        ];
+        let bestOrtho: Vec2XZ | null = null;
+        let bestOrthoDist = 0.55;
+        for (const c of candidates) {
+          const d1 = Math.hypot(c.x - a1.x, c.z - a1.z);
+          const d2 = Math.hypot(c.x - a2.x, c.z - a2.z);
+          if (d1 < 0.2 || d2 < 0.2) continue;
+          const dist = Math.hypot(c.x - px, c.z - pz);
+          if (dist < bestOrthoDist) {
+            bestOrthoDist = dist;
+            bestOrtho = c;
+          }
+        }
+        if (bestOrtho) {
+          const lengthM = round3(
+            Math.hypot(bestOrtho.x - a1.x, bestOrtho.z - a1.z)
+          );
+          const ang = Math.round(
+            ((Math.atan2(bestOrtho.z - a1.z, bestOrtho.x - a1.x) * 180) /
+              Math.PI +
+              360) %
+              360
+          );
+          return {
+            point: { x: round3(bestOrtho.x), z: round3(bestOrtho.z) },
+            snappedEndpoint: false,
+            angleDeg: ang,
+            lengthM,
+            anchor: a1,
+          };
+        }
+      }
+
+      // 2b. Lock ray angle to crisp 45° increments (0° / 45° / 90° / 135° / 180° / 225° / 270° / 315°) from primary anchor!
+      const anchor = anchors[0];
+      const dx = px - anchor.x;
+      const dz = pz - anchor.z;
+      const rawDist = Math.max(0.25, Math.hypot(dx, dz));
+      const snappedDist =
+        step >= 0.05 ? Math.max(0.25, Math.round(rawDist / step) * step) : rawDist;
+      const rawAng = Math.atan2(dz, dx);
+      const snapStep = Math.PI / 4;
+      const lockedAng = Math.round(rawAng / snapStep) * snapStep;
+      px = anchor.x + Math.cos(lockedAng) * snappedDist;
+      pz = anchor.z + Math.sin(lockedAng) * snappedDist;
+      const deg = Math.round(((lockedAng * 180) / Math.PI + 360) % 360);
+      return {
+        point: { x: round3(px), z: round3(pz) },
+        snappedEndpoint: false,
+        angleDeg: deg,
+        lengthM: round3(snappedDist),
+        anchor,
+      };
+    }
+
+    // 3. Freeform Angle Mode (Angle Lock OFF): smooth freedom at any angle!
+    if (gridStep >= 0.05) {
+      px = Math.round(px / gridStep) * gridStep;
+      pz = Math.round(pz / gridStep) * gridStep;
+    }
+    const anchor = anchors[0] ?? null;
+    if (anchor && Math.hypot(px - anchor.x, pz - anchor.z) < 0.25) {
+      const ang = Math.atan2(pz - anchor.z, px - anchor.x);
+      px = anchor.x + Math.cos(ang) * 0.25;
+      pz = anchor.z + Math.sin(ang) * 0.25;
+    }
+    const angleDeg = anchor
+      ? Math.round(
+          ((Math.atan2(pz - anchor.z, px - anchor.x) * 180) / Math.PI + 360) %
+            360
+        )
+      : null;
+    const lengthM = anchor
+      ? round3(Math.hypot(px - anchor.x, pz - anchor.z))
+      : null;
+
+    return {
+      point: { x: round3(px), z: round3(pz) },
+      snappedEndpoint: false,
+      angleDeg,
+      lengthM,
+      anchor,
+    };
+  }
+
+  public showWallCornerEditOverlay(
+    anchor: Vec2XZ | null,
+    current: Vec2XZ,
+    elevationY: number,
+    angleDeg: number | null,
+    lengthM: number | null,
+    angleLocked: boolean
+  ): void {
+    disposeObjectTree(this.previewGroup);
+    this.previewGroup.clear();
+    if (!anchor) return;
+
+    const y = elevationY + 0.14;
+    const lineColor = angleLocked ? '#fbbf24' : '#38bdf8';
+    const guideLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(anchor.x, y, anchor.z),
+        new THREE.Vector3(current.x, y, current.z),
+      ]),
+      new THREE.LineBasicMaterial({
+        color: lineColor,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+      })
+    );
+    guideLine.renderOrder = 25;
+    guideLine.raycast = () => {};
+    this.previewGroup.add(guideLine);
+
+    if (lengthM !== null && angleDeg !== null) {
+      const badge = makeLabelSprite(
+        `${lengthM.toFixed(2)} m · ${angleDeg}°`,
+        angleLocked ? 'Kunci Sudut ON' : 'Sudut Bebas',
+        {
+          bg: angleLocked ? 'rgba(69, 26, 3, 0.92)' : 'rgba(15, 23, 42, 0.92)',
+          border: lineColor,
+          titleColor: angleLocked ? '#fef08a' : '#e0f2fe',
+          subColor: angleLocked ? '#fbbf24' : '#7dd3fc',
+          scale: 0.88,
+        }
+      );
+      badge.position.set(
+        (anchor.x + current.x) * 0.5,
+        elevationY + 0.55,
+        (anchor.z + current.z) * 0.5
+      );
+      this.previewGroup.add(badge);
+    }
+  }
+
+  /**
+   * Computes world center, yaw, and bounding dimensions (P × T × L) for any selected architectural element
+   * so Blender RGB TransformControls, QuickDimensionPill, and InspectorPanel work identically to 3D blocks!
+   */
+  public getArchElementTransformInfo(
+    sel: NonNullable<ArchSelection>,
+    floors: BuildingFloorLayer[]
+  ): {
+    position: THREE.Vector3;
+    yawRad: number;
+    dimensions: { x: number; y: number; z: number };
+  } | null {
+    const floorElev = (fid: string) =>
+      floors.find((f) => f.id === fid)?.elevation ?? 0;
+
+    if (sel.kind === 'wall') {
+      const w = this.data.walls.find((x) => x.id === sel.id);
+      if (!w) return null;
+      const baseY = floorElev(w.floorId);
+      const mid = sampleWallCurvePoint(w, 0.5);
+      const len = Math.max(0.2, computeWallLength(w));
+      const yaw = -Math.atan2(w.end.z - w.start.z, w.end.x - w.start.x);
+      return {
+        position: new THREE.Vector3(mid.x, baseY + w.height * 0.5, mid.z),
+        yawRad: yaw,
+        dimensions: {
+          x: round3(len),
+          y: round3(w.height),
+          z: round3(w.thickness),
+        },
+      };
+    }
+
+    if (sel.kind === 'opening') {
+      const op = this.data.openings.find((x) => x.id === sel.id);
+      if (!op) return null;
+      const w = this.data.walls.find((x) => x.id === op.wallId);
+      if (!w) return null;
+      const baseY = floorElev(w.floorId);
+      const pt = sampleWallCurvePoint(w, op.offsetRatio);
+      const yaw = -Math.atan2(pt.tz, pt.tx);
+      return {
+        position: new THREE.Vector3(
+          pt.x,
+          baseY + op.sillHeight + op.height * 0.5,
+          pt.z
+        ),
+        yawRad: yaw,
+        dimensions: {
+          x: round3(op.width),
+          y: round3(op.height),
+          z: round3(w.thickness),
+        },
+      };
+    }
+
+    if (sel.kind === 'stair') {
+      const st = this.data.stairs.find((x) => x.id === sel.id);
+      if (!st) return null;
+      const baseY = floorElev(st.floorId);
+      return {
+        position: new THREE.Vector3(
+          st.position.x,
+          baseY + st.height * 0.5,
+          st.position.z
+        ),
+        yawRad: st.rotationY * DEG2RAD,
+        dimensions: {
+          x: round3(st.width),
+          y: round3(st.height),
+          z: round3(st.runLength),
+        },
+      };
+    }
+
+    if (sel.kind === 'roof') {
+      const rf = this.data.roofs.find((x) => x.id === sel.id);
+      if (!rf) return null;
+      const halfSpan = Math.max(
+        0.4,
+        (rf.ridgeAxis === 'x' ? rf.depth : rf.width) * 0.5
+      );
+      const ridgeH =
+        rf.style === 'flat'
+          ? 0.28
+          : Math.max(0.25, Math.tan(rf.pitchDeg * DEG2RAD) * halfSpan);
+      return {
+        position: new THREE.Vector3(
+          rf.center.x,
+          rf.baseY + ridgeH * 0.5,
+          rf.center.z
+        ),
+        yawRad: rf.rotationY * DEG2RAD,
+        dimensions: {
+          x: round3(rf.width),
+          y: round3(ridgeH),
+          z: round3(rf.depth),
+        },
+      };
+    }
+
+    if (sel.kind === 'room') {
+      const rm = this.detectedRooms.find((x) => x.id === sel.id);
+      if (!rm) return null;
+      const baseY = floorElev(rm.floorId);
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      for (const p of rm.polygon) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.z < minZ) minZ = p.z;
+        if (p.z > maxZ) maxZ = p.z;
+      }
+      return {
+        position: new THREE.Vector3(rm.centroid.x, baseY + 0.04, rm.centroid.z),
+        yawRad: 0,
+        dimensions: {
+          x: round3(Math.max(0.2, maxX - minX)),
+          y: 0.06,
+          z: round3(Math.max(0.2, maxZ - minZ)),
+        },
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Translates selected architectural elements in 3D space (Move Gizmo, Keyboard Nudges, Repeat Array).
+   */
+  public translateArchElements(
+    items: Array<NonNullable<ArchSelection>>,
+    dx: number,
+    dy: number,
+    dz: number
+  ): boolean {
+    if (Math.abs(dx) < 1e-5 && Math.abs(dy) < 1e-5 && Math.abs(dz) < 1e-5) {
+      return false;
+    }
+    let changed = false;
+    for (const it of items) {
+      if (it.kind === 'wall') {
+        const w = this.data.walls.find((x) => x.id === it.id);
+        if (!w) continue;
+        w.start = { x: round3(w.start.x + dx), z: round3(w.start.z + dz) };
+        w.end = { x: round3(w.end.x + dx), z: round3(w.end.z + dz) };
+        changed = true;
+      } else if (it.kind === 'opening') {
+        const op = this.data.openings.find((x) => x.id === it.id);
+        if (!op) continue;
+        const w = this.data.walls.find((x) => x.id === op.wallId);
+        if (!w) continue;
+        if (Math.hypot(dx, dz) > 1e-4) {
+          const curPt = sampleWallCurvePoint(w, op.offsetRatio);
+          this.slideOpeningToWorldXZ(op.id, {
+            x: curPt.x + dx,
+            z: curPt.z + dz,
+          });
+        }
+        if (Math.abs(dy) > 1e-4) {
+          op.sillHeight = round3(
+            Math.max(0, Math.min(Math.max(0, w.height - op.height - 0.05), op.sillHeight + dy))
+          );
+        }
+        changed = true;
+      } else if (it.kind === 'stair') {
+        const st = this.data.stairs.find((x) => x.id === it.id);
+        if (!st) continue;
+        st.position = {
+          x: round3(st.position.x + dx),
+          y: round3(st.position.y + dy),
+          z: round3(st.position.z + dz),
+        };
+        changed = true;
+      } else if (it.kind === 'roof') {
+        const rf = this.data.roofs.find((x) => x.id === it.id);
+        if (!rf) continue;
+        rf.center = {
+          x: round3(rf.center.x + dx),
+          z: round3(rf.center.z + dz),
+        };
+        rf.baseY = round3(Math.max(0, rf.baseY + dy));
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Rotates selected architectural elements around `pivotXZ` by `deltaYawRad` (CCW in Three.js Y-up).
+   */
+  public rotateArchElements(
+    items: Array<NonNullable<ArchSelection>>,
+    pivotXZ: Vec2XZ,
+    deltaYawRad: number
+  ): boolean {
+    if (Math.abs(deltaYawRad) < 1e-5) return false;
+    const cos = Math.cos(-deltaYawRad);
+    const sin = Math.sin(-deltaYawRad);
+    const rotPt = (p: Vec2XZ): Vec2XZ => {
+      const rx = p.x - pivotXZ.x;
+      const rz = p.z - pivotXZ.z;
+      return {
+        x: round3(pivotXZ.x + rx * cos - rz * sin),
+        z: round3(pivotXZ.z + rx * sin + rz * cos),
+      };
+    };
+
+    let changed = false;
+    for (const it of items) {
+      if (it.kind === 'wall') {
+        const w = this.data.walls.find((x) => x.id === it.id);
+        if (!w) continue;
+        w.start = rotPt(w.start);
+        w.end = rotPt(w.end);
+        changed = true;
+      } else if (it.kind === 'stair') {
+        const st = this.data.stairs.find((x) => x.id === it.id);
+        if (!st) continue;
+        const rp = rotPt({ x: st.position.x, z: st.position.z });
+        st.position = { x: rp.x, y: st.position.y, z: rp.z };
+        st.rotationY = round3((st.rotationY + (deltaYawRad * 180) / Math.PI + 360) % 360);
+        changed = true;
+      } else if (it.kind === 'roof') {
+        const rf = this.data.roofs.find((x) => x.id === it.id);
+        if (!rf) continue;
+        rf.center = rotPt(rf.center);
+        rf.rotationY = round3((rf.rotationY + (deltaYawRad * 180) / Math.PI + 360) % 360);
+        changed = true;
+      } else if (it.kind === 'opening') {
+        const op = this.data.openings.find((x) => x.id === it.id);
+        if (!op) continue;
+        if (Math.abs(deltaYawRad) >= Math.PI * 0.25) {
+          op.flipSwing = !op.flipSwing;
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Applies exact meter dimensions (Length/Width, Height, Thickness/Depth) to a selected architectural element.
+   */
+  public setArchElementExactDimensions(
+    sel: NonNullable<ArchSelection>,
+    dims: { x: number; y: number; z: number }
+  ): boolean {
+    if (sel.kind === 'wall') {
+      const w = this.data.walls.find((v) => v.id === sel.id);
+      if (!w) return false;
+      const targetLen = Math.max(0.25, Math.min(60, dims.x));
+      const curDx = w.end.x - w.start.x;
+      const curDz = w.end.z - w.start.z;
+      const curLen = Math.max(0.01, Math.hypot(curDx, curDz));
+      const ux = curDx / curLen;
+      const uz = curDz / curLen;
+      const mx = (w.start.x + w.end.x) * 0.5;
+      const mz = (w.start.z + w.end.z) * 0.5;
+      w.start = {
+        x: round3(mx - ux * targetLen * 0.5),
+        z: round3(mz - uz * targetLen * 0.5),
+      };
+      w.end = {
+        x: round3(mx + ux * targetLen * 0.5),
+        z: round3(mz + uz * targetLen * 0.5),
+      };
+      w.height = round3(Math.max(0.3, Math.min(16, dims.y)));
+      w.thickness = round3(Math.max(0.06, Math.min(1.5, dims.z)));
+      return true;
+    }
+
+    if (sel.kind === 'opening') {
+      const op = this.data.openings.find((v) => v.id === sel.id);
+      if (!op) return false;
+      const w = this.data.walls.find((v) => v.id === op.wallId);
+      const maxW = w ? Math.max(0.35, computeWallLength(w) - 0.16) : 6;
+      const maxH = w ? Math.max(0.4, w.height - op.sillHeight - 0.05) : 5;
+      op.width = round3(Math.max(0.35, Math.min(maxW, dims.x)));
+      op.height = round3(Math.max(0.4, Math.min(maxH, dims.y)));
+      return true;
+    }
+
+    if (sel.kind === 'stair') {
+      const st = this.data.stairs.find((v) => v.id === sel.id);
+      if (!st) return false;
+      st.width = round3(Math.max(0.6, Math.min(6, dims.x)));
+      st.height = round3(Math.max(0.6, Math.min(12, dims.y)));
+      st.runLength = round3(Math.max(1.0, Math.min(14, dims.z)));
+      return true;
+    }
+
+    if (sel.kind === 'roof') {
+      const rf = this.data.roofs.find((v) => v.id === sel.id);
+      if (!rf) return false;
+      rf.width = round3(Math.max(0.8, Math.min(60, dims.x)));
+      rf.depth = round3(Math.max(0.8, Math.min(60, dims.z)));
+      if (rf.style !== 'flat') {
+        const halfSpan = Math.max(
+          0.4,
+          (rf.ridgeAxis === 'x' ? rf.depth : rf.width) * 0.5
+        );
+        const targetH = Math.max(0.25, Math.min(14, dims.y));
+        const pitch = (Math.atan2(targetH, halfSpan) * 180) / Math.PI;
+        rf.pitchDeg = round3(Math.max(12, Math.min(55, pitch)));
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Duplicates selected architectural elements (preserving hosted openings when walls are duplicated!).
+   */
+  public duplicateArchElements(
+    items: Array<NonNullable<ArchSelection>>,
+    offset: { x: number; y: number; z: number } = { x: 0.75, y: 0, z: 0.75 }
+  ): Array<NonNullable<ArchSelection>> {
+    const created: Array<NonNullable<ArchSelection>> = [];
+    const uid = () => Math.random().toString(36).slice(2, 8);
+
+    for (const it of items) {
+      if (it.kind === 'wall') {
+        const w = this.data.walls.find((x) => x.id === it.id);
+        if (!w) continue;
+        const newWall: ArchWallSegment = {
+          ...w,
+          id: `wall_${Date.now()}_${uid()}`,
+          start: {
+            x: round3(w.start.x + offset.x),
+            z: round3(w.start.z + offset.z),
+          },
+          end: {
+            x: round3(w.end.x + offset.x),
+            z: round3(w.end.z + offset.z),
+          },
+        };
+        this.data.walls.push(newWall);
+        // Also clone doors/windows attached to this wall!
+        const hosted = this.data.openings.filter((o) => o.wallId === w.id);
+        for (const hop of hosted) {
+          this.data.openings.push({
+            ...hop,
+            id: `open_${Date.now()}_${uid()}`,
+            wallId: newWall.id,
+          });
+        }
+        created.push({ kind: 'wall', id: newWall.id });
+      } else if (it.kind === 'opening') {
+        const op = this.data.openings.find((x) => x.id === it.id);
+        if (!op) continue;
+        const w = this.data.walls.find((x) => x.id === op.wallId);
+        if (!w) continue;
+        const len = Math.max(1, computeWallLength(w));
+        const shiftRatio = Math.min(0.85, Math.max(0.15, op.offsetRatio + (op.width + 0.35) / len));
+        const newOp: ArchOpeningItem = {
+          ...op,
+          id: `open_${Date.now()}_${uid()}`,
+          offsetRatio: round3(shiftRatio),
+        };
+        this.data.openings.push(newOp);
+        created.push({ kind: 'opening', id: newOp.id });
+      } else if (it.kind === 'stair') {
+        const st = this.data.stairs.find((x) => x.id === it.id);
+        if (!st) continue;
+        const newSt: ArchStairItem = {
+          ...st,
+          id: `stair_${Date.now()}_${uid()}`,
+          position: {
+            x: round3(st.position.x + offset.x),
+            y: round3(st.position.y + offset.y),
+            z: round3(st.position.z + offset.z),
+          },
+        };
+        this.data.stairs.push(newSt);
+        created.push({ kind: 'stair', id: newSt.id });
+      } else if (it.kind === 'roof') {
+        const rf = this.data.roofs.find((x) => x.id === it.id);
+        if (!rf) continue;
+        const newRf: ArchRoofItem = {
+          ...rf,
+          id: `roof_${Date.now()}_${uid()}`,
+          center: {
+            x: round3(rf.center.x + offset.x),
+            z: round3(rf.center.z + offset.z),
+          },
+          baseY: round3(Math.max(0, rf.baseY + offset.y)),
+        };
+        this.data.roofs.push(newRf);
+        created.push({ kind: 'roof', id: newRf.id });
+      }
+    }
+    return created;
+  }
+
+  public dropArchElementsToFloor(
+    items: Array<NonNullable<ArchSelection>>,
+    floors: BuildingFloorLayer[]
+  ): boolean {
+    let changed = false;
+    for (const it of items) {
+      if (it.kind === 'opening') {
+        const op = this.data.openings.find((x) => x.id === it.id);
+        if (!op) continue;
+        op.sillHeight = op.kind.startsWith('window') ? 0.9 : 0;
+        changed = true;
+      } else if (it.kind === 'roof') {
+        const rf = this.data.roofs.find((x) => x.id === it.id);
+        if (!rf) continue;
+        const fl = floors.find((f) => f.id === rf.floorId);
+        if (fl) {
+          rf.baseY = round3(fl.elevation + fl.height);
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
+  public applyColorToArchElements(
+    items: Array<NonNullable<ArchSelection>>,
+    hexColor: string
+  ): boolean {
+    let changed = false;
+    for (const it of items) {
+      if (it.kind === 'wall') {
+        const w = this.data.walls.find((x) => x.id === it.id);
+        if (!w) continue;
+        w.exteriorColor = hexColor;
+        w.interiorColor = hexColor;
+        changed = true;
+      } else if (it.kind === 'opening') {
+        const op = this.data.openings.find((x) => x.id === it.id);
+        if (!op) continue;
+        op.frameColor = hexColor;
+        changed = true;
+      } else if (it.kind === 'stair') {
+        const st = this.data.stairs.find((x) => x.id === it.id);
+        if (!st) continue;
+        st.color = hexColor;
+        changed = true;
+      } else if (it.kind === 'roof') {
+        const rf = this.data.roofs.find((x) => x.id === it.id);
+        if (!rf) continue;
+        rf.color = hexColor;
+        changed = true;
+      } else if (it.kind === 'room') {
+        const rm = this.detectedRooms.find((x) => x.id === it.id);
+        if (!rm) continue;
+        this.updateRoomMeta(rm.id, { floorColor: hexColor });
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   public dispose(): void {

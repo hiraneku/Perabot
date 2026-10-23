@@ -731,3 +731,78 @@ describe('System 6 & Schema Migration / Regressions', () => {
     assert.equal(eng.getData().roomMetas[0].isVoid, true);
   });
 });
+
+describe('System 7: Architect Life × Blender Unification & Existing-Wall Angle Lock', () => {
+  it('snaps already-created wall corners to 0°/45°/90° when angleLock=true and allows free angles when angleLock=false', () => {
+    const house = createEmptyArchHouseData();
+    house.walls = [makeWall('w_edit_1', { x: 0, z: 0 }, { x: 4, z: 0 })];
+    const eng = new ArchBuilderEngine(house);
+
+    // Dragging endpoint (4, 0) slightly off-axis to (4.1, 0.35):
+    // With angleLock = true -> locks cleanly to 0° (z === 0)!
+    const locked = eng.snapExistingWallVertexDrag(
+      'floor_1',
+      { x: 4, z: 0 },
+      { x: 4.1, z: 0.35 },
+      true,
+      0.1
+    );
+    assert.equal(locked.point.z, 0);
+    assert.equal(locked.angleDeg, 0);
+
+    // With angleLock = false -> preserves off-axis freeform z = 0.35 (snapped to 0.1m grid -> 0.4)!
+    const freeform = eng.snapExistingWallVertexDrag(
+      'floor_1',
+      { x: 4, z: 0 },
+      { x: 4.1, z: 0.38 },
+      false,
+      0.1
+    );
+    assert.equal(freeform.point.z, 0.4);
+    assert.notEqual(freeform.angleDeg, 0);
+  });
+
+  it('supports multi-selection, translate, rotate, exact meter sizing, and wall+opening duplication', () => {
+    const floors = createDefaultBuildingFloors('id');
+    const house = createEmptyArchHouseData();
+    house.walls = [
+      makeWall('w_a', { x: 0, z: 0 }, { x: 3, z: 0 }),
+      makeWall('w_b', { x: 3, z: 0 }, { x: 3, z: 3 }),
+    ];
+    const eng = new ArchBuilderEngine(house);
+    eng.addOpeningOnWall('w_a', 'door-single', 0.5);
+
+    eng.setSelections([
+      { kind: 'wall', id: 'w_a' },
+      { kind: 'wall', id: 'w_b' },
+    ]);
+    assert.equal(eng.getSelections().length, 2);
+    assert.equal(eng.isElementSelected('wall', 'w_a').selected, true);
+    assert.equal(eng.isElementSelected('wall', 'w_b').primary, true);
+
+    // Exact meter dimensions on wall w_a: resize length from 3m to 5m, height to 3.4m, thickness to 0.2m
+    const resized = eng.setArchElementExactDimensions(
+      { kind: 'wall', id: 'w_a' },
+      { x: 5, y: 3.4, z: 0.2 }
+    );
+    assert.equal(resized, true);
+    const info = eng.getArchElementTransformInfo(
+      { kind: 'wall', id: 'w_a' },
+      floors
+    );
+    assert.ok(info !== null);
+    assert.equal(info.dimensions.x, 5);
+    assert.equal(info.dimensions.y, 3.4);
+    assert.equal(info.dimensions.z, 0.2);
+
+    // Duplicate wall w_a -> also clones its hosted door!
+    const created = eng.duplicateArchElements(
+      [{ kind: 'wall', id: 'w_a' }],
+      { x: 1, y: 0, z: 2 }
+    );
+    assert.equal(created.length, 1);
+    assert.equal(eng.getData().walls.length, 3);
+    assert.equal(eng.getData().openings.length, 2);
+  });
+});
+

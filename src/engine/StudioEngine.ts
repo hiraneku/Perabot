@@ -97,6 +97,7 @@ import {
   SitePlanningData,
   SnapSettings,
   StudioMode,
+  StudioPhotoCaptureResult,
   StudioSnapshotOptions,
   SubdivisionStats,
   SunEnvironmentSettings,
@@ -122,6 +123,7 @@ interface HistorySnapshot {
   activeFloorId?: string;
   archData?: ArchHouseData;
   archSelection?: ArchSelection;
+  archSelections?: Array<NonNullable<ArchSelection>>;
 }
 
 interface InternalTransformControls {
@@ -164,7 +166,10 @@ export interface StudioEngineCallbacks {
     archData: ArchHouseData;
     detectedRooms: ArchDetectedRoom[];
     archSelection: ArchSelection;
+    selectedArchItems: Array<NonNullable<ArchSelection>>;
     archTool: ArchSubTool;
+    archNavPanMode: boolean;
+    wallEditAngleLock: boolean;
     isBlueprint2D: boolean;
     cameraLensFov: number;
     wallChainActive: boolean;
@@ -382,6 +387,18 @@ export class StudioEngine {
   private didMoveDuringSurfaceSlide = false;
   private gizmoSurfaceProbeOffset = new THREE.Vector3(0, -0.5, 0);
 
+  // Blender × Architect Life Unified Gizmo Proxy & Angle/Navigation State
+  private readonly archGizmoProxy = new THREE.Object3D();
+  private archGizmoStartData: ArchHouseData | null = null;
+  private archGizmoStartPos = new THREE.Vector3();
+  private archGizmoStartDims: { x: number; y: number; z: number } = {
+    x: 1,
+    y: 1,
+    z: 1,
+  };
+  private wallEditAngleLock = true;
+  private archNavPanMode = false;
+
   private counters: Partial<Record<PrimitiveKind, number>> = {};
   private importedNameCounters: Record<string, number> = {};
 
@@ -420,7 +437,7 @@ export class StudioEngine {
 
     const width = Math.max(container.clientWidth, 1);
     const height = Math.max(container.clientHeight, 1);
-    this.camera = new THREE.PerspectiveCamera(46, width / height, 0.05, 300);
+    this.camera = new THREE.PerspectiveCamera(46, width / height, 0.05, 900);
     this.camera.position.set(5.4, 4.1, 6.2);
 
     this.renderer = new THREE.WebGLRenderer({
@@ -491,11 +508,16 @@ export class StudioEngine {
     this.scene.add(this.surfaceNormalVisualizer.group);
     this.scene.add(this.validationVisualizer.group);
 
+    this.archGizmoProxy.name = '__archGizmoProxy';
+    this.scene.add(this.archGizmoProxy);
+
     this.orbitControls = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbitControls.enableDamping = true;
     this.orbitControls.dampingFactor = 0.08;
-    this.orbitControls.maxDistance = 120;
-    this.orbitControls.minDistance = 0.5;
+    this.orbitControls.screenSpacePanning = true;
+    this.orbitControls.maxDistance = 260;
+    this.orbitControls.minDistance = 0.45;
+    this.orbitControls.zoomSpeed = 1.25;
     this.orbitControls.maxPolarAngle = Math.PI * 0.92;
     this.orbitControls.target.set(0, 0.6, 0);
     this.orbitControls.touches = {
@@ -527,7 +549,17 @@ export class StudioEngine {
       }
       if (isDragging) {
         this.wasGizmoDragging = true;
-        if (this.selectedId) {
+        if (this.transformControls.object === this.archGizmoProxy) {
+          this.archGizmoStartData = this.archEngine.getData();
+          this.archGizmoStartPos.copy(this.archGizmoProxy.position);
+          const sel = this.archEngine.getSelection();
+          const info = sel
+            ? this.archEngine.getArchElementTransformInfo(sel, this.floors)
+            : null;
+          this.archGizmoStartDims = info
+            ? { ...info.dimensions }
+            : { x: 1, y: 1, z: 1 };
+        } else if (this.selectedId) {
           const selMesh = this.meshMap.get(this.selectedId);
           if (selMesh) {
             this.dragStartLeaderPos.copy(selMesh.position);
@@ -559,11 +591,13 @@ export class StudioEngine {
           }
         }
       } else {
+        this.archGizmoStartData = null;
         this.activeGroupRelMatrices.clear();
         this.snapVisualizer.clear();
         this.protractorVisualizer.hide();
         this.surfaceNormalVisualizer.hide();
         this.updateSeamlessTouchFaces();
+        this.syncArchGizmoProxy();
         this.pushHistorySnapshot();
         this.emitDragFeedback(false);
         this.emitState();
@@ -820,6 +854,11 @@ export class StudioEngine {
       this.isBoxSelecting = false;
       this.callbacks.onBoxSelectRect?.(null);
     }
+    if (this.archTool !== 'select') {
+      this.setArchTool('select');
+    } else {
+      this.syncOrbitNavigationConfig();
+    }
   }
 
   public getSelectionSubMode(): SelectionSubMode {
@@ -835,6 +874,7 @@ export class StudioEngine {
     for (const [id, mesh] of this.meshMap.entries()) {
       if (
         mesh.visible &&
+        !mesh.userData.userLocked &&
         !this.ghostedMeshIds.has(id) &&
         !this.floorGhostedIds.has(id) &&
         !this.isMeshFloorLocked(mesh)
@@ -844,9 +884,45 @@ export class StudioEngine {
     }
     this.selectedIds = ids;
     this.selectedId = ids.length > 0 ? ids[ids.length - 1] : null;
+
+    let archCount = 0;
+    if (this.studioMode === 'house') {
+      const visibleFloorIds = new Set(
+        this.floors
+          .filter((f) => f.visible && !f.locked)
+          .map((f) => f.id)
+      );
+      const data = this.archEngine.getData();
+      const archItems: Array<NonNullable<ArchSelection>> = [];
+      for (const w of data.walls) {
+        if (visibleFloorIds.has(w.floorId)) {
+          archItems.push({ kind: 'wall', id: w.id });
+        }
+      }
+      for (const op of data.openings) {
+        const host = data.walls.find((w) => w.id === op.wallId);
+        if (host && visibleFloorIds.has(host.floorId)) {
+          archItems.push({ kind: 'opening', id: op.id });
+        }
+      }
+      for (const st of data.stairs) {
+        if (visibleFloorIds.has(st.floorId)) {
+          archItems.push({ kind: 'stair', id: st.id });
+        }
+      }
+      for (const rf of data.roofs) {
+        if (visibleFloorIds.has(rf.floorId)) {
+          archItems.push({ kind: 'roof', id: rf.id });
+        }
+      }
+      this.archEngine.setSelections(archItems);
+      this.rebuildArchitecture();
+      archCount = archItems.length;
+    }
+
     this.reattachTransformAfterSelectionChange();
     this.emitState();
-    return ids.length;
+    return ids.length + archCount;
   }
 
   public setAxisLock(lock: AxisLockMode): void {
@@ -1284,6 +1360,9 @@ export class StudioEngine {
 
   public setArchTool(tool: ArchSubTool): void {
     this.archTool = tool;
+    if (tool === 'select') {
+      this.archNavPanMode = false;
+    }
     this.wallChainStart = null;
     this.isArchDragDrawing = false;
     this.archDragStartXZ = null;
@@ -1302,11 +1381,93 @@ export class StudioEngine {
         this.gridSystem.updateSculptCursor(null);
       }
       this.selectObject(null, false);
-      this.renderer.domElement.style.cursor = 'crosshair';
+      this.renderer.domElement.style.cursor = this.archNavPanMode
+        ? 'grab'
+        : 'crosshair';
     } else {
       this.renderer.domElement.style.cursor = 'default';
     }
+    this.syncOrbitNavigationConfig();
+    this.reattachTransformAfterSelectionChange();
     this.emitState();
+  }
+
+  public setArchNavPanMode(panOnly: boolean): void {
+    this.archNavPanMode = panOnly;
+    if (panOnly) {
+      this.isArchDragDrawing = false;
+      this.archDragStartXZ = null;
+      this.archDragCurrentXZ = null;
+      this.wallChainStart = null;
+      this.archEngine.clearPreview();
+    }
+    this.syncOrbitNavigationConfig();
+    this.renderer.domElement.style.cursor = panOnly
+      ? 'grab'
+      : this.archTool !== 'select'
+      ? 'crosshair'
+      : 'default';
+    this.emitState();
+  }
+
+  public getArchNavPanMode(): boolean {
+    return this.archNavPanMode;
+  }
+
+  public setWallEditAngleLock(locked: boolean): void {
+    this.wallEditAngleLock = locked;
+    this.wallDrawDefaults.angleSnap = locked;
+    this.emitState();
+  }
+
+  public getWallEditAngleLock(): boolean {
+    return this.wallEditAngleLock;
+  }
+
+  private syncOrbitNavigationConfig(): void {
+    const isOneFingerDrawTool =
+      this.studioMode === 'house' &&
+      this.archTool !== 'select' &&
+      !this.archNavPanMode &&
+      this.selectionSubMode !== 'box';
+
+    if (this.isBlueprint2D) {
+      this.orbitControls.enableRotate = false;
+      this.orbitControls.screenSpacePanning = true;
+      this.orbitControls.minDistance = 2.0;
+      this.orbitControls.maxDistance = 320;
+      this.orbitControls.zoomSpeed = 1.65;
+      this.orbitControls.mouseButtons = {
+        LEFT: isOneFingerDrawTool ? (null as unknown as THREE.MOUSE) : THREE.MOUSE.PAN,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      };
+      this.orbitControls.touches = {
+        ONE: isOneFingerDrawTool
+          ? (null as unknown as THREE.TOUCH)
+          : THREE.TOUCH.PAN,
+        TWO: THREE.TOUCH.DOLLY_PAN,
+      };
+    } else {
+      this.orbitControls.enableRotate = true;
+      this.orbitControls.screenSpacePanning = true;
+      this.orbitControls.minDistance = 0.45;
+      this.orbitControls.maxDistance = 260;
+      this.orbitControls.zoomSpeed = 1.25;
+      this.orbitControls.mouseButtons = {
+        LEFT: isOneFingerDrawTool
+          ? (null as unknown as THREE.MOUSE)
+          : THREE.MOUSE.ROTATE,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.PAN,
+      };
+      this.orbitControls.touches = {
+        ONE: isOneFingerDrawTool
+          ? (null as unknown as THREE.TOUCH)
+          : THREE.TOUCH.ROTATE,
+        TWO: THREE.TOUCH.DOLLY_PAN,
+      };
+    }
   }
 
   public cancelArchChain(): void {
@@ -1386,6 +1547,25 @@ export class StudioEngine {
     if (!sel) return false;
     const data = this.archEngine.getData();
 
+    if (sel.kind === 'wall') {
+      const info = this.archEngine.getArchElementTransformInfo(sel, this.floors);
+      if (
+        info &&
+        this.archEngine.rotateArchElements(
+          this.archEngine.getSelections(),
+          { x: info.position.x, z: info.position.z },
+          Math.PI * 0.5
+        )
+      ) {
+        this.rebuildArchitecture();
+        this.reattachTransformAfterSelectionChange();
+        this.pushHistorySnapshot();
+        this.emitState();
+        return true;
+      }
+      return false;
+    }
+
     if (sel.kind === 'opening') {
       const op = data.openings.find((o) => o.id === sel.id);
       if (!op) return false;
@@ -1413,6 +1593,15 @@ export class StudioEngine {
       return true;
     }
     return false;
+  }
+
+  public toggleArchDoorOpen(openingId: string): boolean {
+    const toggled = this.archEngine.toggleDoorOpen(openingId);
+    if (toggled === null) return false;
+    this.rebuildArchitecture();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
   }
 
   public setWallDrawDefaults(patch: Partial<WallDrawDefaults>): void {
@@ -2001,9 +2190,43 @@ export class StudioEngine {
     this.emitState();
   }
 
-  public deleteSelectedArchItem(): boolean {
-    if (!this.archEngine.deleteSelectedArchElement()) return false;
+  public selectArchElement(
+    sel: ArchSelection,
+    additive = false,
+    emit = true
+  ): void {
+    if (this.archTool !== 'select') {
+      this.archTool = 'select';
+      this.archNavPanMode = false;
+      this.syncOrbitNavigationConfig();
+    }
+    if (!sel) {
+      this.archEngine.setSelection(null);
+    } else if (additive) {
+      this.archEngine.toggleSelection(sel);
+    } else {
+      this.selectObject(null, false);
+      this.archEngine.setSelection(sel);
+    }
     this.rebuildArchitecture();
+    this.reattachTransformAfterSelectionChange();
+    if (emit) this.emitState();
+  }
+
+  public deleteSelectedArchItem(): boolean {
+    const items = this.archEngine.getSelections();
+    if (items.length === 0) return false;
+    let deletedAny = false;
+    for (const it of items) {
+      this.archEngine.setSelection(it);
+      if (this.archEngine.deleteSelectedArchElement()) {
+        deletedAny = true;
+      }
+    }
+    this.archEngine.setSelection(null);
+    if (!deletedAny) return false;
+    this.rebuildArchitecture();
+    this.reattachTransformAfterSelectionChange();
     this.pushHistorySnapshot();
     this.emitState();
     return true;
@@ -2096,36 +2319,77 @@ export class StudioEngine {
         this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
       focus.y = activeFl ? activeFl.elevation : 0;
 
-      // Low-FOV overhead top-down architectural projection (zero perspective distortion + smooth pan/zoom!)
-      this.camera.fov = 22;
+      // Low-FOV overhead top-down architectural projection (zero perspective distortion + wide zoom range!)
+      this.camera.fov = 26;
       this.camera.updateProjectionMatrix();
-      this.orbitControls.enableRotate = false;
-      this.orbitControls.touches = {
-        ONE: THREE.TOUCH.PAN,
-        TWO: THREE.TOUCH.DOLLY_PAN,
-      };
       this.orbitControls.target.copy(focus);
-      this.camera.position.set(focus.x, focus.y + 34, focus.z + 0.001);
+      this.camera.position.set(focus.x, focus.y + 30, focus.z + 0.001);
       this.camera.lookAt(focus);
+      this.syncOrbitNavigationConfig();
       this.orbitControls.update();
     } else {
-      this.orbitControls.enableRotate = true;
-      this.orbitControls.touches = {
-        ONE: THREE.TOUCH.ROTATE,
-        TWO: THREE.TOUCH.DOLLY_PAN,
-      };
       this.camera.fov = this.savedPre2DCamera?.fov ?? this.cameraLensFov;
       this.camera.updateProjectionMatrix();
+      this.syncOrbitNavigationConfig();
       if (this.savedPre2DCamera) {
         this.camera.position.copy(this.savedPre2DCamera.pos);
         this.orbitControls.target.copy(this.savedPre2DCamera.target);
         this.camera.lookAt(this.orbitControls.target);
-        this.orbitControls.update();
       }
+      this.orbitControls.update();
     }
 
     this.rebuildArchitecture();
     this.emitState();
+  }
+
+  public zoomViewportBy(scaleFactor: number): void {
+    const target = this.orbitControls.target;
+    const offset = this.camera.position.clone().sub(target);
+    const curDist = Math.max(0.1, offset.length());
+    const minD = this.isBlueprint2D ? 2.0 : 0.45;
+    const maxD = this.isBlueprint2D ? 320 : 260;
+    const nextDist = Math.max(minD, Math.min(maxD, curDist * scaleFactor));
+    offset.normalize().multiplyScalar(nextDist);
+    this.camera.position.copy(target).add(offset);
+    this.orbitControls.update();
+  }
+
+  public resetBlueprint2DZoom(): void {
+    const activeFl =
+      this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+    const baseY = activeFl ? activeFl.elevation : 0;
+    const data = this.archEngine.getData();
+    const flWalls = data.walls.filter((w) => w.floorId === this.activeFloorId);
+
+    let cx = 0;
+    let cz = 0;
+    let span = 12;
+    if (flWalls.length > 0) {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minZ = Infinity;
+      let maxZ = -Infinity;
+      for (const w of flWalls) {
+        minX = Math.min(minX, w.start.x, w.end.x);
+        maxX = Math.max(maxX, w.start.x, w.end.x);
+        minZ = Math.min(minZ, w.start.z, w.end.z);
+        maxZ = Math.max(maxZ, w.start.z, w.end.z);
+      }
+      cx = (minX + maxX) * 0.5;
+      cz = (minZ + maxZ) * 0.5;
+      span = Math.max(8, Math.max(maxX - minX, maxZ - minZ) * 1.45);
+    }
+
+    const fovRad = (this.camera.fov * 0.5) * DEG2RAD;
+    const heightDist = Math.max(
+      6,
+      Math.min(280, (span * 0.5) / Math.max(0.15, Math.tan(fovRad)))
+    );
+    this.orbitControls.target.set(cx, baseY, cz);
+    this.camera.position.set(cx, baseY + heightDist, cz + 0.001);
+    this.camera.lookAt(this.orbitControls.target);
+    this.orbitControls.update();
   }
 
   public setCameraLensFov(fovDeg: number): void {
@@ -2378,7 +2642,49 @@ export class StudioEngine {
     if (!config) return 0;
 
     const sourceMeshes = this.getSelectedSourceMeshesForArray();
-    if (sourceMeshes.length === 0) return 0;
+    if (sourceMeshes.length === 0) {
+      // Architectural Repeat Array preview (ghost boxes showing exact wall/stair/roof array positions!)
+      const archSel = this.archEngine.getSelection();
+      if (!archSel || archSel.kind === 'room') return 0;
+      const info = this.archEngine.getArchElementTransformInfo(
+        archSel,
+        this.floors
+      );
+      if (!info) return 0;
+      const box = new THREE.Box3().setFromCenterAndSize(
+        info.position,
+        new THREE.Vector3(
+          info.dimensions.x,
+          info.dimensions.y,
+          info.dimensions.z
+        )
+      );
+      const instances = this.computeRepeatArrayOffsets(config, box);
+      const ghostMat = new THREE.MeshStandardMaterial({
+        color: '#38bdf8',
+        emissive: '#0284c7',
+        emissiveIntensity: 0.42,
+        transparent: true,
+        opacity: 0.42,
+        depthWrite: false,
+        roughness: 0.4,
+      });
+      const baseGeo = new THREE.BoxGeometry(
+        info.dimensions.x,
+        info.dimensions.y,
+        info.dimensions.z
+      );
+      for (const inst of instances) {
+        const ghost = new THREE.Mesh(baseGeo.clone(), ghostMat.clone());
+        ghost.position.copy(info.position).add(inst.offset);
+        ghost.rotation.set(0, info.yawRad + inst.rotYDeg * DEG2RAD, 0);
+        ghost.raycast = () => {};
+        this.repeatPreviewGroup.add(ghost);
+      }
+      baseGeo.dispose();
+      ghostMat.dispose();
+      return instances.length;
+    }
 
     const combinedBox = new THREE.Box3();
     for (const sm of sourceMeshes) {
@@ -2433,7 +2739,58 @@ export class StudioEngine {
   public commitRepeatArray(config: RepeatArrayConfig): number {
     this.clearRepeatPreview();
     const sourceMeshes = this.getSelectedSourceMeshesForArray();
-    if (sourceMeshes.length === 0) return 0;
+    if (sourceMeshes.length === 0) {
+      const archItems = this.archEngine.getSelections();
+      const primary = this.archEngine.getSelection();
+      if (archItems.length === 0 || !primary || primary.kind === 'room') {
+        return 0;
+      }
+      const info = this.archEngine.getArchElementTransformInfo(
+        primary,
+        this.floors
+      );
+      if (!info) return 0;
+      const box = new THREE.Box3().setFromCenterAndSize(
+        info.position,
+        new THREE.Vector3(
+          info.dimensions.x,
+          info.dimensions.y,
+          info.dimensions.z
+        )
+      );
+      const instances = this.computeRepeatArrayOffsets(config, box);
+      if (instances.length === 0) return 0;
+
+      const allSelected: Array<NonNullable<ArchSelection>> = [...archItems];
+      let createdCount = 0;
+      for (const inst of instances) {
+        const duped = this.archEngine.duplicateArchElements(archItems, {
+          x: inst.offset.x,
+          y: inst.offset.y,
+          z: inst.offset.z,
+        });
+        if (Math.abs(inst.rotYDeg) > 0.01 && duped.length > 0) {
+          this.archEngine.rotateArchElements(
+            duped,
+            {
+              x: info.position.x + inst.offset.x,
+              z: info.position.z + inst.offset.z,
+            },
+            inst.rotYDeg * DEG2RAD
+          );
+        }
+        allSelected.push(...duped);
+        createdCount += duped.length;
+      }
+      if (createdCount > 0) {
+        this.archEngine.setSelections(allSelected);
+        this.rebuildArchitecture();
+        this.reattachTransformAfterSelectionChange();
+        this.pushHistorySnapshot();
+        this.emitState();
+      }
+      return createdCount;
+    }
 
     const combinedBox = new THREE.Box3();
     for (const sm of sourceMeshes) {
@@ -3432,6 +3789,109 @@ export class StudioEngine {
   }
 
   private handleGizmoObjectChange(): void {
+    // Architectural Element Gizmo Transform (Blender RGB Arrows / Rings / Scale on Walls, Openings, Stairs & Roofs!)
+    if (this.transformControls.object === this.archGizmoProxy) {
+      const sel = this.archEngine.getSelection();
+      const selItems = this.archEngine.getSelections();
+      if (!sel || selItems.length === 0 || !this.archGizmoStartData) return;
+
+      const mode = this.transformControls.getMode();
+      const axis = this.transformControls.axis;
+
+      this.isApplyingCustomTransform = true;
+      try {
+        // Always transform cleanly from the drag-start architectural snapshot to prevent cumulative drift
+        this.archEngine.setData(this.archGizmoStartData);
+
+        if (mode === 'translate') {
+          const rawPos = this.archGizmoProxy.position.clone();
+          this.clampPositionByAxisLock(rawPos);
+          if (this.snapSettings.enabled && this.snapSettings.grid) {
+            const step = this.gridSettings.adaptive
+              ? this.gridSystem.getEffectiveSpacing()
+              : this.snapSettings.gridStep;
+            if (step > 0) {
+              if (!axis || axis.includes('X')) {
+                rawPos.x = Math.round(rawPos.x / step) * step;
+              }
+              if (!axis || axis.includes('Y')) {
+                rawPos.y = Math.round(rawPos.y / step) * step;
+              }
+              if (!axis || axis.includes('Z')) {
+                rawPos.z = Math.round(rawPos.z / step) * step;
+              }
+            }
+          }
+          this.archGizmoProxy.position.copy(rawPos);
+          const delta = rawPos.clone().sub(this.archGizmoStartPos);
+          this.archEngine.translateArchElements(
+            selItems,
+            delta.x,
+            delta.y,
+            delta.z
+          );
+          this.rebuildArchitecture();
+          this.emitDragFeedback(true, {
+            snapLabel: `ΔX ${delta.x.toFixed(2)}m · ΔZ ${delta.z.toFixed(2)}m`,
+          });
+        } else if (mode === 'rotate') {
+          const internal =
+            this.transformControls as unknown as InternalTransformControls;
+          const rawAngle = internal.rotationAngle ?? 0;
+          let controlledAngle = rawAngle * 0.48;
+
+          const hasWallInSel = selItems.some((it) => it.kind === 'wall');
+          const snapDeg =
+            this.snapSettings.rotationSnapDeg > 0
+              ? this.snapSettings.rotationSnapDeg
+              : hasWallInSel && this.wallEditAngleLock
+              ? 45
+              : 0;
+
+          if (snapDeg > 0) {
+            const stepRad = snapDeg * DEG2RAD;
+            controlledAngle = Math.round(controlledAngle / stepRad) * stepRad;
+          }
+
+          this.archEngine.rotateArchElements(
+            selItems,
+            { x: this.archGizmoStartPos.x, z: this.archGizmoStartPos.z },
+            controlledAngle
+          );
+          this.rebuildArchitecture();
+          this.protractorVisualizer.show(
+            this.archGizmoStartPos,
+            'Y',
+            controlledAngle,
+            1.25
+          );
+          const deltaDeg = Math.round(controlledAngle * RAD2DEG);
+          this.emitDragFeedback(true, {
+            deltaAngleDeg: deltaDeg,
+            snapLabel:
+              snapDeg > 0 ? `Kunci Sudut ${snapDeg}°` : 'Putar Sudut Bebas',
+          });
+        } else if (mode === 'scale') {
+          const sx = Math.max(0.1, this.archGizmoProxy.scale.x);
+          const sy = Math.max(0.1, this.archGizmoProxy.scale.y);
+          const sz = Math.max(0.1, this.archGizmoProxy.scale.z);
+          const nextDims = {
+            x: round3(this.archGizmoStartDims.x * sx),
+            y: round3(this.archGizmoStartDims.y * sy),
+            z: round3(this.archGizmoStartDims.z * sz),
+          };
+          this.archEngine.setArchElementExactDimensions(sel, nextDims);
+          this.rebuildArchitecture();
+          this.emitDragFeedback(true, {
+            snapLabel: `${nextDims.x.toFixed(2)}m × ${nextDims.y.toFixed(2)}m × ${nextDims.z.toFixed(2)}m`,
+          });
+        }
+      } finally {
+        this.isApplyingCustomTransform = false;
+      }
+      return;
+    }
+
     if (!this.selectedId) return;
     const mesh = this.meshMap.get(this.selectedId);
     if (!mesh) return;
@@ -3806,13 +4266,20 @@ export class StudioEngine {
     // #1 Multi-Touch & Pinch-Zoom Guard: 2+ fingers immediately cancel any single-finger tool stroke!
     if (this.activePointers.size >= 2) {
       this.wasMultiTouchGesture = true;
-      this.multiTouchCooldownUntil = performance.now() + 220;
-      const hadArchStroke = this.isArchDragDrawing;
+      this.multiTouchCooldownUntil = performance.now() + 240;
+      const hadArchStroke =
+        this.isArchDragDrawing ||
+        Boolean(this.archDragStartXZ) ||
+        Boolean(this.wallChainStart);
       this.isArchDragDrawing = false;
       this.archDragStartXZ = null;
       this.archDragCurrentXZ = null;
       this.archDragOpeningHit = null;
-      this.activeArchDrag = null;
+      this.wallChainStart = null;
+      if (this.activeArchDrag) {
+        this.activeArchDrag = null;
+        this.archEngine.clearPreview();
+      }
       this.isSculptingStroke = false;
       if (this.isBoxSelecting) {
         this.isBoxSelecting = false;
@@ -3822,6 +4289,7 @@ export class StudioEngine {
       this.didMoveDuringSurfaceSlide = false;
       this.activeGroupRelMatrices.clear();
       this.orbitControls.enabled = !this.walkthroughEnabled;
+      this.syncOrbitNavigationConfig();
       if (hadArchStroke) {
         this.archEngine.clearPreview();
         this.emitState();
@@ -3843,7 +4311,21 @@ export class StudioEngine {
       return;
     }
 
+    // Smart Camera Pan/Zoom Mode inside Buat Rumah (`Geser & Zoom Layar` ON):
+    // 1-finger and 2-finger gestures purely navigate the viewport without placing walls/openings!
+    if (
+      this.studioMode === 'house' &&
+      this.archNavPanMode &&
+      this.archTool !== 'select'
+    ) {
+      this.orbitControls.enabled = true;
+      this.syncOrbitNavigationConfig();
+      return;
+    }
+
     // #2, #3 & #7 Fluid Press-and-Drag Architectural Creation (`draw-wall`, `draw-room`, `place-opening`)
+    // NOTE: On touch screens, we do NOT disable `orbitControls` (`touches.TWO = DOLLY_PAN` stays live!)
+    // so if a 2nd finger lands to pinch-zoom or pan, OrbitControls handles it natively with ZERO accidental walls!
     if (
       this.studioMode === 'house' &&
       event.button <= 0 &&
@@ -3852,6 +4334,7 @@ export class StudioEngine {
         this.archTool === 'draw-room' ||
         this.archTool === 'place-opening')
     ) {
+      const isTouch = event.pointerType !== 'mouse';
       const rawXZ = this.raycastActiveFloorXZ(event);
       if (rawXZ) {
         const activeFl =
@@ -3867,15 +4350,20 @@ export class StudioEngine {
             rawXZ,
             this.activeFloorId,
             this.wallChainStart,
-            this.wallDrawDefaults.angleSnap,
+            this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
             snapStep
           );
-          this.isArchDragDrawing = true;
           this.archDragStartXZ = this.wallChainStart ?? snapped.point;
           this.archDragCurrentXZ = snapped.point;
           this.lastHoverWallXZ = snapped.point;
-          this.orbitControls.enabled = false;
-          this.renderer.domElement.setPointerCapture?.(event.pointerId);
+          if (!isTouch) {
+            this.isArchDragDrawing = true;
+            this.orbitControls.enabled = false;
+            this.renderer.domElement.setPointerCapture?.(event.pointerId);
+          } else {
+            // Wait until single finger moves >= 9px before locking into wall stroke!
+            this.isArchDragDrawing = Boolean(this.wallChainStart);
+          }
           this.archEngine.updateWallDrawPreview(
             this.archDragStartXZ,
             this.wallChainStart ? snapped.point : null,
@@ -3896,11 +4384,15 @@ export class StudioEngine {
             false,
             snapStep
           );
-          this.isArchDragDrawing = true;
           this.archDragStartXZ = snapped.point;
           this.archDragCurrentXZ = snapped.point;
-          this.orbitControls.enabled = false;
-          this.renderer.domElement.setPointerCapture?.(event.pointerId);
+          if (!isTouch) {
+            this.isArchDragDrawing = true;
+            this.orbitControls.enabled = false;
+            this.renderer.domElement.setPointerCapture?.(event.pointerId);
+          } else {
+            this.isArchDragDrawing = false;
+          }
           this.archEngine.updateRoomBoxPreview(
             snapped.point,
             null,
@@ -3924,8 +4416,10 @@ export class StudioEngine {
               wallId: hit.wall.id,
               offsetRatio: hit.offsetRatio,
             };
-            this.orbitControls.enabled = false;
-            this.renderer.domElement.setPointerCapture?.(event.pointerId);
+            if (!isTouch) {
+              this.orbitControls.enabled = false;
+              this.renderer.domElement.setPointerCapture?.(event.pointerId);
+            }
             this.archEngine.updateOpeningHoverPreview(
               hit.wall,
               hit.offsetRatio,
@@ -3971,10 +4465,35 @@ export class StudioEngine {
       return;
     }
 
+    // #6 Box Marquee Selection Start (`box` sub-mode works in ANY transform mode when not grabbing a gizmo arrow!)
+    if (
+      this.selectionSubMode === 'box' &&
+      this.paintMode === 'none' &&
+      event.button <= 0 &&
+      !this.transformControls.axis
+    ) {
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      this.isBoxSelecting = true;
+      this.boxSelectStart = {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      };
+      this.orbitControls.enabled = false;
+      this.renderer.domElement.setPointerCapture?.(event.pointerId);
+      this.callbacks.onBoxSelectRect?.({
+        x: this.boxSelectStart.x,
+        y: this.boxSelectStart.y,
+        width: 0,
+        height: 0,
+      });
+      return;
+    }
+
     // Direct Viewport Architectural Drag (`house` mode, `select` tool)
     if (
       this.studioMode === 'house' &&
       this.archTool === 'select' &&
+      this.selectionSubMode !== 'multi' &&
       this.paintMode === 'none' &&
       event.button <= 0 &&
       !this.transformControls.axis
@@ -4006,96 +4525,83 @@ export class StudioEngine {
       }
 
       // 2. Check Opening (slide along wall), Stair (move XZ), or Selected Roof (move XZ)
-      const archHits = this.raycaster.intersectObjects(
-        this.archEngine.structuralGroup.children,
-        true
-      );
-      const clickXZ = this.raycastActiveFloorXZ(event);
-      if (archHits.length > 0 && clickXZ) {
-        let cur: THREE.Object3D | null = archHits[0].object;
-        while (cur && cur !== this.archEngine.structuralGroup) {
-          const kind = cur.userData?.archKind as string | undefined;
-          const id = cur.userData?.archId as string | undefined;
-          if (kind === 'opening' && id) {
-            this.archEngine.setSelection({ kind: 'opening', id });
-            this.activeArchDrag = {
-              kind: 'opening-slide',
-              openingId: id,
-              moved: false,
-            };
-            this.orbitControls.enabled = false;
-            this.renderer.domElement.setPointerCapture?.(event.pointerId);
-            return;
-          }
-          if (kind === 'stair' && id) {
-            const st = this.archEngine
-              .getData()
-              .stairs.find((s) => s.id === id);
-            if (st) {
-              this.archEngine.setSelection({ kind: 'stair', id });
+      // Only direct-drag in `select` transform mode; when Gizmo (Geser/Putar/Skala) is active, let tap select cleanly so RGB arrows attach!
+      if (this.transformMode === 'select') {
+        const archHits = this.raycaster.intersectObjects(
+          this.archEngine.structuralGroup.children,
+          true
+        );
+        const clickXZ = this.raycastActiveFloorXZ(event);
+        if (archHits.length > 0 && clickXZ) {
+          let cur: THREE.Object3D | null = archHits[0].object;
+          while (cur && cur !== this.archEngine.structuralGroup) {
+            const kind = cur.userData?.archKind as string | undefined;
+            const id = cur.userData?.archId as string | undefined;
+            if (kind === 'opening' && id) {
+              this.selectObject(null, false);
+              this.archEngine.setSelection({ kind: 'opening', id });
+              this.rebuildArchitecture();
+              this.reattachTransformAfterSelectionChange();
+              this.emitState();
               this.activeArchDrag = {
-                kind: 'stair-move',
-                stairId: id,
-                offsetXZ: {
-                  x: st.position.x - clickXZ.x,
-                  z: st.position.z - clickXZ.z,
-                },
+                kind: 'opening-slide',
+                openingId: id,
                 moved: false,
               };
               this.orbitControls.enabled = false;
               this.renderer.domElement.setPointerCapture?.(event.pointerId);
               return;
             }
-          }
-          if (
-            kind === 'roof' &&
-            id &&
-            this.archEngine.getSelection()?.kind === 'roof' &&
-            this.archEngine.getSelection()?.id === id
-          ) {
-            const rf = this.archEngine.getData().roofs.find((r) => r.id === id);
-            if (rf) {
-              this.activeArchDrag = {
-                kind: 'roof-move',
-                roofId: id,
-                offsetXZ: {
-                  x: rf.center.x - clickXZ.x,
-                  z: rf.center.z - clickXZ.z,
-                },
-                moved: false,
-              };
-              this.orbitControls.enabled = false;
-              this.renderer.domElement.setPointerCapture?.(event.pointerId);
-              return;
+            if (kind === 'stair' && id) {
+              const st = this.archEngine
+                .getData()
+                .stairs.find((s) => s.id === id);
+              if (st) {
+                this.selectObject(null, false);
+                this.archEngine.setSelection({ kind: 'stair', id });
+                this.rebuildArchitecture();
+                this.reattachTransformAfterSelectionChange();
+                this.emitState();
+                this.activeArchDrag = {
+                  kind: 'stair-move',
+                  stairId: id,
+                  offsetXZ: {
+                    x: st.position.x - clickXZ.x,
+                    z: st.position.z - clickXZ.z,
+                  },
+                  moved: false,
+                };
+                this.orbitControls.enabled = false;
+                this.renderer.domElement.setPointerCapture?.(event.pointerId);
+                return;
+              }
             }
+            if (
+              kind === 'roof' &&
+              id &&
+              this.archEngine.getSelection()?.kind === 'roof' &&
+              this.archEngine.getSelection()?.id === id
+            ) {
+              const rf = this.archEngine.getData().roofs.find((r) => r.id === id);
+              if (rf) {
+                this.activeArchDrag = {
+                  kind: 'roof-move',
+                  roofId: id,
+                  offsetXZ: {
+                    x: rf.center.x - clickXZ.x,
+                    z: rf.center.z - clickXZ.z,
+                  },
+                  moved: false,
+                };
+                this.orbitControls.enabled = false;
+                this.renderer.domElement.setPointerCapture?.(event.pointerId);
+                return;
+              }
+            }
+            cur = cur.parent;
           }
-          cur = cur.parent;
         }
       }
-    }
-
-    // #6 Box Marquee Selection Start (`select` mode + `box` sub-mode)
-    if (
-      this.transformMode === 'select' &&
-      this.selectionSubMode === 'box' &&
-      this.paintMode === 'none' &&
-      event.button <= 0
-    ) {
-      const rect = this.renderer.domElement.getBoundingClientRect();
-      this.isBoxSelecting = true;
-      this.boxSelectStart = {
-        x: event.clientX - rect.left,
-        y: event.clientY - rect.top,
-      };
-      this.orbitControls.enabled = false;
-      this.renderer.domElement.setPointerCapture?.(event.pointerId);
-      this.callbacks.onBoxSelectRect?.({
-        x: this.boxSelectStart.x,
-        y: this.boxSelectStart.y,
-        width: 0,
-        height: 0,
-      });
-      return;
     }
 
     if (
@@ -4224,14 +4730,21 @@ export class StudioEngine {
       const q = (v: number) => Math.round(v / snapStep) * snapStep;
 
       if (this.activeArchDrag.kind === 'wall-node') {
-        const nextXZ: Vec2XZ = { x: q(rawXZ.x), z: q(rawXZ.z) };
+        const dragFloorId = this.activeArchDrag.floorId;
+        const snappedEdit = this.archEngine.snapExistingWallVertexDrag(
+          dragFloorId,
+          this.activeArchDrag.curXZ,
+          rawXZ,
+          this.wallEditAngleLock,
+          snapStep
+        );
+        const nextXZ = snappedEdit.point;
         if (
           Math.hypot(
             nextXZ.x - this.activeArchDrag.curXZ.x,
             nextXZ.z - this.activeArchDrag.curXZ.z
-          ) >= 0.02
+          ) >= 0.015
         ) {
-          const dragFloorId = this.activeArchDrag.floorId;
           this.archEngine.moveConnectedWallVertex(
             dragFloorId,
             this.activeArchDrag.curXZ,
@@ -4241,11 +4754,16 @@ export class StudioEngine {
           this.activeArchDrag.moved = true;
           const activeFl =
             this.floors.find((f) => f.id === dragFloorId) ?? this.floors[0];
+          const elevY = activeFl ? activeFl.elevation : 0;
           this.rebuildArchitecture();
-          this.archEngine.updateCornerDragDimensions(
-            dragFloorId,
+          this.syncArchGizmoProxy();
+          this.archEngine.showWallCornerEditOverlay(
+            snappedEdit.anchor,
             nextXZ,
-            activeFl ? activeFl.elevation : 0
+            elevY,
+            snappedEdit.angleDeg,
+            snappedEdit.lengthM,
+            this.wallEditAngleLock
           );
           this.emitState();
         }
@@ -4292,11 +4810,26 @@ export class StudioEngine {
     if (
       this.studioMode === 'house' &&
       this.archTool !== 'select' &&
+      !this.archNavPanMode &&
       !this.pendingArchCommit
     ) {
       const activeFl =
         this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
       const baseY = activeFl ? activeFl.elevation : 0;
+      const singleFingerDragPx = Math.hypot(
+        event.clientX - this.pointerDownPos.x,
+        event.clientY - this.pointerDownPos.y
+      );
+
+      // Promote deferred single-finger touch start to active draw stroke ONLY after intentional >= 10px drag!
+      if (
+        !this.isArchDragDrawing &&
+        this.archDragStartXZ &&
+        this.activePointers.size === 1 &&
+        singleFingerDragPx >= 10
+      ) {
+        this.isArchDragDrawing = true;
+      }
 
       if (this.archTool === 'draw-wall') {
         const rawXZ = this.raycastActiveFloorXZ(event);
@@ -4310,7 +4843,7 @@ export class StudioEngine {
             rawXZ,
             this.activeFloorId,
             anchorPt,
-            this.wallDrawDefaults.angleSnap,
+            this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
             snapStep
           );
           this.lastHoverWallXZ = snapped.point;
@@ -4519,7 +5052,11 @@ export class StudioEngine {
     }
 
     // #2, #3 & #7 Finalize Fluid Press-and-Drag Architectural Creation
-    if (this.isArchDragDrawing && this.studioMode === 'house') {
+    if (
+      (this.isArchDragDrawing || this.archDragStartXZ !== null) &&
+      this.studioMode === 'house' &&
+      !this.archNavPanMode
+    ) {
       const startXZ = this.archDragStartXZ;
       const curXZ = this.archDragCurrentXZ;
       const opHit = this.archDragOpeningHit;
@@ -4528,6 +5065,7 @@ export class StudioEngine {
       this.archDragCurrentXZ = null;
       this.archDragOpeningHit = null;
       this.orbitControls.enabled = true;
+      this.syncOrbitNavigationConfig();
       this.renderer.domElement.releasePointerCapture?.(event.pointerId);
 
       const activeFl =
@@ -4540,7 +5078,7 @@ export class StudioEngine {
 
       if (this.archTool === 'draw-wall' && startXZ && curXZ) {
         const distWorld = Math.hypot(curXZ.x - startXZ.x, curXZ.z - startXZ.z);
-        if (distWorld >= 0.25) {
+        if (distWorld >= 0.35) {
           if (this.wallDrawDefaults.confirmBeforeCommit) {
             this.pendingArchCommit = {
               kind: 'wall',
@@ -4562,7 +5100,7 @@ export class StudioEngine {
             curXZ,
             this.activeFloorId,
             startXZ,
-            this.wallDrawDefaults.angleSnap,
+            this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
             0.05
           );
           const created = this.archEngine.addWallSegment(
@@ -4590,7 +5128,7 @@ export class StudioEngine {
           }
           this.emitState();
           return;
-        } else if (movePx <= 7 && !this.wallChainStart) {
+        } else if (movePx <= 11 && !this.wallChainStart) {
           // Light single tap at Point A: keep anchor ready so a 2nd tap at Point B also works naturally!
           this.wallChainStart = startXZ;
           this.archEngine.updateWallDrawPreview(
@@ -4754,6 +5292,85 @@ export class StudioEngine {
         const arr = Array.from(nextIds);
         this.selectedIds = arr;
         this.selectedId = arr.length > 0 ? arr[arr.length - 1] : null;
+
+        // Also box-select architectural elements (`wall`, `opening`, `stair`, `roof`) in Buat Rumah!
+        if (this.studioMode === 'house') {
+          const nextArch: Array<NonNullable<ArchSelection>> = additive
+            ? this.archEngine.getSelections()
+            : [];
+          const visibleFloorIds = new Set(
+            this.floors
+              .filter((f) => f.visible && !f.locked)
+              .map((f) => f.id)
+          );
+          const data = this.archEngine.getData();
+          const testScreenPts = (pts: THREE.Vector3[]): boolean => {
+            for (const pt of pts) {
+              proj.copy(pt).project(this.camera);
+              if (proj.z > 1) continue;
+              const sx = (proj.x * 0.5 + 0.5) * rect.width;
+              const sy = (-proj.y * 0.5 + 0.5) * rect.height;
+              if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) {
+                return true;
+              }
+            }
+            return false;
+          };
+
+          for (const w of data.walls) {
+            if (!visibleFloorIds.has(w.floorId)) continue;
+            const info = this.archEngine.getArchElementTransformInfo(
+              { kind: 'wall', id: w.id },
+              this.floors
+            );
+            if (!info) continue;
+            const yMid = info.position.y;
+            if (
+              testScreenPts([
+                info.position,
+                new THREE.Vector3(w.start.x, yMid, w.start.z),
+                new THREE.Vector3(w.end.x, yMid, w.end.z),
+              ])
+            ) {
+              nextArch.push({ kind: 'wall', id: w.id });
+            }
+          }
+          for (const op of data.openings) {
+            const host = data.walls.find((w) => w.id === op.wallId);
+            if (!host || !visibleFloorIds.has(host.floorId)) continue;
+            const info = this.archEngine.getArchElementTransformInfo(
+              { kind: 'opening', id: op.id },
+              this.floors
+            );
+            if (info && testScreenPts([info.position])) {
+              nextArch.push({ kind: 'opening', id: op.id });
+            }
+          }
+          for (const st of data.stairs) {
+            if (!visibleFloorIds.has(st.floorId)) continue;
+            const info = this.archEngine.getArchElementTransformInfo(
+              { kind: 'stair', id: st.id },
+              this.floors
+            );
+            if (info && testScreenPts([info.position])) {
+              nextArch.push({ kind: 'stair', id: st.id });
+            }
+          }
+          for (const rf of data.roofs) {
+            if (!visibleFloorIds.has(rf.floorId)) continue;
+            const info = this.archEngine.getArchElementTransformInfo(
+              { kind: 'roof', id: rf.id },
+              this.floors
+            );
+            if (info && testScreenPts([info.position])) {
+              nextArch.push({ kind: 'roof', id: rf.id });
+            }
+          }
+
+          this.archEngine.setSelections(nextArch);
+          this.rebuildArchitecture();
+        }
+
         this.reattachTransformAfterSelectionChange();
         this.emitState();
         return;
@@ -4784,7 +5401,8 @@ export class StudioEngine {
 
     const dx = event.clientX - this.pointerDownPos.x;
     const dy = event.clientY - this.pointerDownPos.y;
-    if (Math.hypot(dx, dy) > 6) return;
+    const tapMaxPx = event.pointerType === 'touch' ? 14 : 7;
+    if (Math.hypot(dx, dy) > tapMaxPx) return;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     const localX = event.clientX - rect.left;
@@ -5177,7 +5795,7 @@ export class StudioEngine {
 
     let archHitSel: { sel: NonNullable<ArchSelection>; dist: number } | null =
       null;
-    if (this.studioMode === 'house' && !isAdditiveClick) {
+    if (this.studioMode === 'house') {
       const archHits = this.raycaster.intersectObjects(
         this.archEngine.structuralGroup.children,
         true
@@ -5214,7 +5832,7 @@ export class StudioEngine {
       const hitMesh = hits[0].object as THREE.Mesh;
       const hitId = hitMesh.userData.objectId as string | undefined;
       if (hitId) {
-        if (this.archEngine.getSelection()) {
+        if (!isAdditiveClick && this.archEngine.getSelections().length > 0) {
           this.archEngine.setSelection(null);
           this.rebuildArchitecture();
         }
@@ -5225,12 +5843,17 @@ export class StudioEngine {
         }
       }
     } else if (archHitSel) {
-      this.selectObject(null, false);
-      this.archEngine.setSelection(archHitSel.sel);
+      if (!isAdditiveClick) {
+        this.selectObject(null, false);
+        this.archEngine.setSelection(archHitSel.sel);
+      } else {
+        this.archEngine.toggleSelection(archHitSel.sel);
+      }
       this.rebuildArchitecture();
+      this.reattachTransformAfterSelectionChange();
       this.emitState();
     } else if (!isAdditiveClick) {
-      if (this.archEngine.getSelection()) {
+      if (this.archEngine.getSelections().length > 0) {
         this.archEngine.setSelection(null);
         this.rebuildArchitecture();
       }
@@ -6232,6 +6855,60 @@ export class StudioEngine {
     this.emitState();
   }
 
+  private syncObjectSelectionOutline(
+    mesh: THREE.Mesh,
+    selected: boolean,
+    isPrimary: boolean
+  ): void {
+    const existing = mesh.getObjectByName('__selObjOutlineGrp');
+    if (existing) {
+      existing.traverse((child) => {
+        const ls = child as THREE.LineSegments;
+        if (ls.geometry) ls.geometry.dispose();
+        if (ls.material) {
+          if (Array.isArray(ls.material)) ls.material.forEach((m) => m.dispose());
+          else ls.material.dispose();
+        }
+      });
+      mesh.remove(existing);
+    }
+    if (!selected || !mesh.geometry) return;
+
+    const grp = new THREE.Group();
+    grp.name = '__selObjOutlineGrp';
+    const edgeColor = isPrimary ? '#fbbf24' : '#38bdf8';
+    const xrayColor = isPrimary ? '#fde047' : '#7dd3fc';
+    const edges = new THREE.EdgesGeometry(mesh.geometry, 24);
+
+    const solid = new THREE.LineSegments(
+      edges,
+      new THREE.LineBasicMaterial({
+        color: edgeColor,
+        transparent: true,
+        opacity: 0.96,
+        depthTest: true,
+      })
+    );
+    solid.renderOrder = 19;
+    solid.raycast = () => {};
+    grp.add(solid);
+
+    const xray = new THREE.LineSegments(
+      edges.clone(),
+      new THREE.LineBasicMaterial({
+        color: xrayColor,
+        transparent: true,
+        opacity: 0.34,
+        depthTest: false,
+      })
+    );
+    xray.renderOrder = 20;
+    xray.raycast = () => {};
+    grp.add(xray);
+
+    mesh.add(grp);
+  }
+
   private updateSelectionHighlight(): void {
     const selectedSet = new Set(this.selectedIds);
     const selectedGroups = new Set<string>();
@@ -6254,14 +6931,17 @@ export class StudioEngine {
         (selectedSet.has(id) ||
           (Boolean(mesh.userData.groupId) &&
             selectedGroups.has(mesh.userData.groupId as string)));
+      const isAnySel = isPrimary || isSecondary;
 
-      if ((isPrimary || isSecondary) && userIntensity === 0) {
-        mat.emissive.set(isPrimary ? '#241a08' : '#132338');
+      if (isAnySel && userIntensity === 0) {
+        mat.emissive.set(isPrimary ? '#3b2506' : '#0f2942');
         mat.emissiveIntensity = 1;
       } else {
         mat.emissive.set(userEmissive);
         mat.emissiveIntensity = userIntensity;
       }
+
+      this.syncObjectSelectionOutline(mesh, isAnySel, isPrimary);
 
       const visualRoot = mesh.getObjectByName('__importedVisualRoot');
       if (visualRoot) {
@@ -6271,8 +6951,8 @@ export class StudioEngine {
           const applyGlow = (mMat: THREE.Material) => {
             const std = mMat as THREE.MeshStandardMaterial;
             if (!std.emissive) return;
-            if ((isPrimary || isSecondary) && userIntensity === 0) {
-              std.emissive.set(isPrimary ? '#241a08' : '#132338');
+            if (isAnySel && userIntensity === 0) {
+              std.emissive.set(isPrimary ? '#3b2506' : '#0f2942');
               std.emissiveIntensity = 1;
             } else {
               std.emissive.set(userEmissive);
@@ -6286,6 +6966,23 @@ export class StudioEngine {
     }
   }
 
+  private syncArchGizmoProxy(): boolean {
+    const sel = this.archEngine.getSelection();
+    if (!sel || sel.kind === 'room') return false;
+    const info = this.archEngine.getArchElementTransformInfo(sel, this.floors);
+    if (!info) return false;
+    this.isApplyingCustomTransform = true;
+    try {
+      this.archGizmoProxy.position.copy(info.position);
+      this.archGizmoProxy.rotation.set(0, info.yawRad, 0);
+      this.archGizmoProxy.scale.set(1, 1, 1);
+      this.archGizmoProxy.updateMatrixWorld(true);
+    } finally {
+      this.isApplyingCustomTransform = false;
+    }
+    return true;
+  }
+
   private reattachTransformAfterSelectionChange(): void {
     this.snapVisualizer.clear();
     this.protractorVisualizer.hide();
@@ -6293,21 +6990,31 @@ export class StudioEngine {
     this.updateSelectionHighlight();
 
     if (
-      this.selectedId &&
-      this.transformMode !== 'select' &&
-      !this.walkthroughEnabled &&
-      !this.terrainSculpt.active
+      this.transformMode === 'select' ||
+      this.walkthroughEnabled ||
+      this.terrainSculpt.active
     ) {
+      this.transformControls.detach();
+      return;
+    }
+
+    this.transformControls.setMode(this.transformMode);
+    if (this.selectedId) {
       const mesh = this.meshMap.get(this.selectedId);
       if (mesh && mesh.visible && !mesh.userData.userLocked) {
         this.transformControls.attach(mesh);
         this.applyAxisLockToGizmo();
-      } else {
-        this.transformControls.detach();
+        return;
       }
-    } else {
-      this.transformControls.detach();
     }
+
+    if (this.studioMode === 'house' && this.syncArchGizmoProxy()) {
+      this.transformControls.attach(this.archGizmoProxy);
+      this.applyAxisLockToGizmo();
+      return;
+    }
+
+    this.transformControls.detach();
   }
 
   public selectObject(id: string | null, emit = true): void {
@@ -6316,6 +7023,10 @@ export class StudioEngine {
     }
     this.selectedId = id;
     this.selectedIds = id ? [id] : [];
+    if (id && this.archEngine.getSelections().length > 0) {
+      this.archEngine.setSelection(null);
+      this.rebuildArchitecture();
+    }
     this.reattachTransformAfterSelectionChange();
 
     if (emit) {
@@ -6344,29 +7055,19 @@ export class StudioEngine {
 
   public setTransformMode(mode: TransformMode): void {
     this.transformMode = mode;
-    this.snapVisualizer.clear();
-    this.protractorVisualizer.hide();
-    this.surfaceNormalVisualizer.hide();
-    this.updateSelectionHighlight();
-
-    if (
-      mode === 'select' ||
-      this.walkthroughEnabled ||
-      this.terrainSculpt.active
-    ) {
-      this.transformControls.detach();
-    } else {
-      this.transformControls.setMode(mode);
-      this.applyAxisLockToGizmo();
-      if (this.selectedId) {
-        const mesh = this.meshMap.get(this.selectedId);
-        if (mesh && mesh.visible && !mesh.userData.userLocked) {
-          this.transformControls.attach(mesh);
-        } else {
-          this.transformControls.detach();
-        }
-      }
+    if (this.studioMode === 'house' && this.archTool !== 'select') {
+      this.archTool = 'select';
+      this.archNavPanMode = false;
+      this.wallChainStart = null;
+      this.isArchDragDrawing = false;
+      this.archDragStartXZ = null;
+      this.archDragCurrentXZ = null;
+      this.pendingArchCommit = null;
+      this.archEngine.clearPreview();
+      this.renderer.domElement.style.cursor = 'default';
+      this.syncOrbitNavigationConfig();
     }
+    this.reattachTransformAfterSelectionChange();
     this.emitState();
   }
 
@@ -6832,7 +7533,31 @@ export class StudioEngine {
   }
 
   public rotateSelectedBy(axis: 'x' | 'y' | 'z', deltaDeg: number): boolean {
-    if (!this.selectedId) return false;
+    if (!this.selectedId) {
+      const archItems = this.archEngine.getSelections();
+      const primary = this.archEngine.getSelection();
+      if (archItems.length > 0 && primary) {
+        const info = this.archEngine.getArchElementTransformInfo(
+          primary,
+          this.floors
+        );
+        if (
+          info &&
+          this.archEngine.rotateArchElements(
+            archItems,
+            { x: info.position.x, z: info.position.z },
+            deltaDeg * DEG2RAD
+          )
+        ) {
+          this.rebuildArchitecture();
+          this.reattachTransformAfterSelectionChange();
+          this.pushHistorySnapshot();
+          this.emitState();
+          return true;
+        }
+      }
+      return false;
+    }
     const mesh = this.meshMap.get(this.selectedId);
     if (!mesh) return false;
 
@@ -6963,7 +7688,20 @@ export class StudioEngine {
   }
 
   public dropSelectedToFloor(): string {
-    if (!this.selectedId) return '';
+    if (!this.selectedId) {
+      const archItems = this.archEngine.getSelections();
+      if (
+        archItems.length > 0 &&
+        this.archEngine.dropArchElementsToFloor(archItems, this.floors)
+      ) {
+        this.rebuildArchitecture();
+        this.reattachTransformAfterSelectionChange();
+        this.pushHistorySnapshot();
+        this.emitState();
+        return 'Ratakan ke Lantai';
+      }
+      return '';
+    }
     const mesh = this.meshMap.get(this.selectedId);
     if (!mesh) return '';
 
@@ -7124,8 +7862,47 @@ export class StudioEngine {
     this.emitState();
   }
 
+  public applyColorToActiveSelection(hexColor: string): boolean {
+    if (this.selectedIds.length > 0) {
+      for (const id of this.selectedIds) {
+        this.updateObjectMaterial(id, { color: hexColor }, false);
+      }
+      this.pushHistorySnapshot();
+      this.emitState();
+      return true;
+    }
+    const archItems = this.archEngine.getSelections();
+    if (archItems.length > 0) {
+      if (this.archEngine.applyColorToArchElements(archItems, hexColor)) {
+        this.rebuildArchitecture();
+        this.pushHistorySnapshot();
+        this.emitState();
+        return true;
+      }
+    }
+    return false;
+  }
+
   public duplicateSelected(): string | null {
-    if (!this.selectedId) return null;
+    if (!this.selectedId) {
+      const archItems = this.archEngine.getSelections();
+      if (archItems.length > 0) {
+        const created = this.archEngine.duplicateArchElements(archItems, {
+          x: 0.85,
+          y: 0,
+          z: 0.85,
+        });
+        if (created.length > 0) {
+          this.archEngine.setSelections(created);
+          this.rebuildArchitecture();
+          this.reattachTransformAfterSelectionChange();
+          this.pushHistorySnapshot();
+          this.emitState();
+          return created[created.length - 1].id;
+        }
+      }
+      return null;
+    }
     const selMesh = this.meshMap.get(this.selectedId);
     if (!selMesh) return null;
 
@@ -7249,12 +8026,24 @@ export class StudioEngine {
    */
   public getSelectedCombinedDimensions(): [number, number, number] | null {
     const box = this.computeSelectedCombinedBounds();
-    if (!box) return null;
-    return [
-      round3(Math.max(0.02, box.max.x - box.min.x)),
-      round3(Math.max(0.02, box.max.y - box.min.y)),
-      round3(Math.max(0.02, box.max.z - box.min.z)),
-    ];
+    if (box) {
+      return [
+        round3(Math.max(0.02, box.max.x - box.min.x)),
+        round3(Math.max(0.02, box.max.y - box.min.y)),
+        round3(Math.max(0.02, box.max.z - box.min.z)),
+      ];
+    }
+    const archSel = this.archEngine.getSelection();
+    if (archSel && archSel.kind !== 'room') {
+      const info = this.archEngine.getArchElementTransformInfo(
+        archSel,
+        this.floors
+      );
+      if (info) {
+        return [info.dimensions.x, info.dimensions.y, info.dimensions.z];
+      }
+    }
+    return null;
   }
 
   public setSelectedExactDimensions(
@@ -7262,7 +8051,43 @@ export class StudioEngine {
     proportional = false,
     changedAxis?: 0 | 1 | 2
   ): boolean {
-    if (!this.selectedId) return false;
+    if (!this.selectedId) {
+      const archSel = this.archEngine.getSelection();
+      if (!archSel || archSel.kind === 'room') return false;
+      const info = this.archEngine.getArchElementTransformInfo(
+        archSel,
+        this.floors
+      );
+      if (!info) return false;
+      let tx = targetSize[0];
+      let ty = targetSize[1];
+      let tz = targetSize[2];
+      if (proportional && changedAxis !== undefined) {
+        const cur = [
+          Math.max(0.05, info.dimensions.x),
+          Math.max(0.05, info.dimensions.y),
+          Math.max(0.05, info.dimensions.z),
+        ];
+        const ratio = Math.max(0.05, targetSize[changedAxis]) / cur[changedAxis];
+        tx = cur[0] * ratio;
+        ty = cur[1] * ratio;
+        tz = cur[2] * ratio;
+      }
+      if (
+        this.archEngine.setArchElementExactDimensions(archSel, {
+          x: tx,
+          y: ty,
+          z: tz,
+        })
+      ) {
+        this.rebuildArchitecture();
+        this.reattachTransformAfterSelectionChange();
+        this.pushHistorySnapshot();
+        this.emitState();
+        return true;
+      }
+      return false;
+    }
     const selMesh = this.meshMap.get(this.selectedId);
     if (!selMesh || selMesh.userData.userLocked) return false;
 
@@ -7861,6 +8686,7 @@ export class StudioEngine {
       activeFloorId: this.activeFloorId,
       archData: this.archEngine.getData(),
       archSelection: this.archEngine.getSelection(),
+      archSelections: this.archEngine.getSelections(),
     };
 
     if (this.historyIndex < this.history.length - 1) {
@@ -7920,7 +8746,12 @@ export class StudioEngine {
     }
     if (snapshot.archData) {
       this.archEngine.setData(snapshot.archData);
-      this.archEngine.setSelection(snapshot.archSelection ?? null);
+      if (snapshot.archSelections && snapshot.archSelections.length > 0) {
+        this.archEngine.setSelections(snapshot.archSelections);
+      } else {
+        this.archEngine.setSelection(snapshot.archSelection ?? null);
+      }
+      this.rebuildArchitecture();
     }
 
     for (const item of snapshot.objects) {
@@ -8067,7 +8898,10 @@ export class StudioEngine {
       archData: this.archEngine.getData(),
       detectedRooms: this.archEngine.getDetectedRooms(),
       archSelection: this.archEngine.getSelection(),
+      selectedArchItems: this.archEngine.getSelections(),
       archTool: this.archTool,
+      archNavPanMode: this.archNavPanMode,
+      wallEditAngleLock: this.wallEditAngleLock,
       isBlueprint2D: this.isBlueprint2D,
       cameraLensFov: this.cameraLensFov,
       wallChainActive: Boolean(this.wallChainStart),
@@ -8094,22 +8928,49 @@ export class StudioEngine {
   }
 
   /**
-   * Studio HD Photo / Render Snapshot (`1920x1080`, `2048x2048`, or `3840x2160` 4K UHD,
-   * optional `.PNG` transparent background, optional Architectural Two-Point Perspective!)
+   * Internal offscreen high-resolution render copied onto an independent 2D `<canvas>`
+   * at true pixel dimensions (`3840x2160` 4K UHD, `2048x2048`, or `1920x1080`),
+   * clamped safely against WebGL hardware `MAX_RENDERBUFFER_SIZE` / `MAX_VIEWPORT_DIMS`
+   * and restoring the live viewport cleanly!
    */
-  public captureStudioSnapshot(options: StudioSnapshotOptions): string {
-    const targetW =
+  private renderStudioPhotoCanvas(options: StudioSnapshotOptions): {
+    canvas: HTMLCanvasElement;
+    width: number;
+    height: number;
+  } {
+    const requestedW =
       options.resolution === '4k-uhd'
         ? 3840
         : options.resolution === '2k-square'
         ? 2048
         : 1920;
-    const targetH =
+    const requestedH =
       options.resolution === '4k-uhd'
         ? 2160
         : options.resolution === '2k-square'
         ? 2048
         : 1080;
+
+    // Respect GPU hardware limits while maximizing exact resolution (modern GPUs >= 4096..16384 -> full 3840x2160!)
+    const gl = this.renderer.getContext();
+    let maxGpuDim = 8192;
+    try {
+      const maxRb = Number(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)) || 8192;
+      const maxVp = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array | number[] | null;
+      const vpW = maxVp ? Number(maxVp[0]) || 8192 : 8192;
+      const vpH = maxVp ? Number(maxVp[1]) || 8192 : 8192;
+      maxGpuDim = Math.max(1920, Math.min(maxRb, vpW, vpH));
+    } catch {
+      maxGpuDim = 4096;
+    }
+
+    const downscale = Math.min(
+      1,
+      maxGpuDim / requestedW,
+      maxGpuDim / requestedH
+    );
+    const targetW = Math.max(640, Math.round(requestedW * downscale));
+    const targetH = Math.max(360, Math.round(requestedH * downscale));
 
     const prevSize = new THREE.Vector2();
     this.renderer.getSize(prevSize);
@@ -8132,30 +8993,52 @@ export class StudioEngine {
       valVis: this.validationVisualizer.group.visible,
     };
 
-    // Temporarily clear selection emissive glow so renders look photo-clean
+    // Temporarily hide selection glows and selection edge wireframes so photos look 100% clean
+    const hiddenOutlineNodes: THREE.Object3D[] = [];
+    this.scene.traverse((node) => {
+      if (
+        (node.name === '__selObjOutlineGrp' ||
+          node.name === '__selEdgeSolid' ||
+          node.name === '__selEdgeXray') &&
+        node.visible
+      ) {
+        node.visible = false;
+        hiddenOutlineNodes.push(node);
+      }
+    });
+
     const savedEmissives: Array<{
       mat: THREE.MeshStandardMaterial;
       hex: number;
       intensity: number;
     }> = [];
-    for (const [id, mesh] of this.meshMap.entries()) {
-      if (this.selectedIds.includes(id) || this.selectedId === id) {
-        const mat = this.getBaseMaterial(mesh);
+    this.scene.traverse((node) => {
+      if (!(node as THREE.Mesh).isMesh) return;
+      const m = node as THREE.Mesh;
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      for (const rawMat of mats) {
+        const std = rawMat as THREE.MeshStandardMaterial;
+        if (!std || !std.emissive || std.emissiveIntensity <= 0) continue;
+        // Preserve genuine user lamp emissives (`userEmissiveIntensity > 0`)
+        const ownerUserInt = (m.userData?.userEmissiveIntensity as number) ?? 0;
+        if (ownerUserInt > 0) continue;
         savedEmissives.push({
-          mat,
-          hex: mat.emissive.getHex(),
-          intensity: mat.emissiveIntensity,
+          mat: std,
+          hex: std.emissive.getHex(),
+          intensity: std.emissiveIntensity,
         });
-        const userHex = (mesh.userData.userEmissiveHex as string) ?? '#000000';
-        const userInt = (mesh.userData.userEmissiveIntensity as number) ?? 0;
-        mat.emissive.set(userHex);
-        mat.emissiveIntensity = userInt;
+        std.emissive.setHex(0x000000);
+        std.emissiveIntensity = 0;
       }
-    }
+    });
 
     const prevCamPos = this.camera.position.clone();
     const prevCamQuat = this.camera.quaternion.clone();
     const prevShading = this.viewportShading;
+
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = targetW;
+    outCanvas.height = targetH;
 
     try {
       this.gridSystem.group.visible = false;
@@ -8184,21 +9067,25 @@ export class StudioEngine {
       this.renderer.setSize(targetW, targetH, false);
       this.camera.aspect = targetW / targetH;
 
-      // True Architectural Two-Point Perspective: level camera pitch to 0 so all vertical edges
-      // are 100% plumb parallel, and shift frustum vertically (`setViewOffset`) to keep framing!
+      // Exact Orbit-Target-Centered Architectural Two-Point Perspective:
+      // Levels pitch to 0° so vertical walls stay 100% plumb while shifting the lens (`setViewOffset`)
+      // so `this.orbitControls.target` remains locked at exact screen center `(0, 0)` without jumping!
       if (options.twoPointPerspective && !this.isBlueprint2D) {
-        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(
-          this.camera.quaternion
-        );
-        const pitchRad = Math.asin(Math.max(-0.85, Math.min(0.85, fwd.y)));
-        const horizFwd = new THREE.Vector3(fwd.x, 0, fwd.z);
-        if (horizFwd.lengthSq() > 1e-4) {
-          horizFwd.normalize();
-          const lookAtTarget = this.camera.position.clone().add(horizFwd);
-          this.camera.lookAt(lookAtTarget);
-          const halfFovTan = Math.tan((this.camera.fov * 0.5) * DEG2RAD);
-          const shiftRatio = Math.tan(-pitchRad) / (2 * halfFovTan);
-          const offsetY = Math.round(shiftRatio * targetH);
+        const target = this.orbitControls.target;
+        const horizDx = target.x - prevCamPos.x;
+        const horizDz = target.z - prevCamPos.z;
+        const horizDist = Math.hypot(horizDx, horizDz);
+
+        if (horizDist > 0.25) {
+          this.camera.lookAt(target.x, prevCamPos.y, target.z);
+          const halfFovTan = Math.max(
+            0.12,
+            Math.tan((this.camera.fov * 0.5) * DEG2RAD)
+          );
+          const rawShiftRatio =
+            (prevCamPos.y - target.y) / (2 * horizDist * halfFovTan);
+          const clampedShift = Math.max(-0.65, Math.min(0.65, rawShiftRatio));
+          const offsetY = Math.round(clampedShift * targetH);
           this.camera.setViewOffset(
             targetW,
             targetH,
@@ -8216,7 +9103,23 @@ export class StudioEngine {
 
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
-      return this.renderer.domElement.toDataURL('image/png');
+
+      const ctx2d = outCanvas.getContext('2d');
+      if (ctx2d) {
+        ctx2d.clearRect(0, 0, targetW, targetH);
+        ctx2d.drawImage(
+          this.renderer.domElement,
+          0,
+          0,
+          this.renderer.domElement.width,
+          this.renderer.domElement.height,
+          0,
+          0,
+          targetW,
+          targetH
+        );
+      }
+      return { canvas: outCanvas, width: targetW, height: targetH };
     } finally {
       this.camera.clearViewOffset();
       this.camera.position.copy(prevCamPos);
@@ -8236,6 +9139,9 @@ export class StudioEngine {
       this.surfaceNormalVisualizer.group.visible = prevStates.surfVis;
       this.validationVisualizer.group.visible = prevStates.valVis;
 
+      for (const node of hiddenOutlineNodes) {
+        node.visible = true;
+      }
       for (const item of savedEmissives) {
         item.mat.emissive.setHex(item.hex);
         item.mat.emissiveIntensity = item.intensity;
@@ -8248,7 +9154,32 @@ export class StudioEngine {
       this.renderer.setSize(prevSize.x, prevSize.y, false);
       this.camera.aspect = prevAspect;
       this.camera.updateProjectionMatrix();
+      this.renderer.clear();
+      this.renderer.render(this.scene, this.camera);
     }
+  }
+
+  public captureStudioSnapshot(options: StudioSnapshotOptions): string {
+    const { canvas } = this.renderStudioPhotoCanvas(options);
+    return canvas.toDataURL('image/png');
+  }
+
+  public async captureStudioPhotoAsync(
+    options: StudioSnapshotOptions
+  ): Promise<StudioPhotoCaptureResult> {
+    const { canvas, width, height } = this.renderStudioPhotoCanvas(options);
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((b) => resolve(b), 'image/png', 1);
+    });
+    const previewUrl = blob
+      ? URL.createObjectURL(blob)
+      : canvas.toDataURL('image/png');
+    return {
+      previewUrl,
+      blob,
+      width,
+      height,
+    };
   }
 
   public getCanvasElement(): HTMLCanvasElement {

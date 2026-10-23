@@ -24,6 +24,7 @@ import {
   AppLanguage,
   AxisLockMode,
   SelectionSubMode,
+  StudioMode,
   TransformMode,
   TransformSpace,
 } from '../types/studio';
@@ -31,6 +32,7 @@ import { RgbGizmoIcon } from './ShapeIcons';
 
 interface TransformToolbarProps {
   language: AppLanguage;
+  studioMode?: StudioMode;
   mode: TransformMode;
   selectionSubMode: SelectionSubMode;
   axisLock: AxisLockMode;
@@ -39,6 +41,8 @@ interface TransformToolbarProps {
   selectedCount: number;
   canUngroup: boolean;
   collapsed: boolean;
+  wallEditAngleLock?: boolean;
+  onToggleWallEditAngleLock?: () => void;
   onToggleCollapse: () => void;
   onChangeMode: (mode: TransformMode) => void;
   onChangeSelectionSubMode: (sub: SelectionSubMode) => void;
@@ -56,6 +60,7 @@ interface TransformToolbarProps {
 
 export const TransformToolbar: React.FC<TransformToolbarProps> = ({
   language,
+  studioMode = 'modeling',
   mode,
   selectionSubMode,
   axisLock,
@@ -64,6 +69,8 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
   selectedCount,
   canUngroup,
   collapsed,
+  wallEditAngleLock = true,
+  onToggleWallEditAngleLock,
   onToggleCollapse,
   onChangeMode,
   onChangeSelectionSubMode,
@@ -86,7 +93,9 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
     return (
       <button
         type="button"
-        className="left-toolbar-expand-tab"
+        className={`left-toolbar-expand-tab ${
+          studioMode === 'house' ? 'house-mode' : ''
+        }`}
         onClick={onToggleCollapse}
         title={t.showLeftToolbar}
         aria-label={t.showLeftToolbar}
@@ -106,8 +115,15 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
   };
 
   return (
-    <div className="left-toolbar-shell">
-      <aside className="left-toolbar" aria-label={t.tabTransform}>
+    <div
+      className={`left-toolbar-shell ${
+        studioMode === 'house' ? 'house-mode' : ''
+      }`}
+    >
+      <aside
+        className={`left-toolbar ${studioMode === 'house' ? 'house-mode' : ''}`}
+        aria-label={t.tabTransform}
+      >
         <button
           type="button"
           className="toolbar-collapse-icon-btn"
@@ -194,6 +210,21 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
             {axisLock === 'free' ? t.axisLockTitle : axisLock.toUpperCase()}
           </span>
         </button>
+
+        {/* #7 Wall Angle Lock Toggle (0°/45°/90°) in Buat Rumah */}
+        {studioMode === 'house' && onToggleWallEditAngleLock && (
+          <button
+            type="button"
+            className={`tool-btn ${wallEditAngleLock ? 'active' : ''}`}
+            onClick={onToggleWallEditAngleLock}
+            title={t.wallEditAngleLockLabel}
+          >
+            <Compass size={16} />
+            <span className="tool-label">
+              {wallEditAngleLock ? '90° ON' : 'Bebas'}
+            </span>
+          </button>
+        )}
 
         <div className="toolbar-sep" />
 

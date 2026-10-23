@@ -32,12 +32,24 @@ import {
   ChevronDown,
   Folder,
   Scissors,
+  BrickWall,
+  DoorOpen,
+  Home,
+  Compass,
 } from 'lucide-react';
 import { getLocalizedShapeMeta } from '../i18n/shapeTranslations';
 import { TRANSLATIONS } from '../i18n/translations';
 import {
   AlignDistributeAction,
   AppLanguage,
+  ArchDetectedRoom,
+  ArchHouseData,
+  ArchOpeningItem,
+  ArchRoofItem,
+  ArchRoofStyle,
+  ArchSelection,
+  ArchStairItem,
+  ArchWallSegment,
   BuildingFloorLayer,
   ConstructionMaterialDef,
   CsgBooleanMode,
@@ -221,6 +233,51 @@ interface InspectorPanelProps {
     objectId: string,
     materialId: string | undefined
   ) => void;
+
+  // Architectural Elements Integration (`Buat Rumah`)
+  archData?: ArchHouseData;
+  detectedRooms?: ArchDetectedRoom[];
+  archSelection?: ArchSelection;
+  selectedArchItems?: Array<NonNullable<ArchSelection>>;
+  wallEditAngleLock?: boolean;
+  onToggleWallEditAngleLock?: () => void;
+  onSelectArchElement?: (sel: ArchSelection, additive?: boolean) => void;
+  onUpdateArchWall?: (
+    wallId: string,
+    patch: Partial<ArchWallSegment>,
+    commitHistory?: boolean
+  ) => void;
+  onUpdateArchOpening?: (
+    openingId: string,
+    patch: Partial<ArchOpeningItem>,
+    commitHistory?: boolean
+  ) => void;
+  onToggleDoorOpen?: (openingId: string) => void;
+  onUpdateArchStair?: (
+    stairId: string,
+    patch: Partial<ArchStairItem>,
+    commitHistory?: boolean
+  ) => void;
+  onUpdateArchRoof?: (
+    roofId: string,
+    patch: Partial<ArchRoofItem>,
+    commitHistory?: boolean
+  ) => void;
+  onUpdateArchRoomMeta?: (
+    roomId: string,
+    patch: {
+      name?: string;
+      floorColor?: string;
+      floorPattern?: ProceduralPatternKind;
+      ceilingVisible?: boolean;
+      isVoid?: boolean;
+      floorMaterialId?: string;
+    },
+    commitHistory?: boolean
+  ) => void;
+  onRotateSelectedArch?: () => void;
+  onDeleteSelectedArch?: () => void;
+  onBakeSelectedWall?: () => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -270,6 +327,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onSetExactDimensions,
   materialCatalog,
   onUpdateConstructionMaterial,
+  archData,
+  detectedRooms = [],
+  archSelection = null,
+  selectedArchItems = [],
+  wallEditAngleLock = true,
+  onToggleWallEditAngleLock,
+  onSelectArchElement,
+  onUpdateArchWall,
+  onUpdateArchOpening,
+  onToggleDoorOpen,
+  onUpdateArchStair,
+  onUpdateArchRoof,
+  onUpdateArchRoomMeta,
+  onRotateSelectedArch,
+  onDeleteSelectedArch,
+  onBakeSelectedWall,
 }) => {
   const t = TRANSLATIONS[language];
   const [mobileSection, setMobileSection] = useState<'inspector' | 'outliner'>(
@@ -281,8 +354,87 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {}
   );
+  const [wallColorSide, setWallColorSide] = useState<'both' | 'ext' | 'int'>(
+    'both'
+  );
 
   const selected = objects.find((o) => o.id === selectedId) ?? null;
+
+  // Resolve active selected architectural item (`wall` | `opening` | `stair` | `roof` | `room`)
+  const selWall =
+    !selected && archSelection?.kind === 'wall' && archData
+      ? archData.walls.find((w) => w.id === archSelection.id) ?? null
+      : null;
+  const selOpening =
+    !selected && archSelection?.kind === 'opening' && archData
+      ? archData.openings.find((o) => o.id === archSelection.id) ?? null
+      : null;
+  const selStair =
+    !selected && archSelection?.kind === 'stair' && archData
+      ? archData.stairs.find((s) => s.id === archSelection.id) ?? null
+      : null;
+  const selRoof =
+    !selected && archSelection?.kind === 'roof' && archData
+      ? archData.roofs.find((r) => r.id === archSelection.id) ?? null
+      : null;
+  const selRoom =
+    !selected && archSelection?.kind === 'room'
+      ? detectedRooms.find((rm) => rm.id === archSelection.id) ?? null
+      : null;
+  const hasArchSel = Boolean(
+    selWall || selOpening || selStair || selRoof || selRoom
+  );
+
+  const archOutlinerEntries: Array<{
+    sel: NonNullable<ArchSelection>;
+    label: string;
+    color: string;
+    tag: string;
+  }> = [];
+  if (studioMode === 'house' && archData) {
+    archData.walls.forEach((w, idx) => {
+      const len = Math.hypot(w.end.x - w.start.x, w.end.z - w.start.z);
+      archOutlinerEntries.push({
+        sel: { kind: 'wall', id: w.id },
+        label: `${t.archSelectedWallTitle} #${idx + 1} (${len.toFixed(2)}m)`,
+        color: w.exteriorColor,
+        tag: 'WALL',
+      });
+    });
+    archData.openings.forEach((op, idx) => {
+      archOutlinerEntries.push({
+        sel: { kind: 'opening', id: op.id },
+        label: `${t.archSelectedOpeningTitle} #${idx + 1} (${op.width.toFixed(2)}m)`,
+        color: op.frameColor,
+        tag: op.kind.toUpperCase(),
+      });
+    });
+    archData.stairs.forEach((st, idx) => {
+      archOutlinerEntries.push({
+        sel: { kind: 'stair', id: st.id },
+        label: `${t.archSelectedStairTitle} #${idx + 1}`,
+        color: st.color,
+        tag: 'STAIR',
+      });
+    });
+    archData.roofs.forEach((rf) => {
+      archOutlinerEntries.push({
+        sel: { kind: 'roof', id: rf.id },
+        label: rf.name || t.archSelectedRoofTitle,
+        color: rf.color,
+        tag: 'ROOF',
+      });
+    });
+    detectedRooms.forEach((rm) => {
+      archOutlinerEntries.push({
+        sel: { kind: 'room', id: rm.id },
+        label: `${rm.name} (${rm.areaSqm.toFixed(1)} m²)`,
+        color: rm.floorColor,
+        tag: 'ROOM',
+      });
+    });
+  }
+  const totalItemCount = objects.length + archOutlinerEntries.length;
 
   const currentSubdiv = normalizeSubdivisionSettings(
     selected?.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS
@@ -296,8 +448,28 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const totalCells =
     currentSubdiv.cutsX * currentSubdiv.cutsY * currentSubdiv.cutsZ;
 
-  const activeColor = selected ? selected.color : activeBrush.color;
-  const activeRoughness = selected ? selected.roughness : activeBrush.roughness;
+  const archActiveColor = selWall
+    ? wallColorSide === 'int'
+      ? selWall.interiorColor
+      : selWall.exteriorColor
+    : selOpening
+    ? selOpening.frameColor
+    : selStair
+    ? selStair.color
+    : selRoof
+    ? selRoof.color
+    : selRoom
+    ? selRoom.floorColor
+    : null;
+
+  const activeColor = selected
+    ? selected.color
+    : archActiveColor ?? activeBrush.color;
+  const activeRoughness = selected
+    ? selected.roughness
+    : selWall
+    ? selWall.roughness
+    : activeBrush.roughness;
   const activeMetalness = selected ? selected.metalness : activeBrush.metalness;
   const activeOpacity = selected
     ? selected.opacity ?? 1
@@ -366,7 +538,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               >
                 <Layers size={14} />
                 <span>
-                  {t.objectList} ({objects.length})
+                  {t.objectList} ({totalItemCount})
                 </span>
               </button>
             </div>
@@ -393,7 +565,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               <span>{t.objectList}</span>
             </div>
             <div className="section-header-right">
-              <span className="count-pill">{objects.length}</span>
+              <span className="count-pill">{totalItemCount}</span>
               {!isMobileDrawer && onCollapseDesktop && (
                 <button
                   type="button"
@@ -408,7 +580,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             </div>
           </div>
 
-          {objects.length > 0 && (
+          {totalItemCount > 0 && (
             <>
               <div className="outliner-search-box">
                 <Search size={13} className="outliner-search-icon" />
@@ -468,7 +640,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             </>
           )}
 
-          {objects.length === 0 ? (
+          {totalItemCount === 0 ? (
             <div className="empty-box">{t.emptyOutlinerHint}</div>
           ) : (
             <div className="outliner-list">
@@ -484,6 +656,105 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
                 const renderedGroupHeaders = new Set<string>();
                 const rows: React.ReactNode[] = [];
+
+                // Architectural Elements Folder in Buat Rumah (`Struktur Bangunan`)
+                const filteredArch = q
+                  ? archOutlinerEntries.filter((e) =>
+                      e.label.toLowerCase().includes(q)
+                    )
+                  : archOutlinerEntries;
+
+                if (filteredArch.length > 0) {
+                  const archCollapsed = Boolean(collapsedGroups['__archFolder']);
+                  rows.push(
+                    <div
+                      key="__arch-folder-hdr"
+                      className="outliner-folder-row"
+                      onClick={() =>
+                        setCollapsedGroups((prev) => ({
+                          ...prev,
+                          __archFolder: !prev.__archFolder,
+                        }))
+                      }
+                    >
+                      <button type="button" className="tiny-icon-btn">
+                        {archCollapsed ? (
+                          <ChevronRight size={13} />
+                        ) : (
+                          <ChevronDown size={13} />
+                        )}
+                      </button>
+                      <Building2 size={13} className="outliner-folder-icon" />
+                      <span className="outliner-name">
+                        {t.archOutlinerFolder} ({filteredArch.length})
+                      </span>
+                    </div>
+                  );
+
+                  if (!archCollapsed || q) {
+                    for (const entry of filteredArch) {
+                      const isEntrySel =
+                        (archSelection?.kind === entry.sel.kind &&
+                          archSelection.id === entry.sel.id) ||
+                        selectedArchItems.some(
+                          (s) =>
+                            s.kind === entry.sel.kind && s.id === entry.sel.id
+                        );
+                      rows.push(
+                        <div
+                          key={`arch-${entry.sel.kind}-${entry.sel.id}`}
+                          className={`outliner-row indented ${
+                            isEntrySel ? 'selected' : ''
+                          }`}
+                          onClick={(e) => {
+                            const additive =
+                              e.shiftKey || e.ctrlKey || e.metaKey;
+                            onSelectArchElement?.(entry.sel, additive);
+                            if (isMobileDrawer) setMobileSection('inspector');
+                          }}
+                        >
+                          <span
+                            className="swatch-dot"
+                            style={{ backgroundColor: entry.color }}
+                          />
+                          <span className="kind-icon">
+                            {entry.sel.kind === 'wall' ? (
+                              <BrickWall size={15} />
+                            ) : entry.sel.kind === 'opening' ? (
+                              <DoorOpen size={15} />
+                            ) : (
+                              <Home size={15} />
+                            )}
+                          </span>
+                          <span className="outliner-name">
+                            {entry.label}
+                            <span className="group-tag-badge">{entry.tag}</span>
+                          </span>
+                          {onDeleteSelectedArch && entry.sel.kind !== 'room' && (
+                            <div
+                              className="outliner-actions"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                className="tiny-icon-btn danger"
+                                title={t.delete}
+                                onClick={() => {
+                                  onSelectArchElement?.(entry.sel, false);
+                                  window.requestAnimationFrame(() =>
+                                    onDeleteSelectedArch()
+                                  );
+                                }}
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                  }
+                }
 
                 for (const obj of filtered) {
                   const gid = obj.groupId;
@@ -717,6 +988,108 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             </button>
           </div>
 
+          {/* Selected Architectural Element Header Card (`Buat Rumah`) */}
+          {!selected && hasArchSel && archSelection && (
+            <div className="selected-head-card">
+              <div className="selected-head-main">
+                <span className="selected-kind-badge">
+                  {selWall ? (
+                    <BrickWall size={20} />
+                  ) : selOpening ? (
+                    <DoorOpen size={20} />
+                  ) : (
+                    <Home size={20} />
+                  )}
+                </span>
+                <div className="selected-name-col">
+                  {selRoom ? (
+                    <input
+                      className="name-input"
+                      type="text"
+                      value={selRoom.name}
+                      onChange={(e) =>
+                        onUpdateArchRoomMeta?.(
+                          selRoom.id,
+                          { name: e.target.value },
+                          false
+                        )
+                      }
+                      onBlur={onCommitHistory}
+                    />
+                  ) : selRoof ? (
+                    <input
+                      className="name-input"
+                      type="text"
+                      value={selRoof.name}
+                      onChange={(e) =>
+                        onUpdateArchRoof?.(
+                          selRoof.id,
+                          { name: e.target.value },
+                          false
+                        )
+                      }
+                      onBlur={onCommitHistory}
+                    />
+                  ) : (
+                    <strong style={{ fontSize: 13 }}>
+                      {selWall
+                        ? t.archSelectedWallTitle
+                        : selStair
+                        ? t.archSelectedStairTitle
+                        : t.archSelectedOpeningTitle}
+                    </strong>
+                  )}
+                  <span className="selected-kind-sub">
+                    {selectedArchItems.length > 1
+                      ? `${selectedArchItems.length} ${t.multiSelectedCount}`
+                      : selWall
+                      ? `${Math.hypot(
+                          selWall.end.x - selWall.start.x,
+                          selWall.end.z - selWall.start.z
+                        ).toFixed(2)}m × ${selWall.height.toFixed(2)}m`
+                      : selOpening
+                      ? `${selOpening.width.toFixed(2)}m × ${selOpening.height.toFixed(2)}m`
+                      : selRoom
+                      ? `${selRoom.areaSqm.toFixed(2)} m²`
+                      : t.archOutlinerFolder}
+                  </span>
+                </div>
+                <div className="selected-head-actions">
+                  {archSelection.kind !== 'room' && (
+                    <>
+                      <button
+                        type="button"
+                        className="mini-chip-btn"
+                        onClick={onDuplicateSelected}
+                        title={`${t.copy} (Shift+D)`}
+                      >
+                        <Copy size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        className="mini-chip-btn"
+                        onClick={onOpenRepeatModal}
+                        title={t.repeatModalTitle}
+                      >
+                        <Repeat size={13} />
+                      </button>
+                      {onDeleteSelectedArch && (
+                        <button
+                          type="button"
+                          className="mini-chip-btn danger"
+                          onClick={onDeleteSelectedArch}
+                          title={`${t.delete} (Del)`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Selected Object Header Card */}
           {selected && selectedKindMeta && (
             <div className="selected-head-card">
@@ -945,8 +1318,482 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           {/* TAB 1: TRANSFORM */}
           {inspectorSubTab === 'transform' && (
             <>
-              {!selected ? (
+              {!selected && !hasArchSel ? (
                 <div className="empty-box">{t.emptyInspectorHint}</div>
+              ) : !selected ? (
+                <div className="props-body">
+                  {/* Exact Meter Dimensions (`P × T × L`) for Walls, Openings, Stairs & Roofs */}
+                  {selectedExactDimensions &&
+                    onSetExactDimensions &&
+                    !selRoom && (
+                      <div className="transform-group-card">
+                        <div className="transform-card-header">
+                          <span className="transform-card-title">
+                            <Ruler size={13} />
+                            <span>{t.exactDimTitle}</span>
+                          </span>
+                          {onRotateSelectedArch && (
+                            <button
+                              type="button"
+                              className="transform-lock-chip"
+                              onClick={onRotateSelectedArch}
+                            >
+                              <RotateCw size={11} />
+                              <span style={{ marginLeft: 4 }}>
+                                {selOpening
+                                  ? t.archOpenFlipSwing
+                                  : t.archQuickRotate90}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                        <div className="vec3-grid">
+                          <AxisInput
+                            axis="X"
+                            value={selectedExactDimensions[0]}
+                            step={0.05}
+                            min={0.25}
+                            onChange={(v) =>
+                              onSetExactDimensions(
+                                [
+                                  v,
+                                  selectedExactDimensions[1],
+                                  selectedExactDimensions[2],
+                                ],
+                                false,
+                                0
+                              )
+                            }
+                          />
+                          <AxisInput
+                            axis="Y"
+                            value={selectedExactDimensions[1]}
+                            step={0.05}
+                            min={0.2}
+                            onChange={(v) =>
+                              onSetExactDimensions(
+                                [
+                                  selectedExactDimensions[0],
+                                  v,
+                                  selectedExactDimensions[2],
+                                ],
+                                false,
+                                1
+                              )
+                            }
+                          />
+                          <AxisInput
+                            axis="Z"
+                            value={selectedExactDimensions[2]}
+                            step={0.02}
+                            min={0.06}
+                            onChange={(v) =>
+                              onSetExactDimensions(
+                                [
+                                  selectedExactDimensions[0],
+                                  selectedExactDimensions[1],
+                                  v,
+                                ],
+                                false,
+                                2
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                  {/* Wall Specific Controls + Angle Lock Toggle */}
+                  {selWall && (
+                    <div className="transform-group-card">
+                      {onToggleWallEditAngleLock && (
+                        <button
+                          type="button"
+                          className={`subdiv-split-cta-btn ${
+                            wallEditAngleLock ? 'active' : ''
+                          }`}
+                          style={{ marginBottom: 10 }}
+                          onClick={onToggleWallEditAngleLock}
+                        >
+                          <Compass size={14} />
+                          <span>
+                            {wallEditAngleLock
+                              ? t.wallEditAngleLockedBadge
+                              : t.wallEditAngleFreeBadge}
+                          </span>
+                        </button>
+                      )}
+
+                      <div className="segmented-tabs" style={{ marginBottom: 10 }}>
+                        {(
+                          [
+                            { id: 'full', label: t.archWallStyleFull },
+                            { id: 'half', label: t.archWallStyleHalf },
+                            { id: 'railing', label: t.archWallStyleRailing },
+                          ] as const
+                        ).map((st) => (
+                          <button
+                            key={st.id}
+                            type="button"
+                            className={`seg-btn ${
+                              selWall.style === st.id ? 'active' : ''
+                            }`}
+                            onClick={() =>
+                              onUpdateArchWall?.(
+                                selWall.id,
+                                {
+                                  style: st.id,
+                                  height:
+                                    st.id === 'half'
+                                      ? 1.1
+                                      : st.id === 'railing'
+                                      ? 1.05
+                                      : Math.max(2.4, selWall.height),
+                                },
+                                true
+                              )
+                            }
+                          >
+                            {st.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.archWallCurveLabel}</span>
+                          <strong>{selWall.curveBulge.toFixed(2)} m</strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={-3}
+                          max={3}
+                          step={0.1}
+                          value={selWall.curveBulge}
+                          onChange={(e) =>
+                            onUpdateArchWall?.(
+                              selWall.id,
+                              { curveBulge: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      <label className="studio-photo-check" style={{ marginTop: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={selWall.hasBaseboard}
+                          onChange={(e) =>
+                            onUpdateArchWall?.(
+                              selWall.id,
+                              { hasBaseboard: e.target.checked },
+                              true
+                            )
+                          }
+                        />
+                        <span className="studio-photo-check-box">
+                          {selWall.hasBaseboard && <Check size={12} />}
+                        </span>
+                        <span>{t.archWallBaseboard}</span>
+                      </label>
+                    </div>
+                  )}
+
+                  {/* Door / Window Specific Controls */}
+                  {selOpening && (
+                    <div className="transform-group-card">
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.archOpenSillLabel}</span>
+                          <strong>{selOpening.sillHeight.toFixed(2)} m</strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={2.2}
+                          step={0.05}
+                          value={selOpening.sillHeight}
+                          onChange={(e) =>
+                            onUpdateArchOpening?.(
+                              selOpening.id,
+                              { sillHeight: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.archOpenPosLabel}</span>
+                          <strong>
+                            {Math.round(selOpening.offsetRatio * 100)}%
+                          </strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={0.1}
+                          max={0.9}
+                          step={0.01}
+                          value={selOpening.offsetRatio}
+                          onChange={(e) =>
+                            onUpdateArchOpening?.(
+                              selOpening.id,
+                              { offsetRatio: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 6,
+                          flexWrap: 'wrap',
+                          marginTop: 8,
+                        }}
+                      >
+                        {(selOpening.kind === 'door-single' ||
+                          selOpening.kind === 'door-double') && (
+                          <>
+                            <button
+                              type="button"
+                              className="group-ctrl-pill"
+                              onClick={() =>
+                                onUpdateArchOpening?.(
+                                  selOpening.id,
+                                  { flipSwing: !selOpening.flipSwing },
+                                  true
+                                )
+                              }
+                            >
+                              <RotateCw size={12} />
+                              <span>{t.archOpenFlipSwing}</span>
+                            </button>
+                            {onToggleDoorOpen && (
+                              <button
+                                type="button"
+                                className={`group-ctrl-pill ${
+                                  selOpening.isOpen ? 'active' : ''
+                                }`}
+                                onClick={() => onToggleDoorOpen(selOpening.id)}
+                              >
+                                <DoorOpen size={12} />
+                                <span>{t.archDoorToggleOpenBtn}</span>
+                              </button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Stair Specific Controls */}
+                  {selStair && (
+                    <div className="transform-group-card">
+                      <div className="segmented-tabs" style={{ marginBottom: 8 }}>
+                        <button
+                          type="button"
+                          className={`seg-btn ${
+                            selStair.kind === 'straight' ? 'active' : ''
+                          }`}
+                          onClick={() =>
+                            onUpdateArchStair?.(
+                              selStair.id,
+                              { kind: 'straight' },
+                              true
+                            )
+                          }
+                        >
+                          {t.archStairStraightBtn}
+                        </button>
+                        <button
+                          type="button"
+                          className={`seg-btn ${
+                            selStair.kind === 'l-shape' ? 'active' : ''
+                          }`}
+                          onClick={() =>
+                            onUpdateArchStair?.(
+                              selStair.id,
+                              { kind: 'l-shape' },
+                              true
+                            )
+                          }
+                        >
+                          {t.archStairLShapeBtn}
+                        </button>
+                      </div>
+                      <label className="studio-photo-check" style={{ marginTop: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={selStair.autoCutoutUpper}
+                          onChange={(e) =>
+                            onUpdateArchStair?.(
+                              selStair.id,
+                              { autoCutoutUpper: e.target.checked },
+                              true
+                            )
+                          }
+                        />
+                        <span className="studio-photo-check-box">
+                          {selStair.autoCutoutUpper && <Check size={12} />}
+                        </span>
+                        <span>{t.archStairAutoCutout}</span>
+                      </label>
+                    </div>
+                  )}
+
+                  {/* Roof Specific Controls */}
+                  {selRoof && (
+                    <div className="transform-group-card">
+                      <div className="segmented-tabs" style={{ marginBottom: 10 }}>
+                        {(
+                          [
+                            { id: 'gable', label: t.archRoofGable },
+                            { id: 'hip', label: t.archRoofHip },
+                            { id: 'flat', label: t.archRoofFlat },
+                            { id: 'shed', label: t.archRoofShed },
+                          ] as Array<{ id: ArchRoofStyle; label: string }>
+                        ).map((rk) => (
+                          <button
+                            key={rk.id}
+                            type="button"
+                            className={`seg-btn ${
+                              selRoof.style === rk.id ? 'active' : ''
+                            }`}
+                            onClick={() =>
+                              onUpdateArchRoof?.(
+                                selRoof.id,
+                                { style: rk.id },
+                                true
+                              )
+                            }
+                          >
+                            {rk.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.archRoofPitchLabel}</span>
+                          <strong>{selRoof.pitchDeg.toFixed(0)}°</strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={12}
+                          max={50}
+                          step={1}
+                          value={selRoof.pitchDeg}
+                          onChange={(e) =>
+                            onUpdateArchRoof?.(
+                              selRoof.id,
+                              { pitchDeg: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.archRoofOverhangLabel}</span>
+                          <strong>{selRoof.overhang.toFixed(2)} m</strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1.4}
+                          step={0.05}
+                          value={selRoof.overhang}
+                          onChange={(e) =>
+                            onUpdateArchRoof?.(
+                              selRoof.id,
+                              { overhang: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      <label className="studio-photo-check" style={{ marginTop: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selRoof.hasSkylight)}
+                          onChange={(e) =>
+                            onUpdateArchRoof?.(
+                              selRoof.id,
+                              { hasSkylight: e.target.checked },
+                              true
+                            )
+                          }
+                        />
+                        <span className="studio-photo-check-box">
+                          {selRoof.hasSkylight && <Check size={12} />}
+                        </span>
+                        <span>{t.archRoofSkylightToggle}</span>
+                      </label>
+                    </div>
+                  )}
+
+                  {/* Room Specific Controls */}
+                  {selRoom && (
+                    <div className="transform-group-card">
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          fontSize: 12,
+                          marginBottom: 8,
+                        }}
+                      >
+                        <span>{t.archTotalAreaLabel}</span>
+                        <strong>{selRoom.areaSqm.toFixed(2)} m²</strong>
+                      </div>
+                      <label className="studio-photo-check">
+                        <input
+                          type="checkbox"
+                          checked={selRoom.ceilingVisible}
+                          onChange={(e) =>
+                            onUpdateArchRoomMeta?.(
+                              selRoom.id,
+                              { ceilingVisible: e.target.checked },
+                              true
+                            )
+                          }
+                        />
+                        <span className="studio-photo-check-box">
+                          {selRoom.ceilingVisible && <Check size={12} />}
+                        </span>
+                        <span>{t.archRoomAutoCeiling}</span>
+                      </label>
+                      <label className="studio-photo-check" style={{ marginTop: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selRoom.isVoid)}
+                          onChange={(e) =>
+                            onUpdateArchRoomMeta?.(
+                              selRoom.id,
+                              { isVoid: e.target.checked },
+                              true
+                            )
+                          }
+                        />
+                        <span className="studio-photo-check-box">
+                          {selRoom.isVoid && <Check size={12} />}
+                        </span>
+                        <span>Void Mezzanine</span>
+                      </label>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="props-body">
                   {/* Position */}
@@ -1342,6 +2189,29 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     <span>{t.restoreOriginalMaterial}</span>
                   </button>
                 )}
+              {selWall && (
+                <div className="segmented-tabs" style={{ marginBottom: 8 }}>
+                  {(
+                    [
+                      { id: 'both', label: `${t.archWallExtColor} + ${t.archWallIntColor}` },
+                      { id: 'ext', label: t.archWallExtColor },
+                      { id: 'int', label: t.archWallIntColor },
+                    ] as const
+                  ).map((side) => (
+                    <button
+                      key={side.id}
+                      type="button"
+                      className={`seg-btn ${
+                        wallColorSide === side.id ? 'active' : ''
+                      }`}
+                      onClick={() => setWallColorSide(side.id)}
+                    >
+                      {side.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <ColorWheelPicker
                 language={language}
                 color={activeColor}
@@ -1352,11 +2222,63 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 emissiveIntensity={activeEmissiveIntensity}
                 flatShading={activeFlatShading}
                 paintMode={paintMode}
-                hasSelection={Boolean(selected)}
+                hasSelection={Boolean(selected || hasArchSel)}
                 compact={isMobileDrawer}
-                onUpdateMaterial={(patch, commit) =>
-                  onUpdateMaterial(selected ? selected.id : null, patch, commit)
-                }
+                onUpdateMaterial={(patch, commit) => {
+                  if (selected) {
+                    onUpdateMaterial(selected.id, patch, commit);
+                    return;
+                  }
+                  if (selWall) {
+                    const wp: Partial<ArchWallSegment> = {};
+                    if (patch.color !== undefined) {
+                      if (wallColorSide === 'both' || wallColorSide === 'ext') {
+                        wp.exteriorColor = patch.color;
+                      }
+                      if (wallColorSide === 'both' || wallColorSide === 'int') {
+                        wp.interiorColor = patch.color;
+                      }
+                    }
+                    if (patch.roughness !== undefined) {
+                      wp.roughness = patch.roughness;
+                    }
+                    onUpdateArchWall?.(selWall.id, wp, Boolean(commit));
+                    return;
+                  }
+                  if (selOpening && patch.color !== undefined) {
+                    onUpdateArchOpening?.(
+                      selOpening.id,
+                      { frameColor: patch.color },
+                      Boolean(commit)
+                    );
+                    return;
+                  }
+                  if (selStair && patch.color !== undefined) {
+                    onUpdateArchStair?.(
+                      selStair.id,
+                      { color: patch.color },
+                      Boolean(commit)
+                    );
+                    return;
+                  }
+                  if (selRoof && patch.color !== undefined) {
+                    onUpdateArchRoof?.(
+                      selRoof.id,
+                      { color: patch.color },
+                      Boolean(commit)
+                    );
+                    return;
+                  }
+                  if (selRoom && patch.color !== undefined) {
+                    onUpdateArchRoomMeta?.(
+                      selRoom.id,
+                      { floorColor: patch.color },
+                      Boolean(commit)
+                    );
+                    return;
+                  }
+                  onUpdateMaterial(null, patch, commit);
+                }}
                 onChangePaintMode={onChangePaintMode}
                 onCommitHistory={onCommitHistory}
               />
@@ -1735,7 +2657,25 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           {/* TAB 3: REVAMPED BOX & SURFACE SUBDIVISION */}
           {inspectorSubTab === 'subdiv' && (
             <>
-              {!selected ? (
+              {!selected && selWall && onBakeSelectedWall ? (
+                <div className="props-body subdiv-panel-body">
+                  <div className="subdiv-intro-card">
+                    <div className="subdiv-intro-head">
+                      <Boxes size={15} />
+                      <strong>{t.archBakeToMeshBtn}</strong>
+                    </div>
+                    <p>{t.archBakeWallHint}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="subdiv-split-cta-btn"
+                    onClick={onBakeSelectedWall}
+                  >
+                    <Boxes size={14} />
+                    <span>{t.archBakeToMeshBtn}</span>
+                  </button>
+                </div>
+              ) : !selected ? (
                 <div className="empty-box">{t.emptyInspectorHint}</div>
               ) : (
                 <div className="props-body subdiv-panel-body">
