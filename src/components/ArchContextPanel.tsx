@@ -53,6 +53,10 @@ import {
   createDefaultConstructionMaterialCatalog,
   getMaterialDisplayName,
 } from '../engine/archAnalysis/materialTakeoff';
+import {
+  buildDrawDefaultsForWallTemplate,
+  WALL_TEMPLATES_BY_ID,
+} from '../engine/wallTemplates';
 
 interface ArchContextPanelProps {
   lang?: AppLanguage;
@@ -68,6 +72,7 @@ interface ArchContextPanelProps {
   wallDefaults: WallDrawDefaults;
   onChangeWallDefaults: (patch: Partial<WallDrawDefaults>) => void;
   onSpawnWallTemplate: () => void;
+  onOpenWallTemplatesShelf?: () => void;
   onUpdateWall: (id: string, patch: Partial<ArchWallSegment>, commit?: boolean) => void;
   onBakeSelectedWall: () => void;
   activeOpeningKind: ArchOpeningKind;
@@ -166,6 +171,7 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
   wallDefaults,
   onChangeWallDefaults,
   onSpawnWallTemplate,
+  onOpenWallTemplatesShelf,
   onUpdateWall,
   onBakeSelectedWall,
   activeOpeningKind,
@@ -468,14 +474,46 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
               </label>
             </div>
 
-            {/* 1-Tap Standard House Wall Template Spawner */}
+            {/* Active Draw Template Indicator (when drawing with a specialized template) */}
+            {wallDefaults.activeTemplateId &&
+              wallDefaults.activeTemplateId !== 'straight-wall' &&
+              WALL_TEMPLATES_BY_ID[wallDefaults.activeTemplateId] && (
+                <div className="arch-active-tpl-pill">
+                  <div className="arch-active-tpl-text">
+                    <small>{t.wallTemplateActiveDrawLabel}</small>
+                    <strong>
+                      {
+                        WALL_TEMPLATES_BY_ID[wallDefaults.activeTemplateId]
+                          .name[lang]
+                      }
+                    </strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-close-btn"
+                    title={t.resetBtn}
+                    onClick={() =>
+                      onChangeWallDefaults(
+                        buildDrawDefaultsForWallTemplate(
+                          wallDefaults,
+                          'straight-wall'
+                        )
+                      )
+                    }
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+
+            {/* Unified 38 Smart Wall Templates Shelf Launcher (zero duplicate menus) */}
             <button
               type="button"
               className="arch-primary-cta"
-              onClick={onSpawnWallTemplate}
+              onClick={onOpenWallTemplatesShelf ?? onSpawnWallTemplate}
             >
               <BrickWall size={15} />
-              <span>{t.archSpawnWallTemplateBtn}</span>
+              <span>{t.wallTemplatesOpenShelfBtn}</span>
             </button>
             <p className="arch-subtle-note">{t.archWallTemplateSub}</p>
 

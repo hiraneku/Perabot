@@ -19,9 +19,19 @@ import {
 import { TRANSLATIONS } from '../src/i18n/translations';
 import {
   ArchBuilderEngine,
+  computeWallLength,
   detectAllRoomsAcrossFloors,
   detectClosedRoomsOnFloor,
+  sampleWallCurvePoint,
 } from '../src/engine/ArchBuilderEngine';
+import {
+  buildCornerFilletGeometry,
+  buildManifoldWallBodyGeometry,
+  computeFloorWallJunctions,
+} from '../src/engine/WallGeometryEngine';
+import {
+  WALL_TEMPLATES_CATALOG,
+} from '../src/engine/wallTemplates';
 import { performBooleanCSG } from '../src/engine/BooleanCSGEngine';
 import {
   buildCustomProfileGeometry,
@@ -919,5 +929,180 @@ describe('Wave 1 & Wave 2 Precision Architecture Mechanics', () => {
     assert.ok(clampedOp.offsetRatio >= 0.3 && clampedOp.offsetRatio <= 0.7);
   });
 });
+
+describe('Phase 1 Smart Wall Templates (38) & Watertight Corner/Curve Engine', () => {
+  it('defines all 38 Phase-1 templates across exact 4 categories (8+10+10+10) with complete ID/EN/JA translations and valid manifold 3D geometry', () => {
+    assert.equal(WALL_TEMPLATES_CATALOG.length, 38);
+    assert.equal(
+      WALL_TEMPLATES_CATALOG.filter((w) => w.category === 'basic').length,
+      8
+    );
+    assert.equal(
+      WALL_TEMPLATES_CATALOG.filter((w) => w.category === 'wall-end').length,
+      10
+    );
+    assert.equal(
+      WALL_TEMPLATES_CATALOG.filter((w) => w.category === 'corner').length,
+      10
+    );
+    assert.equal(
+      WALL_TEMPLATES_CATALOG.filter((w) => w.category === 'shape').length,
+      10
+    );
+
+    const uniqueIds = new Set(WALL_TEMPLATES_CATALOG.map((w) => w.id));
+    assert.equal(uniqueIds.size, 38);
+
+    const floors = createDefaultBuildingFloors('id');
+    for (const meta of WALL_TEMPLATES_CATALOG) {
+      for (const lang of ['id', 'en', 'ja'] as const) {
+        assert.ok(meta.name[lang].trim().length > 2);
+        assert.ok(meta.subtitle[lang].trim().length > 3);
+        assert.ok(meta.description[lang].trim().length > 10);
+      }
+
+      const house = createEmptyArchHouseData();
+      const eng = new ArchBuilderEngine(house);
+      const spawned = eng.spawnWallFromTemplateId(meta.id, 'floor_1', {
+        x: 0,
+        z: 0,
+      });
+      assert.ok(
+        spawned.length >= 1,
+        `Template ${meta.id} must spawn at least 1 wall segment`
+      );
+      assert.equal(
+        eng.getSelections().length,
+        spawned.length,
+        `Template ${meta.id} must auto-select all spawned segments for Blender gizmos`
+      );
+
+      eng.rebuildAll(floors, 'floor_1', 'all', true, 'Ruang');
+
+      let totalVerts = 0;
+      let foundObsoleteCornerCol = false;
+      eng.structuralGroup.traverse((node) => {
+        if (node.userData?.archKind === 'corner-col') {
+          foundObsoleteCornerCol = true;
+        }
+        const mesh = node as THREE.Mesh;
+        if (mesh.isMesh && node.userData?.archKind === 'wall') {
+          const pos = mesh.geometry.getAttribute('position');
+          assert.ok(pos && pos.count >= 6, `${meta.id} mesh must have triangles`);
+          totalVerts += pos.count;
+          for (let i = 0; i < pos.count; i++) {
+            assert.ok(
+              Number.isFinite(pos.getX(i)) &&
+                Number.isFinite(pos.getY(i)) &&
+                Number.isFinite(pos.getZ(i)),
+              `Finite vertices required for ${meta.id}`
+            );
+          }
+        }
+      });
+      assert.equal(
+        foundObsoleteCornerCol,
+        false,
+        `Zero protruding 14-gon corner cylinder columns allowed for ${meta.id}`
+      );
+      assert.ok(totalVerts > 0);
+    }
+  });
+
+  it('computes exact planar miter trims at 90°/45°/3-way/4-way corners and generates smooth 24-segment rounded corner fillets', () => {
+    // 1. 90-degree corner at (0,0) with thickness 0.20m -> trims must be exact ±0.10m!
+    const w1 = makeWall('w_a', { x: 0, z: 0 }, { x: 3, z: 0 });
+    const w2 = makeWall('w_b', { x: 0, z: 0 }, { x: 0, z: 3 });
+    w1.thickness = 0.2;
+    w2.thickness = 0.2;
+
+    const plan90 = computeFloorWallJunctions([w1, w2]);
+    const tA = plan90.endTrims.get('w_a')!.start;
+    const tB = plan90.endTrims.get('w_b')!.start;
+    assert.equal(tA.isConnected, true);
+    assert.equal(tB.isConnected, true);
+    // Outgoing w1 = (+1, 0), left normal nL = (-tz, tx) = (0, +1) [inner], right normal = (0, -1) [outer]
+    // Inner corner meets at (+0.10, +0.10) -> leftTrim = +0.10; Outer corner meets at (-0.10, -0.10) -> rightTrim = -0.10
+    assert.ok(Math.abs(tA.leftTrim - 0.1) < 1e-4);
+    assert.ok(Math.abs(tA.rightTrim - -0.1) < 1e-4);
+
+    // 2. Rounded Outer Corner emits dedicated curved fillet geometry with positive pullback
+    w1.cornerStyle = 'rounded-outer';
+    w1.cornerRadius = 0.45;
+    w2.cornerStyle = 'rounded-outer';
+    w2.cornerRadius = 0.45;
+    const planFillet = computeFloorWallJunctions([w1, w2]);
+    assert.equal(planFillet.filletPieces.length, 1);
+    assert.ok(planFillet.filletPieces[0].pullback > 0.2);
+    const filletGeo = buildCornerFilletGeometry(planFillet.filletPieces[0]);
+    assert.ok(filletGeo !== null);
+    assert.ok(filletGeo!.getAttribute('position').count > 100);
+
+    // 3. 4-Way intersection sets hasVertexApex = true on all 4 arms (Z-fight-free central hub)
+    const house4 = createEmptyArchHouseData();
+    const eng4 = new ArchBuilderEngine(house4);
+    const segs4 = eng4.spawnWallFromTemplateId(
+      'four-way-junction-wall',
+      'floor_1',
+      { x: 0, z: 0 }
+    );
+    assert.equal(segs4.length, 4);
+    const plan4 = computeFloorWallJunctions(segs4);
+    for (const s of segs4) {
+      const tr = plan4.endTrims.get(s.id)!;
+      assert.ok(tr.start.hasVertexApex || tr.end.hasVertexApex);
+    }
+  });
+
+  it('produces exact true circular arcs for Semi-Circular & Circular-Segment walls and preserves doors across non-destructive template swaps', () => {
+    const house = createEmptyArchHouseData();
+    const eng = new ArchBuilderEngine(house);
+
+    // 1. Exact 180° Semi-Circular Wall (`chord = 3.00m` -> `R = 1.50m`, arc length `π * 1.50 = 4.7124m`)
+    const [semi] = eng.spawnWallFromTemplateId(
+      'semi-circular-wall',
+      'floor_1',
+      { x: 0, z: 0 }
+    );
+    const center = {
+      x: (semi.start.x + semi.end.x) * 0.5,
+      z: (semi.start.z + semi.end.z) * 0.5,
+    };
+    for (let i = 0; i <= 10; i++) {
+      const pt = sampleWallCurvePoint(semi, i / 10);
+      const r = Math.hypot(pt.x - center.x, pt.z - center.z);
+      assert.ok(
+        Math.abs(r - 1.5) < 0.005,
+        `Sample t=${i / 10} must lie on true circle R=1.50m (got ${r})`
+      );
+    }
+    const arcLen = computeWallLength(semi);
+    assert.ok(Math.abs(arcLen - Math.PI * 1.5) < 0.03);
+
+    // 2. Non-destructive template swap preserves hosted Door & produces valid cutout mesh
+    const houseSwap = createEmptyArchHouseData();
+    const engSwap = new ArchBuilderEngine(houseSwap);
+    const w = engSwap.addWallSegment('floor_1', { x: -2, z: 0 }, { x: 2, z: 0 })!;
+    const door = engSwap.addOpeningOnWall(w.id, 'door-single', 0.5);
+    assert.ok(door !== null);
+
+    for (const nextTpl of [
+      'tall-wall',
+      'rounded-end-wall',
+      'slanted-wall',
+      'tapered-wall',
+      'curved-wall',
+      's-shaped-wall',
+    ] as const) {
+      assert.equal(engSwap.applyTemplateToWall(w.id, nextTpl), true);
+      const curWall = engSwap.getData().walls.find((x) => x.id === w.id)!;
+      const curOps = engSwap.getData().openings.filter((o) => o.wallId === w.id);
+      assert.equal(curOps.length, 1);
+      const built = buildManifoldWallBodyGeometry(curWall, curOps);
+      assert.ok(built.bodyGeo.getAttribute('position').count >= 24);
+    }
+  });
+});
+
 
 

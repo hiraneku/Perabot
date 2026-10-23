@@ -9664,6 +9664,93 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   }
 }
 
+/* =========================================================
+   Phase 1 Smart Wall Templates (38) — Shelf, Cards & Inspector
+   ========================================================= */
+.spawn-cat-icon-wrap.wall-templates {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.24), rgba(234, 88, 12, 0.22));
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.36);
+}
+
+.shape-tile-info-dot.wall-draw-dot {
+  right: auto;
+  left: 6px;
+  color: var(--text-secondary);
+}
+
+.shape-tile-info-dot.wall-draw-dot:hover,
+.shape-tile-info-dot.wall-draw-dot.active {
+  background: rgba(56, 189, 248, 0.24);
+  border-color: #38bdf8;
+  color: #38bdf8;
+  opacity: 1;
+}
+
+.arch-active-tpl-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.arch-active-tpl-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.arch-active-tpl-text small {
+  font-size: 10px;
+  color: #7dd3fc;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.arch-active-tpl-text strong {
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wall-profile-select-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wall-profile-select-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.inspector-select-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  outline: none;
+}
+
+.inspector-select-input:focus {
+  border-color: var(--accent-blue);
+}
+
+
 
 
 

@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Boxes,
+  BrickWall,
   Building2,
   ChevronUp,
   Download,
   Info,
   Pencil,
+  PenTool,
   Plus,
   Search,
   Shapes,
@@ -28,6 +30,13 @@ import {
   ModularConstructionItem,
 } from '../engine/modularConstruction';
 import {
+  getWallTemplateThumbnails,
+  WALL_TEMPLATE_CATEGORIES,
+  WALL_TEMPLATE_CATEGORY_LABELS,
+  WALL_TEMPLATES_CATALOG,
+  WallTemplateMeta,
+} from '../engine/wallTemplates';
+import {
   getLocalizedShapeMeta,
   getShapeSubcategoryLabel,
 } from '../i18n/shapeTranslations';
@@ -39,6 +48,8 @@ import {
   PrimitiveKind,
   ShapeSubcategory,
   StudioMode,
+  WallTemplateCategory,
+  WallTemplateId,
 } from '../types/studio';
 import { PrimitiveShapePreview } from './ShapeIcons';
 
@@ -192,9 +203,163 @@ const BasicShapeTile: React.FC<ShapeTileProps> = ({
 };
 
 /* =========================================================
-   Catalog Drawer (75 Basic Shapes + House Modular Parts + User Custom Assets)
+   Smart Wall Template Tile (Crisp 3D preview + Long-press inspect + Draw/Spawn)
    ========================================================= */
-type CatalogTabMode = 'shapes' | 'modular' | 'custom';
+interface WallTemplateTileProps {
+  meta: WallTemplateMeta;
+  language: AppLanguage;
+  thumbUrl?: string;
+  isActiveDraw: boolean;
+  drawTooltip: string;
+  onQuickSpawn: (id: WallTemplateId) => void;
+  onActivateDraw?: (id: WallTemplateId) => void;
+  onInspect: (meta: WallTemplateMeta) => void;
+}
+
+const WallTemplateTile: React.FC<WallTemplateTileProps> = ({
+  meta,
+  language,
+  thumbUrl,
+  isActiveDraw,
+  drawTooltip,
+  onQuickSpawn,
+  onActivateDraw,
+  onInspect,
+}) => {
+  const [pressing, setPressing] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  const startPtRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const movedRef = useRef(false);
+  const longTriggeredRef = useRef(false);
+
+  const clearTimer = () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    setPressing(false);
+  };
+
+  useEffect(() => clearTimer, []);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.button > 0) return;
+    startPtRef.current = { x: e.clientX, y: e.clientY };
+    movedRef.current = false;
+    longTriggeredRef.current = false;
+    setPressing(true);
+
+    timerRef.current = window.setTimeout(() => {
+      longTriggeredRef.current = true;
+      setPressing(false);
+      navigator.vibrate?.(16);
+      onInspect(meta);
+    }, LONG_PRESS_MS);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!timerRef.current) return;
+    const dx = e.clientX - startPtRef.current.x;
+    const dy = e.clientY - startPtRef.current.y;
+    if (Math.hypot(dx, dy) > 9) {
+      movedRef.current = true;
+      clearTimer();
+    }
+  };
+
+  const handlePointerUp = () => {
+    const wasLong = longTriggeredRef.current;
+    const wasMoved = movedRef.current;
+    clearTimer();
+    if (!wasLong && !wasMoved) {
+      onQuickSpawn(meta.id);
+    }
+  };
+
+  const title = meta.name[language];
+  const sub = meta.subtitle[language];
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={`basic-shape-tile wall-template-tile ${
+        pressing ? 'pressing' : ''
+      } ${isActiveDraw ? 'recent' : ''}`}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={clearTimer}
+      onPointerLeave={clearTimer}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        clearTimer();
+        onInspect(meta);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onQuickSpawn(meta.id);
+        }
+      }}
+    >
+      {meta.supportsDrawStroke && onActivateDraw && (
+        <button
+          type="button"
+          className={`shape-tile-info-dot wall-draw-dot ${
+            isActiveDraw ? 'active' : ''
+          }`}
+          title={drawTooltip}
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onActivateDraw(meta.id);
+          }}
+        >
+          <PenTool size={11} />
+        </button>
+      )}
+
+      <button
+        type="button"
+        className="shape-tile-info-dot"
+        title={title}
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onInspect(meta);
+        }}
+      >
+        <Info size={12} />
+      </button>
+
+      <div className="basic-shape-thumb">
+        {thumbUrl ? (
+          <img
+            src={thumbUrl}
+            alt={title}
+            className="primitive-3d-thumb"
+            style={{ width: 46, height: 46, objectFit: 'contain' }}
+          />
+        ) : (
+          <BrickWall size={24} />
+        )}
+      </div>
+
+      <div className="basic-shape-meta">
+        <strong>{title}</strong>
+        <small>{sub}</small>
+      </div>
+    </div>
+  );
+};
+
+/* =========================================================
+   Catalog Drawer (75 Basic Shapes + 38 Wall Templates + Modular + Custom Assets)
+   ========================================================= */
+export type CatalogTabMode = 'shapes' | 'walls' | 'modular' | 'custom';
 
 interface CatalogDrawerProps {
   open: boolean;
@@ -202,9 +367,12 @@ interface CatalogDrawerProps {
   studioMode: StudioMode;
   language: AppLanguage;
   recentKind: PrimitiveKind;
+  activeWallTemplateId?: WallTemplateId;
   customAssets: CustomAssetRecord[];
   onClose: () => void;
   onSpawnShape: (kind: PrimitiveKind, keepOpen?: boolean) => void;
+  onSpawnWallTemplate?: (id: WallTemplateId, label: string) => void;
+  onActivateWallDrawTemplate?: (id: WallTemplateId, label: string) => void;
   onSpawnModularItem?: (item: ModularConstructionItem, label: string) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onEditCustomAsset?: (asset: CustomAssetRecord) => void;
@@ -220,9 +388,12 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   studioMode,
   language,
   recentKind,
+  activeWallTemplateId,
   customAssets,
   onClose,
   onSpawnShape,
+  onSpawnWallTemplate,
+  onActivateWallDrawTemplate,
   onSpawnModularItem,
   onSpawnCustomAsset,
   onEditCustomAsset,
@@ -236,22 +407,49 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   const packInputRef = useRef<HTMLInputElement | null>(null);
   const [catalogView, setCatalogView] = useState<CatalogTabMode>(initialTab);
   const [subcat, setSubcat] = useState<ShapeSubcategory>('all');
+  const [wallCat, setWallCat] = useState<'all' | WallTemplateCategory>('all');
   const [modCat, setModCat] = useState<'all' | ModularCategory>('all');
   const [assetCat, setAssetCat] = useState<'all' | CustomAssetCategory>('all');
   const [query, setQuery] = useState('');
   const [inspectedShape, setInspectedShape] = useState<PrimitiveMetaItem | null>(
     null
   );
+  const [inspectedWall, setInspectedWall] = useState<WallTemplateMeta | null>(
+    null
+  );
 
   useEffect(() => {
     if (open) {
       setCatalogView(
-        !isHouse && initialTab === 'modular' ? 'shapes' : initialTab
+        !isHouse && (initialTab === 'modular' || initialTab === 'walls')
+          ? 'shapes'
+          : initialTab
       );
     } else {
       setInspectedShape(null);
+      setInspectedWall(null);
     }
   }, [open, initialTab, isHouse]);
+
+  const wallThumbs = useMemo(() => {
+    if (!open || !isHouse || catalogView !== 'walls') return {};
+    return getWallTemplateThumbnails();
+  }, [open, isHouse, catalogView]);
+
+  const filteredWalls = useMemo(() => {
+    if (!isHouse) return [];
+    const q = query.trim().toLowerCase();
+    return WALL_TEMPLATES_CATALOG.filter((item) => {
+      if (wallCat !== 'all' && item.category !== wallCat) return false;
+      if (!q) return true;
+      return (
+        item.name[language].toLowerCase().includes(q) ||
+        item.subtitle[language].toLowerCase().includes(q) ||
+        item.description[language].toLowerCase().includes(q) ||
+        item.id.toLowerCase().includes(q)
+      );
+    });
+  }, [isHouse, wallCat, query, language]);
 
   const filteredShapes = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -334,14 +532,20 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   };
 
   const headerTitle =
-    catalogView === 'modular'
+    catalogView === 'walls'
+      ? t.wallTemplatesTabTitle
+      : catalogView === 'modular'
       ? t.modularKitTab
       : catalogView === 'custom'
       ? t.catCustom
       : t.basicShapes;
 
   const headerHint =
-    catalogView === 'modular' ? t.modularKitHint : t.shapesHint;
+    catalogView === 'walls'
+      ? t.archWallTemplateSub
+      : catalogView === 'modular'
+      ? t.modularKitHint
+      : t.shapesHint;
 
   return (
     <div
@@ -360,7 +564,9 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
         <div className="basic-shapes-header">
           <div className="basic-shapes-title">
             <span className="basic-shapes-badge-icon">
-              {catalogView === 'modular' ? (
+              {catalogView === 'walls' ? (
+                <BrickWall size={17} />
+              ) : catalogView === 'modular' ? (
                 <Building2 size={17} />
               ) : catalogView === 'custom' ? (
                 <Boxes size={17} />
@@ -386,6 +592,22 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                 <Shapes size={13} />
                 <span>{t.basicShapes}</span>
               </button>
+
+              {/* Phase 1 Smart Wall Templates (38) — Buat Rumah ONLY */}
+              {isHouse && (
+                <button
+                  type="button"
+                  className={`cat-switch-pill ${
+                    catalogView === 'walls' ? 'active' : ''
+                  }`}
+                  onClick={() => setCatalogView('walls')}
+                >
+                  <BrickWall size={13} />
+                  <span>
+                    {t.wallTemplatesTabTitle} ({WALL_TEMPLATES_CATALOG.length})
+                  </span>
+                </button>
+              )}
 
               {/* #7 Modular Construction Tab — Buat Rumah ONLY */}
               {isHouse && (
@@ -490,6 +712,25 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
             </div>
           )}
 
+          {catalogView === 'walls' && isHouse && (
+            <div className="basic-shapes-tabs" role="tablist">
+              {WALL_TEMPLATE_CATEGORIES.map((wc) => (
+                <button
+                  key={wc}
+                  type="button"
+                  role="tab"
+                  aria-selected={wallCat === wc}
+                  className={`basic-subcat-tab ${
+                    wallCat === wc ? 'active' : ''
+                  }`}
+                  onClick={() => setWallCat(wc)}
+                >
+                  {WALL_TEMPLATE_CATEGORY_LABELS[wc][language]}
+                </button>
+              ))}
+            </div>
+          )}
+
           {catalogView === 'modular' && isHouse && (
             <div className="basic-shapes-tabs" role="tablist">
               {MODULAR_CATEGORY_ORDER.map((mc) => (
@@ -581,6 +822,34 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                   isRecent={meta.kind === recentKind}
                   onQuickSpawn={(k) => onSpawnShape(k, false)}
                   onInspect={(m) => setInspectedShape(m)}
+                />
+              ))
+            )
+          ) : catalogView === 'walls' ? (
+            filteredWalls.length === 0 ? (
+              <div className="basic-shapes-empty">{t.noShapeMatch}</div>
+            ) : (
+              filteredWalls.map((wMeta) => (
+                <WallTemplateTile
+                  key={wMeta.id}
+                  meta={wMeta}
+                  language={language}
+                  thumbUrl={wallThumbs[wMeta.id]}
+                  isActiveDraw={activeWallTemplateId === wMeta.id}
+                  drawTooltip={t.wallTemplateDrawModeBtn}
+                  onQuickSpawn={(wid) => {
+                    onSpawnWallTemplate?.(wid, wMeta.name[language]);
+                    onClose();
+                  }}
+                  onActivateDraw={
+                    onActivateWallDrawTemplate
+                      ? (wid) => {
+                          onActivateWallDrawTemplate(wid, wMeta.name[language]);
+                          onClose();
+                        }
+                      : undefined
+                  }
+                  onInspect={(wm) => setInspectedWall(wm)}
                 />
               ))
             )
@@ -764,6 +1033,89 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
             </div>
           </div>
         )}
+
+        {/* Long-Press Smart Wall Template Explanation Card */}
+        {inspectedWall && (
+          <div
+            className="shape-explain-overlay"
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setInspectedWall(null);
+            }}
+          >
+            <div className="shape-explain-card" role="dialog" aria-live="polite">
+              <div className="shape-explain-top">
+                <div className="shape-explain-thumb-lg">
+                  {wallThumbs[inspectedWall.id] ? (
+                    <img
+                      src={wallThumbs[inspectedWall.id]}
+                      alt={inspectedWall.name[language]}
+                      style={{ width: 78, height: 78, objectFit: 'contain' }}
+                    />
+                  ) : (
+                    <BrickWall size={42} />
+                  )}
+                </div>
+                <div className="shape-explain-heading">
+                  <span className="shape-explain-cat">
+                    {WALL_TEMPLATE_CATEGORY_LABELS[inspectedWall.category][language]} ·{' '}
+                    {inspectedWall.dimensionsLabel}
+                  </span>
+                  <h4>{inspectedWall.name[language]}</h4>
+                  <span className="shape-explain-sub">
+                    {inspectedWall.subtitle[language]}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="icon-close-btn"
+                  onClick={() => setInspectedWall(null)}
+                  aria-label={t.done}
+                >
+                  <X size={17} />
+                </button>
+              </div>
+
+              <p className="shape-explain-desc">
+                {inspectedWall.description[language]}
+              </p>
+
+              <div className="shape-explain-actions">
+                {inspectedWall.supportsDrawStroke && onActivateWallDrawTemplate && (
+                  <button
+                    type="button"
+                    className="shape-explain-secondary"
+                    onClick={() => {
+                      onActivateWallDrawTemplate(
+                        inspectedWall.id,
+                        inspectedWall.name[language]
+                      );
+                      setInspectedWall(null);
+                      onClose();
+                    }}
+                  >
+                    <PenTool size={14} style={{ marginRight: 5 }} />
+                    <span>{t.wallTemplateDrawModeBtn}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="shape-explain-primary"
+                  onClick={() => {
+                    onSpawnWallTemplate?.(
+                      inspectedWall.id,
+                      inspectedWall.name[language]
+                    );
+                    setInspectedWall(null);
+                    onClose();
+                  }}
+                >
+                  <Plus size={15} />
+                  <span>{t.wallTemplateSpawnBtn}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -773,7 +1125,11 @@ interface SpawnDockProps {
   studioMode: StudioMode;
   language: AppLanguage;
   customAssets: CustomAssetRecord[];
+  activeWallTemplateId?: WallTemplateId;
+  externalCatalogRequest?: { tab: CatalogTabMode; seq: number } | null;
   onSpawn: (kind: PrimitiveKind) => void;
+  onSpawnWallTemplate?: (id: WallTemplateId, label: string) => void;
+  onActivateWallDrawTemplate?: (id: WallTemplateId, label: string) => void;
   onSpawnModularItem?: (item: ModularConstructionItem, label: string) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onEditCustomAsset?: (asset: CustomAssetRecord) => void;
@@ -787,7 +1143,11 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
   studioMode,
   language,
   customAssets,
+  activeWallTemplateId,
+  externalCatalogRequest,
   onSpawn,
+  onSpawnWallTemplate,
+  onActivateWallDrawTemplate,
   onSpawnModularItem,
   onSpawnCustomAsset,
   onEditCustomAsset,
@@ -801,6 +1161,13 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<CatalogTabMode>('shapes');
   const [recentKind, setRecentKind] = useState<PrimitiveKind>('cube');
+
+  useEffect(() => {
+    if (!externalCatalogRequest) return;
+    if (typeof window !== 'undefined' && window.innerWidth <= 920) return;
+    setActiveTab(externalCatalogRequest.tab);
+    setMenuOpen(true);
+  }, [externalCatalogRequest]);
 
   const handleSpawnShape = (kind: PrimitiveKind, keepOpen = false) => {
     setRecentKind(kind);
@@ -843,6 +1210,38 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
             }`}
           />
         </button>
+
+        {/* Phase 1 Smart Wall Templates (38) Trigger — Buat Rumah ONLY */}
+        {isHouse && (
+          <>
+            <div className="spawn-dock-divider" />
+            <button
+              type="button"
+              className={`spawn-category-trigger wall-templates-trigger ${
+                menuOpen && activeTab === 'walls' ? 'active' : ''
+              }`}
+              onClick={() => {
+                if (menuOpen && activeTab === 'walls') {
+                  setMenuOpen(false);
+                } else {
+                  setActiveTab('walls');
+                  setMenuOpen(true);
+                }
+              }}
+            >
+              <span className="spawn-cat-icon-wrap wall-templates">
+                <BrickWall size={20} />
+              </span>
+              <span className="spawn-card-text">
+                <strong>{t.wallTemplatesTabTitle}</strong>
+                <small>3.0m</small>
+              </span>
+              <span className="spawn-cat-pill">
+                {WALL_TEMPLATES_CATALOG.length}
+              </span>
+            </button>
+          </>
+        )}
 
         {/* #7 Modular Construction Trigger — Buat Rumah ONLY */}
         {isHouse && (
@@ -899,9 +1298,12 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
         studioMode={studioMode}
         language={language}
         recentKind={recentKind}
+        activeWallTemplateId={activeWallTemplateId}
         customAssets={customAssets}
         onClose={() => setMenuOpen(false)}
         onSpawnShape={handleSpawnShape}
+        onSpawnWallTemplate={onSpawnWallTemplate}
+        onActivateWallDrawTemplate={onActivateWallDrawTemplate}
         onSpawnModularItem={onSpawnModularItem}
         onSpawnCustomAsset={onSpawnCustomAsset}
         onEditCustomAsset={onEditCustomAsset}
@@ -924,7 +1326,11 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
   studioMode,
   language,
   customAssets,
+  activeWallTemplateId,
+  externalCatalogRequest,
   onSpawn,
+  onSpawnWallTemplate,
+  onActivateWallDrawTemplate,
   onSpawnModularItem,
   onSpawnCustomAsset,
   onEditCustomAsset,
@@ -941,6 +1347,13 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
   const [menuOpen, setMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<CatalogTabMode>('shapes');
   const [recentKind, setRecentKind] = useState<PrimitiveKind>('cube');
+
+  useEffect(() => {
+    if (!externalCatalogRequest) return;
+    if (typeof window !== 'undefined' && window.innerWidth > 920) return;
+    setActiveTab(externalCatalogRequest.tab);
+    setMenuOpen(true);
+  }, [externalCatalogRequest]);
 
   const handleSpawnShape = (kind: PrimitiveKind, keepOpen = false) => {
     setRecentKind(kind);
@@ -978,6 +1391,30 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
           <button
             type="button"
             className={`mobile-basic-shapes-btn modular-mobile-btn ${
+              menuOpen && activeTab === 'walls' ? 'active' : ''
+            }`}
+            onClick={() => {
+              if (menuOpen && activeTab === 'walls') setMenuOpen(false);
+              else {
+                setActiveTab('walls');
+                setMenuOpen(true);
+              }
+            }}
+          >
+            <div className="mobile-cat-row">
+              <BrickWall size={18} />
+              <span className="mobile-cat-count">
+                {WALL_TEMPLATES_CATALOG.length}
+              </span>
+            </div>
+            <span>{t.wallTemplatesTabTitle}</span>
+          </button>
+        )}
+
+        {isHouse && (
+          <button
+            type="button"
+            className={`mobile-basic-shapes-btn modular-mobile-btn ${
               menuOpen && activeTab === 'modular' ? 'active' : ''
             }`}
             onClick={() => {
@@ -998,14 +1435,16 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
           </button>
         )}
 
-        <button
-          type="button"
-          className="mobile-spawn-btn recent-mobile-btn"
-          onClick={() => onSpawn(recentKind)}
-        >
-          <PrimitiveShapePreview kind={recentKind} size={25} />
-          <span className="truncate-mobile-label">+ {recentMeta.label}</span>
-        </button>
+        {!isHouse && (
+          <button
+            type="button"
+            className="mobile-spawn-btn recent-mobile-btn"
+            onClick={() => onSpawn(recentKind)}
+          >
+            <PrimitiveShapePreview kind={recentKind} size={25} />
+            <span className="truncate-mobile-label">+ {recentMeta.label}</span>
+          </button>
+        )}
 
         <div className="mobile-bar-sep" />
 
@@ -1028,9 +1467,12 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
         studioMode={studioMode}
         language={language}
         recentKind={recentKind}
+        activeWallTemplateId={activeWallTemplateId}
         customAssets={customAssets}
         onClose={() => setMenuOpen(false)}
         onSpawnShape={handleSpawnShape}
+        onSpawnWallTemplate={onSpawnWallTemplate}
+        onActivateWallDrawTemplate={onActivateWallDrawTemplate}
         onSpawnModularItem={onSpawnModularItem}
         onSpawnCustomAsset={onSpawnCustomAsset}
         onEditCustomAsset={onEditCustomAsset}

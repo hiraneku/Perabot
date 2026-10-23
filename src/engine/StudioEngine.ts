@@ -114,7 +114,12 @@ import {
   ViewportShadingMode,
   WalkthroughInteractPrompt,
   WallDrawDefaults,
+  WallTemplateId,
 } from '../types/studio';
+import {
+  buildDrawDefaultsForWallTemplate,
+  WALL_TEMPLATES_BY_ID,
+} from './wallTemplates';
 
 interface HistorySnapshot {
   objects: SceneObjectData[];
@@ -1400,6 +1405,10 @@ export class StudioEngine {
     return this.archEngine.getData();
   }
 
+  public getArchTool(): ArchSubTool {
+    return this.archTool;
+  }
+
   public setArchTool(tool: ArchSubTool): void {
     this.archTool = tool;
     if (tool === 'select') {
@@ -1688,12 +1697,72 @@ export class StudioEngine {
       merged
     );
     if (created) {
+      this.archTool = 'select';
+      this.wallChainStart = null;
+      this.archEngine.clearPreview();
+      if (this.transformMode === 'select') {
+        this.transformMode = 'translate';
+      }
       this.selectObject(null, false);
       this.rebuildArchitecture();
+      this.reattachTransformAfterSelectionChange();
       this.pushHistorySnapshot();
       this.emitState();
     }
     return created;
+  }
+
+  public spawnWallTemplateById(templateId: WallTemplateId): ArchWallSegment[] {
+    if (this.studioMode !== 'house') return [];
+    const [sx, sz] = this.findCleanSpawnXZ(1.85);
+    const created = this.archEngine.spawnWallFromTemplateId(
+      templateId,
+      this.activeFloorId,
+      { x: sx, z: sz },
+      this.wallDrawDefaults
+    );
+    if (created.length > 0) {
+      this.archTool = 'select';
+      this.wallChainStart = null;
+      this.archEngine.clearPreview();
+      if (this.transformMode === 'select') {
+        this.transformMode = 'translate';
+      }
+      this.selectObject(null, false);
+      this.rebuildArchitecture();
+      this.reattachTransformAfterSelectionChange();
+      this.pushHistorySnapshot();
+      this.emitState();
+    }
+    return created;
+  }
+
+  public activateWallDrawTemplate(templateId: WallTemplateId): boolean {
+    if (this.studioMode !== 'house') return false;
+    const meta = WALL_TEMPLATES_BY_ID[templateId];
+    if (!meta || !meta.supportsDrawStroke) {
+      return this.spawnWallTemplateById(templateId).length > 0;
+    }
+    this.wallDrawDefaults = buildDrawDefaultsForWallTemplate(
+      this.wallDrawDefaults,
+      templateId
+    );
+    this.setArchTool('draw-wall');
+    return true;
+  }
+
+  public applyTemplateToArchWall(
+    wallId: string,
+    templateId: WallTemplateId
+  ): boolean {
+    if (!this.archEngine.applyTemplateToWall(wallId, templateId)) {
+      return false;
+    }
+    this.rebuildArchitecture();
+    this.reattachTransformAfterSelectionChange();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
   }
 
   public updateArchWall(
@@ -4711,7 +4780,8 @@ export class StudioEngine {
             this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
             snapStep,
             magnet.point,
-            magnet.adaptiveWorldRadius
+            magnet.adaptiveWorldRadius,
+            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
           );
           this.pointerDownSnappedXZ = snapped.point;
           this.archDragStartXZ = this.wallChainStart ?? snapped.point;
@@ -5262,7 +5332,8 @@ export class StudioEngine {
             this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
             snapStep,
             magnet.point,
-            magnet.adaptiveWorldRadius
+            magnet.adaptiveWorldRadius,
+            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
           );
           this.lastHoverWallXZ = snapped.point;
           if (this.isArchDragDrawing || this.archDragStartXZ) {
@@ -5571,7 +5642,10 @@ export class StudioEngine {
             this.activeFloorId,
             startXZ,
             this.wallEditAngleLock && this.wallDrawDefaults.angleSnap,
-            0.05
+            0.05,
+            null,
+            0,
+            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
           );
           const created = this.archEngine.addWallSegment(
             this.activeFloorId,
@@ -5944,7 +6018,10 @@ export class StudioEngine {
           this.activeFloorId,
           this.wallChainStart,
           this.wallDrawDefaults.angleSnap,
-          snapStep
+          snapStep,
+          null,
+          0,
+          this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
         );
 
         if (!this.wallChainStart) {

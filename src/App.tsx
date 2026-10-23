@@ -118,12 +118,17 @@ import {
   ViewportShadingMode,
   WalkthroughInteractPrompt,
   WallDrawDefaults,
+  WallTemplateId,
 } from './types/studio';
 import { MainMenu } from './components/MainMenu';
 import { GlobalSettingsModal } from './components/GlobalSettingsModal';
 import { SaveIndicatorState, TopBar } from './components/TopBar';
 import { TransformToolbar } from './components/TransformToolbar';
-import { DesktopSpawnDock, MobileBottomBar } from './components/SpawnDock';
+import {
+  CatalogTabMode,
+  DesktopSpawnDock,
+  MobileBottomBar,
+} from './components/SpawnDock';
 import { InspectorPanel, InspectorSubTab } from './components/InspectorPanel';
 import { HelpModal } from './components/HelpModal';
 import { RotationControlBar } from './components/RotationControlBar';
@@ -1985,9 +1990,23 @@ export const App: React.FC = () => {
     []
   );
 
+  const [externalCatalogRequest, setExternalCatalogRequest] = useState<{
+    tab: CatalogTabMode;
+    seq: number;
+  } | null>(null);
+
+  const handleOpenWallTemplatesShelf = useCallback(() => {
+    setExternalCatalogRequest((prev) => ({
+      tab: 'walls',
+      seq: (prev?.seq ?? 0) + 1,
+    }));
+  }, []);
+
   const handleSpawnWallTemplate = useCallback(() => {
     const created = engineRef.current?.spawnStandardWallTemplate(wallDefaults);
     if (created) {
+      setArchTool('select');
+      setTransformMode(engineRef.current?.getTransformMode() ?? 'translate');
       showToast(
         `${t.archPhaseWalls} (${wallDefaults.lengthTemplate.toFixed(1)}m × ${wallDefaults.height.toFixed(1)}m × ${Math.round(
           wallDefaults.thickness * 100
@@ -1995,6 +2014,49 @@ export const App: React.FC = () => {
       );
     }
   }, [wallDefaults, showToast, t.archPhaseWalls]);
+
+  const handleSpawnWallTemplateById = useCallback(
+    (templateId: WallTemplateId, label: string) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const created = engine.spawnWallTemplateById(templateId);
+      if (created.length > 0) {
+        setArchTool('select');
+        setTransformMode(engine.getTransformMode());
+        showToast(`+ ${label}`);
+      }
+    },
+    [showToast]
+  );
+
+  const handleActivateWallDrawTemplate = useCallback(
+    (templateId: WallTemplateId, label: string) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      if (engine.activateWallDrawTemplate(templateId)) {
+        setWallDefaults(engine.getWallDrawDefaults());
+        setArchTool(engine.getArchTool());
+        if (engine.getArchTool() === 'draw-wall') {
+          setActiveArchPhase('walls');
+          showToast(`${t.wallTemplateDrawSelectedToast} ${label}`);
+        } else {
+          setTransformMode(engine.getTransformMode());
+          showToast(`+ ${label}`);
+        }
+      }
+    },
+    [showToast, t.wallTemplateDrawSelectedToast]
+  );
+
+  const handleApplyTemplateToWall = useCallback(
+    (wallId: string, templateId: WallTemplateId) => {
+      const ok = engineRef.current?.applyTemplateToArchWall(wallId, templateId);
+      if (ok) {
+        showToast(t.wallTemplateProfileTitle);
+      }
+    },
+    [showToast, t.wallTemplateProfileTitle]
+  );
 
   const handleUpdateArchWall = useCallback(
     (id: string, patch: Partial<ArchWallSegment>, commit = true) => {
@@ -2875,6 +2937,7 @@ export const App: React.FC = () => {
                   wallDefaults={wallDefaults}
                   onChangeWallDefaults={handleChangeWallDefaults}
                   onSpawnWallTemplate={handleSpawnWallTemplate}
+                  onOpenWallTemplatesShelf={handleOpenWallTemplatesShelf}
                   onUpdateWall={handleUpdateArchWall}
                   onBakeSelectedWall={handleBakeSelectedWall}
                   activeOpeningKind={activeOpeningKind}
@@ -3201,7 +3264,11 @@ export const App: React.FC = () => {
               studioMode={activeProject.mode}
               language={globalSettings.language}
               customAssets={customAssets}
+              activeWallTemplateId={wallDefaults.activeTemplateId}
+              externalCatalogRequest={externalCatalogRequest}
               onSpawn={handleSpawn}
+              onSpawnWallTemplate={handleSpawnWallTemplateById}
+              onActivateWallDrawTemplate={handleActivateWallDrawTemplate}
               onSpawnModularItem={handleSpawnModularItem}
               onSpawnCustomAsset={handleSpawnCustomAsset}
               onEditCustomAsset={handleEditCustomAsset}
@@ -3325,6 +3392,7 @@ export const App: React.FC = () => {
             onToggleWallEditAngleLock={handleToggleWallEditAngleLock}
             onSelectArchElement={handleSelectArchElement}
             onUpdateArchWall={handleUpdateArchWall}
+            onApplyTemplateToWall={handleApplyTemplateToWall}
             onUpdateArchOpening={handleUpdateArchOpening}
             onToggleDoorOpen={handleToggleDoorOpen}
             onUpdateArchStair={handleUpdateArchStair}
@@ -3405,6 +3473,7 @@ export const App: React.FC = () => {
             onToggleWallEditAngleLock={handleToggleWallEditAngleLock}
             onSelectArchElement={handleSelectArchElement}
             onUpdateArchWall={handleUpdateArchWall}
+            onApplyTemplateToWall={handleApplyTemplateToWall}
             onUpdateArchOpening={handleUpdateArchOpening}
             onToggleDoorOpen={handleToggleDoorOpen}
             onUpdateArchStair={handleUpdateArchStair}
@@ -3422,7 +3491,11 @@ export const App: React.FC = () => {
           studioMode={activeProject.mode}
           language={globalSettings.language}
           customAssets={customAssets}
+          activeWallTemplateId={wallDefaults.activeTemplateId}
+          externalCatalogRequest={externalCatalogRequest}
           onSpawn={handleSpawn}
+          onSpawnWallTemplate={handleSpawnWallTemplateById}
+          onActivateWallDrawTemplate={handleActivateWallDrawTemplate}
           onSpawnModularItem={handleSpawnModularItem}
           onSpawnCustomAsset={handleSpawnCustomAsset}
           onEditCustomAsset={handleEditCustomAsset}

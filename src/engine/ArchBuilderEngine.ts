@@ -19,6 +19,7 @@ import {
   ProceduralPatternKind,
   Vec2XZ,
   WallDrawDefaults,
+  WallTemplateId,
 } from '../types/studio';
 import { applyProceduralPatternToMaterial } from './proceduralTextures';
 import {
@@ -27,6 +28,19 @@ import {
   resolveSiteBoundaryPolygon,
 } from './archAnalysis/geometryMetrics';
 import { cloneArchHouseData } from './archAnalysis/schemaMigration';
+import {
+  buildCornerFilletGeometry,
+  buildManifoldWallBodyGeometry,
+  computeAdvancedWallLength,
+  computeFloorWallJunctions,
+  FloorWallJunctionPlan,
+  sampleAdvancedWallPath,
+  WallEndTrimSpec,
+} from './WallGeometryEngine';
+import {
+  applyWallTemplateProfileToWall,
+  createWallSegmentsFromTemplate,
+} from './wallTemplates';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -145,55 +159,27 @@ function disposeObjectTree(root: THREE.Object3D): void {
   });
 }
 
+export function isWallCurvedPath(
+  w: Pick<ArchWallSegment, 'curveBulge' | 'pathMode' | 'sWaveAmp'>
+): boolean {
+  if (w.pathMode === 's-curve') {
+    return Math.abs(w.sWaveAmp ?? 0.45) >= 0.015;
+  }
+  if (w.pathMode === 'j-curve-end') {
+    return true;
+  }
+  return Math.abs(w.curveBulge) >= 0.02;
+}
+
 export function sampleWallCurvePoint(
   wall: ArchWallSegment,
   t: number
 ): { x: number; z: number; tx: number; tz: number } {
-  const x0 = wall.start.x;
-  const z0 = wall.start.z;
-  const x1 = wall.end.x;
-  const z1 = wall.end.z;
-  const dx = x1 - x0;
-  const dz = z1 - z0;
-  const chord = Math.max(0.001, Math.hypot(dx, dz));
-  const ux = dx / chord;
-  const uz = dz / chord;
-  const nx = -uz;
-  const nz = ux;
-
-  if (Math.abs(wall.curveBulge) < 0.02) {
-    return {
-      x: x0 + dx * t,
-      z: z0 + dz * t,
-      tx: ux,
-      tz: uz,
-    };
-  }
-
-  // Quadratic Bezier control point so curve(0.5) has exact midpoint sagitta = curveBulge
-  const cx = (x0 + x1) * 0.5 + nx * (wall.curveBulge * 2);
-  const cz = (z0 + z1) * 0.5 + nz * (wall.curveBulge * 2);
-  const omt = 1 - t;
-  const px = omt * omt * x0 + 2 * omt * t * cx + t * t * x1;
-  const pz = omt * omt * z0 + 2 * omt * t * cz + t * t * z1;
-  const dpx = 2 * omt * (cx - x0) + 2 * t * (x1 - cx);
-  const dpz = 2 * omt * (cz - z0) + 2 * t * (z1 - cz);
-  const dLen = Math.max(0.001, Math.hypot(dpx, dpz));
-  return { x: px, z: pz, tx: dpx / dLen, tz: dpz / dLen };
+  return sampleAdvancedWallPath(wall, t);
 }
 
 export function computeWallLength(wall: ArchWallSegment): number {
-  const chord = Math.hypot(wall.end.x - wall.start.x, wall.end.z - wall.start.z);
-  if (Math.abs(wall.curveBulge) < 0.02) return chord;
-  let sum = 0;
-  const steps = 16;
-  let prev = sampleWallCurvePoint(wall, 0);
-  for (let i = 1; i <= steps; i++) {
-    const cur = sampleWallCurvePoint(wall, i / steps);
-    sum += Math.hypot(cur.x - prev.x, cur.z - prev.z);
-    prev = cur;
-  }
-  return sum;
+  return computeAdvancedWallLength(wall);
 }
 
 /**
@@ -219,7 +205,7 @@ export function detectClosedRoomsOnFloor(
   for (const w of floorWalls) {
     const chord = Math.hypot(w.end.x - w.start.x, w.end.z - w.start.z);
     if (chord < 0.15) continue;
-    const steps = Math.abs(w.curveBulge) >= 0.04 ? 10 : 1;
+    const steps = isWallCurvedPath(w) ? 14 : 1;
     let prev = sampleWallCurvePoint(w, 0);
     for (let s = 1; s <= steps; s++) {
       const cur = sampleWallCurvePoint(w, s / steps);
@@ -1296,7 +1282,8 @@ export class ArchBuilderEngine {
     angleSnap: boolean,
     gridStep: number,
     forcedEndpointSnap?: Vec2XZ | null,
-    extraEndpointRadiusM = 0
+    extraEndpointRadiusM = 0,
+    preferDiagonal45 = false
   ): {
     point: Vec2XZ;
     snappedEndpoint: boolean;
@@ -1356,7 +1343,25 @@ export class ArchBuilderEngine {
       const rawLen = Math.hypot(dx, dz);
       if (rawLen > 0.08) {
         let ang = Math.atan2(dz, dx);
-        if (angleSnap) {
+        if (preferDiagonal45) {
+          const deg = ((ang * RAD2DEG) % 360 + 360) % 360;
+          const diagonals = [45, 135, 225, 315];
+          let bestDiag = 45;
+          let bestDiff = Infinity;
+          for (const d of diagonals) {
+            const diff = Math.min(
+              Math.abs(deg - d),
+              360 - Math.abs(deg - d)
+            );
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestDiag = d;
+            }
+          }
+          if (bestDiff <= 28) {
+            ang = bestDiag * DEG2RAD;
+          }
+        } else if (angleSnap) {
           const deg = ((ang * RAD2DEG) % 360 + 360) % 360;
           const cardinals = [0, 90, 180, 270, 360];
           const diagonals = [45, 135, 225, 315];
@@ -1397,7 +1402,7 @@ export class ArchBuilderEngine {
     if (!snappedEndpoint) {
       let bestBodyDist = 0.26;
       for (const w of this.data.walls) {
-        if (w.floorId !== floorId || Math.abs(w.curveBulge) >= 0.04) continue;
+        if (w.floorId !== floorId || isWallCurvedPath(w)) continue;
         const wx = w.end.x - w.start.x;
         const wz = w.end.z - w.start.z;
         const wLenSq = wx * wx + wz * wz;
@@ -1489,7 +1494,7 @@ export class ArchBuilderEngine {
       const len = computeWallLength(w);
       if (len < 0.65) continue;
 
-      const samples = Math.abs(w.curveBulge) >= 0.04 ? 24 : 1;
+      const samples = isWallCurvedPath(w) ? 28 : 1;
       for (let s = 0; s < samples; s++) {
         const t0 = s / samples;
         const t1 = (s + 1) / samples;
@@ -1531,7 +1536,7 @@ export class ArchBuilderEngine {
     const SNAP_TOL = 0.08;
     const snapshot = [...this.data.walls];
     for (const w of snapshot) {
-      if (w.floorId !== floorId || Math.abs(w.curveBulge) >= 0.04) continue;
+      if (w.floorId !== floorId || isWallCurvedPath(w)) continue;
       const dx = w.end.x - w.start.x;
       const dz = w.end.z - w.start.z;
       const lenSq = dx * dx + dz * dz;
@@ -1600,17 +1605,25 @@ export class ArchBuilderEngine {
       return dup;
     }
 
-    // Auto-split any existing walls at T-junction start / end (and X-crossings for straight walls!)
-    if (Math.abs(defaults.curveBulge) < 0.04) {
-      this.splitWallsContainingPoint(floorId, cleanStart);
-      this.splitWallsContainingPoint(floorId, cleanEnd);
+    const activeTpl = defaults.activeTemplateId;
+    const isTemplateCurved =
+      activeTpl === 'curved-wall' ||
+      activeTpl === 'semi-circular-wall' ||
+      activeTpl === 'circular-wall-segment' ||
+      activeTpl === 's-shaped-wall' ||
+      activeTpl === 'curved-end-wall';
 
+    // Auto-split any existing walls at T-junction start / end (and X-crossings for straight walls!)
+    this.splitWallsContainingPoint(floorId, cleanStart);
+    this.splitWallsContainingPoint(floorId, cleanEnd);
+
+    if (Math.abs(defaults.curveBulge) < 0.04 && !isTemplateCurved) {
       // Check interior X-intersections with existing straight walls so crossing walls split cleanly!
       const crossPts: Vec2XZ[] = [];
       const dx1 = cleanEnd.x - cleanStart.x;
       const dz1 = cleanEnd.z - cleanStart.z;
       for (const ew of [...this.data.walls]) {
-        if (ew.floorId !== floorId || Math.abs(ew.curveBulge) >= 0.04) continue;
+        if (ew.floorId !== floorId || isWallCurvedPath(ew)) continue;
         const dx2 = ew.end.x - ew.start.x;
         const dz2 = ew.end.z - ew.start.z;
         const denom = dx1 * dz2 - dz1 * dx2;
@@ -1650,7 +1663,7 @@ export class ArchBuilderEngine {
             end: chain[i + 1],
             height:
               defaults.style === 'half'
-                ? Math.min(defaults.height, 1.1)
+                ? Math.min(defaults.height, 1.45)
                 : defaults.style === 'railing'
                 ? 1.0
                 : defaults.height,
@@ -1664,6 +1677,14 @@ export class ArchBuilderEngine {
             roughness: 0.78,
             hasBaseboard: defaults.hasBaseboard,
           };
+          if (activeTpl) {
+            applyWallTemplateProfileToWall(subW, activeTpl);
+            subW.height =
+              defaults.style === 'railing' ? 1.0 : defaults.height;
+            subW.thickness = defaults.thickness;
+            subW.style = defaults.style;
+            subW.hasBaseboard = defaults.hasBaseboard;
+          }
           this.data.walls.push(subW);
           lastCreated = subW;
         }
@@ -1681,7 +1702,7 @@ export class ArchBuilderEngine {
       end: cleanEnd,
       height:
         defaults.style === 'half'
-          ? Math.min(defaults.height, 1.1)
+          ? Math.min(defaults.height, 1.45)
           : defaults.style === 'railing'
           ? 1.0
           : defaults.height,
@@ -1701,6 +1722,13 @@ export class ArchBuilderEngine {
       interiorFinishMaterialId:
         defaults.style === 'railing' ? undefined : 'mat_paint_interior',
     };
+    if (activeTpl) {
+      applyWallTemplateProfileToWall(wall, activeTpl);
+      wall.height = defaults.style === 'railing' ? 1.0 : defaults.height;
+      wall.thickness = defaults.thickness;
+      wall.style = defaults.style;
+      wall.hasBaseboard = defaults.hasBaseboard;
+    }
     this.data.walls.push(wall);
     this.setSelection({ kind: 'wall', id: wall.id });
     return wall;
@@ -1721,7 +1749,11 @@ export class ArchBuilderEngine {
     const maxZ = round3(Math.max(cornerA.z, cornerB.z));
     if (maxX - minX < 0.4 || maxZ - minZ < 0.4) return 0;
 
-    const straightDefaults: WallDrawDefaults = { ...defaults, curveBulge: 0 };
+    const straightDefaults: WallDrawDefaults = {
+      ...defaults,
+      curveBulge: 0,
+      activeTemplateId: undefined,
+    };
     const p1: Vec2XZ = { x: minX, z: minZ };
     const p2: Vec2XZ = { x: maxX, z: minZ };
     const p3: Vec2XZ = { x: maxX, z: maxZ };
@@ -1813,6 +1845,15 @@ export class ArchBuilderEngine {
     centerXZ: Vec2XZ,
     defaults: WallDrawDefaults = DEFAULT_WALL_DRAW
   ): ArchWallSegment | null {
+    if (defaults.activeTemplateId) {
+      const created = this.spawnWallFromTemplateId(
+        defaults.activeTemplateId,
+        floorId,
+        centerXZ,
+        defaults
+      );
+      return created[0] ?? null;
+    }
     const halfW = Math.max(0.25, defaults.lengthTemplate * 0.5);
     return this.addWallSegment(
       floorId,
@@ -1820,6 +1861,46 @@ export class ArchBuilderEngine {
       { x: centerXZ.x + halfW, z: centerXZ.z },
       defaults
     );
+  }
+
+  /**
+   * Spawns any of the 38 Phase-1 Smart Wall Templates (single-span OR multi-segment Corner/L/T/Cross/U/Zigzag)
+   * onto `floorId` centered at `centerXZ` and selects all created segments for immediate Blender gizmo control!
+   */
+  public spawnWallFromTemplateId(
+    templateId: WallTemplateId,
+    floorId: string,
+    centerXZ: Vec2XZ,
+    defaults: WallDrawDefaults = DEFAULT_WALL_DRAW
+  ): ArchWallSegment[] {
+    const segs = createWallSegmentsFromTemplate(
+      templateId,
+      floorId,
+      centerXZ,
+      defaults
+    );
+    if (segs.length === 0) return [];
+    for (const s of segs) {
+      this.data.walls.push(s);
+    }
+    this.setSelections(
+      segs.map((s) => ({ kind: 'wall' as const, id: s.id }))
+    );
+    return segs;
+  }
+
+  /**
+   * Non-destructively swaps an existing wall's architectural template profile (keeping start/end, colors & openings!)
+   */
+  public applyTemplateToWall(
+    wallId: string,
+    templateId: WallTemplateId
+  ): boolean {
+    const wall = this.data.walls.find((w) => w.id === wallId);
+    if (!wall) return false;
+    applyWallTemplateProfileToWall(wall, templateId);
+    this.clampOpeningsToWall(wall);
+    return true;
   }
 
   public clampOpeningsToWall(wall: ArchWallSegment): void {
@@ -2009,7 +2090,7 @@ export class ArchBuilderEngine {
     const minRatio = Math.min(0.45, (op.width * 0.5 + 0.08) / totalLen);
     const maxRatio = Math.max(0.55, 1 - minRatio);
 
-    const samples = Math.abs(wall.curveBulge) >= 0.04 ? 24 : 1;
+    const samples = isWallCurvedPath(wall) ? 28 : 1;
     let bestT = op.offsetRatio;
     let bestDist = Infinity;
 
@@ -2688,7 +2769,7 @@ export class ArchBuilderEngine {
       if (wallLen < 0.2) continue;
       const wallOps = this.data.openings.filter((o) => o.wallId === w.id);
 
-      const steps = Math.abs(w.curveBulge) >= 0.04 ? 12 : 1;
+      const steps = isWallCurvedPath(w) ? 16 : 1;
       for (let s = 0; s < steps; s++) {
         const t0 = s / steps;
         const t1 = (s + 1) / steps;
@@ -3201,15 +3282,23 @@ export class ArchBuilderEngine {
       }
     }
 
-    // 3. Build Dual-Sided Walls with Live Cutouts & Baseboards + Corner Junction Columns
-    const vertexJunctionMap = new Map<
-      string,
-      { x: number; z: number; baseY: number; maxH: number; maxT: number; color: string; count: number; ghost: boolean }
-    >();
+    // 3. Compute Exact Watertight Planar Miter / T-Butt / Rounded Fillet Junction Plans per Floor!
+    const floorJunctionPlans = new Map<string, FloorWallJunctionPlan>();
+    for (const fl of floors) {
+      const fStyle = resolveFloorDrawStyle(fl.id);
+      if (!fStyle.visible) continue;
+      const flWalls = this.data.walls.filter((w) => w.floorId === fl.id);
+      if (flWalls.length > 0) {
+        floorJunctionPlans.set(fl.id, computeFloorWallJunctions(flWalls));
+      }
+    }
 
     for (const wall of this.data.walls) {
       const fStyle = resolveFloorDrawStyle(wall.floorId);
       if (!fStyle.visible) continue;
+
+      const plan = floorJunctionPlans.get(wall.floorId);
+      const trims = plan?.endTrims.get(wall.id);
 
       const wallSelInfo = this.isElementSelected('wall', wall.id);
       const isWallSel = wallSelInfo.selected;
@@ -3217,7 +3306,9 @@ export class ArchBuilderEngine {
         wall,
         fStyle.baseY,
         fStyle.ghost,
-        isWallSel
+        isWallSel,
+        trims?.start,
+        trims?.end
       );
       if (isWallSel) {
         this.attachSelectionOutline(wallGroup, wallSelInfo.primary);
@@ -3226,34 +3317,11 @@ export class ArchBuilderEngine {
       wallGroup.userData.wallMidX = midSample.x;
       wallGroup.userData.wallMidZ = midSample.z;
       wallGroup.userData.baseY = fStyle.baseY;
-      wallGroup.userData.fullH = wall.height;
+      wallGroup.userData.fullH = Math.max(
+        wall.height,
+        wall.endHeight ?? wall.height
+      );
       this.structuralGroup.add(wallGroup);
-
-      // Register endpoints for watertight corner joins (full & half walls)
-      if (wall.style !== 'railing') {
-        for (const pt of [wall.start, wall.end]) {
-          const qx = Math.round(pt.x * 20) / 20;
-          const qz = Math.round(pt.z * 20) / 20;
-          const key = `${wall.floorId}:${qx}:${qz}`;
-          const prev = vertexJunctionMap.get(key);
-          if (prev) {
-            prev.count++;
-            prev.maxH = Math.max(prev.maxH, wall.height);
-            prev.maxT = Math.max(prev.maxT, wall.thickness);
-          } else {
-            vertexJunctionMap.set(key, {
-              x: pt.x,
-              z: pt.z,
-              baseY: fStyle.baseY,
-              maxH: wall.height,
-              maxT: wall.thickness,
-              color: wall.exteriorColor,
-              count: 1,
-              ghost: fStyle.ghost,
-            });
-          }
-        }
-      }
 
       // 2D Blueprint Architectural Wall Length Dimension Label (with overlap de-duplication!)
       if (this.isBlueprint2D && activeFl && wall.floorId === activeFl.id) {
@@ -3353,33 +3421,83 @@ export class ArchBuilderEngine {
       }
     }
 
-    for (const jn of vertexJunctionMap.values()) {
-      if (jn.count < 2) continue;
-      const colGeo = new THREE.CylinderGeometry(
-        jn.maxT * 0.502,
-        jn.maxT * 0.502,
-        jn.maxH,
-        14
-      );
-      const colMat = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(jn.color),
-        roughness: 0.78,
-        metalness: 0.04,
-        transparent: jn.ghost,
-        opacity: jn.ghost ? 0.22 : 1,
-      });
-      const colMesh = new THREE.Mesh(colGeo, colMat);
-      colMesh.position.set(jn.x, jn.baseY + jn.maxH * 0.5, jn.z);
-      colMesh.castShadow = true;
-      colMesh.receiveShadow = true;
-      colMesh.userData = {
-        archKind: 'corner-col',
-        colX: jn.x,
-        colZ: jn.z,
-        baseY: jn.baseY,
-        fullH: jn.maxH,
-      };
-      this.structuralGroup.add(colMesh);
+    // Render Dedicated Corner Fillet / Quoin Pieces (`rounded-inner-corner`, `rounded-outer-corner`, `outer-corner-wall`)
+    for (const [floorId, plan] of floorJunctionPlans.entries()) {
+      const fStyle = resolveFloorDrawStyle(floorId);
+      if (!fStyle.visible) continue;
+      for (const fp of plan.filletPieces) {
+        const fg = buildCornerFilletGeometry(fp);
+        if (!fg) continue;
+
+        const wA = fp.wallA;
+        const selA = this.isElementSelected('wall', wA.id);
+        const selB = this.isElementSelected('wall', fp.wallB.id);
+        const isSel = selA.selected || selB.selected;
+        const isPrimary = selA.primary || selB.primary;
+        const emissiveCol = isSel
+          ? new THREE.Color('#2563eb')
+          : new THREE.Color('#000000');
+        const emissiveInt = isSel ? 0.22 : 0;
+
+        const extMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(wA.exteriorColor),
+          roughness: wA.roughness,
+          metalness: 0.04,
+          transparent: fStyle.ghost,
+          opacity: fStyle.ghost ? 0.22 : 1,
+          emissive: emissiveCol,
+          emissiveIntensity: emissiveInt,
+        });
+        const intMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(wA.interiorColor),
+          roughness: wA.roughness,
+          metalness: 0.03,
+          transparent: fStyle.ghost,
+          opacity: fStyle.ghost ? 0.22 : 1,
+          emissive: emissiveCol,
+          emissiveIntensity: emissiveInt,
+        });
+        const trimMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color('#e2e8f0'),
+          roughness: 0.68,
+          metalness: 0.06,
+          transparent: fStyle.ghost,
+          opacity: fStyle.ghost ? 0.22 : 1,
+          emissive: emissiveCol,
+          emissiveIntensity: emissiveInt * 0.6,
+        });
+        const dualMats = [trimMat, trimMat, trimMat, trimMat, extMat, intMat];
+
+        const filletGrp = new THREE.Group();
+        filletGrp.userData = {
+          archKind: 'wall',
+          archId: wA.id,
+          floorId,
+          wallMidX: fp.vertex.x,
+          wallMidZ: fp.vertex.z,
+          baseY: fStyle.baseY,
+          fullH: fp.height,
+        };
+        const filletHolder = new THREE.Group();
+        filletHolder.position.set(0, fStyle.baseY, 0);
+        const filletMesh = new THREE.Mesh(
+          fg,
+          fp.style === 'outer-quoin' ? trimMat : dualMats
+        );
+        filletMesh.castShadow = true;
+        filletMesh.receiveShadow = true;
+        filletMesh.userData = {
+          archKind: 'wall',
+          archId: wA.id,
+          hasDualWallFaces: fp.style !== 'outer-quoin',
+        };
+        filletHolder.add(filletMesh);
+        filletGrp.add(filletHolder);
+        if (isSel) {
+          this.attachSelectionOutline(filletGrp, isPrimary);
+        }
+        this.structuralGroup.add(filletGrp);
+      }
     }
 
     // Multi-Story Onion-Skin Lower Floor Trace (subtle cyan guide on Lantai 2+ showing Lantai bawah walls!)
@@ -3751,27 +3869,6 @@ export class ArchBuilderEngine {
         }
         continue;
       }
-
-      if (kind === 'corner-col') {
-        const cx = (child.userData.colX as number | undefined) ?? 0;
-        const cz = (child.userData.colZ as number | undefined) ?? 0;
-        const baseY = (child.userData.baseY as number | undefined) ?? 0;
-        const fullH = (child.userData.fullH as number | undefined) ?? 3.0;
-        const dColXZ = Math.hypot(cx - cameraPos.x, cz - cameraPos.z);
-        const toColXZ = new THREE.Vector2(cx - cameraPos.x, cz - cameraPos.z);
-        const dot =
-          toColXZ.lengthSq() > 1e-5
-            ? toColXZ.clone().normalize().dot(toTargetXZ)
-            : 0;
-        const shouldCut =
-          enabled &&
-          !this.isBlueprint2D &&
-          dColXZ < camDistXZ + 0.35 &&
-          dot > 0.32;
-        const ratio = shouldCut ? Math.min(1, 0.32 / Math.max(0.4, fullH)) : 1;
-        child.scale.y = ratio;
-        child.position.y = baseY + fullH * ratio * 0.5;
-      }
     }
   }
 
@@ -3779,7 +3876,9 @@ export class ArchBuilderEngine {
     wall: ArchWallSegment,
     baseY: number,
     ghost: boolean,
-    isSelected: boolean
+    isSelected: boolean,
+    startTrim?: WallEndTrimSpec,
+    endTrim?: WallEndTrimSpec
   ): THREE.Group {
     const grp = new THREE.Group();
     grp.userData = { archKind: 'wall', archId: wall.id, floorId: wall.floorId };
@@ -3841,7 +3940,7 @@ export class ArchBuilderEngine {
     // Special Balcony Railing Mode
     if (wall.style === 'railing') {
       const totalLen = computeWallLength(wall);
-      const subSteps = Math.abs(wall.curveBulge) >= 0.04 ? 12 : 1;
+      const subSteps = isWallCurvedPath(wall) ? 14 : 1;
       const railH = Math.max(0.85, wall.height);
       const glassMat = new THREE.MeshStandardMaterial({
         color: new THREE.Color('#bae6fd'),
@@ -3915,179 +4014,73 @@ export class ArchBuilderEngine {
       return grp;
     }
 
-    // Curved Wall Path (with live opening support along arc parameter t!)
-    if (Math.abs(wall.curveBulge) >= 0.04) {
-      const arcSteps = 16;
-      const totalLen = computeWallLength(wall);
-      const wallOps = this.data.openings.filter((o) => o.wallId === wall.id);
-      const curvedHolder = new THREE.Group();
-      curvedHolder.position.set(0, baseY, 0);
-      grp.add(curvedHolder);
-
-      for (let i = 0; i < arcSteps; i++) {
-        const t0 = i / arcSteps;
-        const t1 = (i + 1) / arcSteps;
-        const tMid = (t0 + t1) * 0.5;
-        const sMid = tMid * totalLen;
-
-        const p0 = sampleWallCurvePoint(wall, t0);
-        const p1 = sampleWallCurvePoint(wall, t1);
-        const segLen = Math.hypot(p1.x - p0.x, p1.z - p0.z) + wall.thickness * 0.16;
-        const yaw = -Math.atan2(p1.z - p0.z, p1.x - p0.x);
-        const mx = (p0.x + p1.x) * 0.5;
-        const mz = (p0.z + p1.z) * 0.5;
-
-        // Check if an opening overlaps this arc slice
-        const hitOp = wallOps.find(
-          (op) => Math.abs(sMid - op.offsetRatio * totalLen) < op.width * 0.5
-        );
-
-        const addArcSlice = (yBottom: number, yTop: number) => {
-          const hSlice = yTop - yBottom;
-          if (hSlice < 0.03) return;
-          const m = new THREE.Mesh(
-            new THREE.BoxGeometry(segLen, hSlice, wall.thickness),
-            dualMaterials
-          );
-          m.position.set(mx, yBottom + hSlice * 0.5, mz);
-          m.rotation.y = yaw;
-          m.castShadow = true;
-          m.receiveShadow = true;
-          m.userData = {
-            archKind: 'wall',
-            archId: wall.id,
-            hasDualWallFaces: true,
-          };
-          curvedHolder.add(m);
-        };
-
-        if (!hitOp) {
-          addArcSlice(0, wall.height);
-        } else {
-          if (hitOp.sillHeight > 0.03) addArcSlice(0, hitOp.sillHeight);
-          const topOpen = hitOp.sillHeight + hitOp.height;
-          if (topOpen < wall.height - 0.03) addArcSlice(topOpen, wall.height);
-        }
-      }
-
-      for (const op of wallOps) {
-        const pt = sampleWallCurvePoint(wall, op.offsetRatio);
-        const opSelInfo = this.isElementSelected('opening', op.id);
-        const opGrp = buildOpeningAssembly(op, wall.thickness, opSelInfo.selected);
-        if (opSelInfo.selected) {
-          this.attachSelectionOutline(opGrp, opSelInfo.primary);
-        }
-        opGrp.position.set(pt.x, op.sillHeight, pt.z);
-        opGrp.rotation.y = -Math.atan2(pt.tz, pt.tx);
-        curvedHolder.add(opGrp);
-      }
-
-      return grp;
-    }
-
-    // Straight Wall with Exact Live Boolean Cutouts
-    const dx = wall.end.x - wall.start.x;
-    const dz = wall.end.z - wall.start.z;
-    const L = Math.max(0.15, Math.hypot(dx, dz));
-    const yaw = -Math.atan2(dz, dx);
-
+    // Unified Watertight Manifold Wall Builder:
+    // Handles straight walls, exact circular arcs, S-waves, J-curve ends, slanted walls,
+    // tapered walls, all 10 sculpted wall-end profiles, planar N-way miters, T-butts, and live openings!
+    const wallOps = this.data.openings.filter((o) => o.wallId === wall.id);
     const wallHolder = new THREE.Group();
-    wallHolder.position.set(wall.start.x, baseY, wall.start.z);
-    wallHolder.rotation.y = yaw;
+    wallHolder.position.set(0, baseY, 0);
     grp.add(wallHolder);
 
-    const ops = this.data.openings
-      .filter((o) => o.wallId === wall.id)
-      .map((op) => {
-        const half = op.width * 0.5;
-        const centerS = Math.max(
-          half + 0.05,
-          Math.min(L - half - 0.05, op.offsetRatio * L)
-        );
-        return {
-          op,
-          s0: Math.max(0.04, centerS - half),
-          s1: Math.min(L - 0.04, centerS + half),
-          centerS,
-        };
-      })
-      .sort((a, b) => a.s0 - b.s0);
+    const built = buildManifoldWallBodyGeometry(
+      wall,
+      wallOps,
+      startTrim,
+      endTrim
+    );
 
-    const addSpanBox = (s0: number, s1: number, y0: number, y1: number) => {
-      const spanW = s1 - s0;
-      const spanH = y1 - y0;
-      if (spanW < 0.02 || spanH < 0.02) return;
-      const box = new THREE.Mesh(
-        new THREE.BoxGeometry(spanW, spanH, wall.thickness),
-        dualMaterials
-      );
-      box.position.set((s0 + s1) * 0.5, (y0 + y1) * 0.5, 0);
-      box.castShadow = true;
-      box.receiveShadow = true;
-      box.userData = {
-        archKind: 'wall',
-        archId: wall.id,
-        hasDualWallFaces: true,
-      };
-      wallHolder.add(box);
-
-      // Optional Baseboard Skirting along full-ground spans
-      if (wall.hasBaseboard && y0 <= 0.01 && !ghost) {
-        const bb = new THREE.Mesh(
-          new THREE.BoxGeometry(spanW, 0.085, wall.thickness + 0.022),
-          trimMat
-        );
-        bb.position.set((s0 + s1) * 0.5, 0.0425, 0);
-        bb.userData = { archKind: 'wall', archId: wall.id };
-        wallHolder.add(bb);
-      }
+    const bodyMesh = new THREE.Mesh(built.bodyGeo, dualMaterials);
+    bodyMesh.castShadow = true;
+    bodyMesh.receiveShadow = true;
+    bodyMesh.userData = {
+      archKind: 'wall',
+      archId: wall.id,
+      hasDualWallFaces: true,
     };
+    wallHolder.add(bodyMesh);
 
-    let cursor = 0;
-    for (const item of ops) {
-      if (item.s0 > cursor + 0.02) {
-        addSpanBox(cursor, item.s0, 0, wall.height);
-      }
-      // Sill below window
-      if (item.op.sillHeight > 0.02) {
-        addSpanBox(item.s0, item.s1, 0, item.op.sillHeight);
-      }
-      // Header lintel above door/window
-      const topY = item.op.sillHeight + item.op.height;
-      if (topY < wall.height - 0.02) {
-        addSpanBox(item.s0, item.s1, topY, wall.height);
-      }
+    if (built.copingGeo) {
+      const copingMesh = new THREE.Mesh(built.copingGeo, trimMat);
+      copingMesh.castShadow = true;
+      copingMesh.receiveShadow = true;
+      copingMesh.userData = { archKind: 'wall', archId: wall.id };
+      wallHolder.add(copingMesh);
+    }
 
-      // Mount 3D Door / Window / Archway inside the cutout!
-      const opSelInfo = this.isElementSelected('opening', item.op.id);
-      const opMeshGrp = buildOpeningAssembly(
-        item.op,
-        wall.thickness,
-        opSelInfo.selected
-      );
+    if (built.trimExtrasGeo && !ghost) {
+      const extrasMesh = new THREE.Mesh(built.trimExtrasGeo, trimMat);
+      extrasMesh.castShadow = true;
+      extrasMesh.receiveShadow = true;
+      extrasMesh.userData = { archKind: 'wall', archId: wall.id };
+      wallHolder.add(extrasMesh);
+    }
+
+    // Mount 3D Door / Window / Archway assemblies cleanly inside each cutout!
+    const startThick = wall.thickness;
+    const endThick = wall.endThickness ?? wall.thickness;
+    const slantLean = wall.slantLean ?? 0;
+    for (const op of wallOps) {
+      const pt = sampleWallCurvePoint(wall, op.offsetRatio);
+      const localThick =
+        startThick + (endThick - startThick) * op.offsetRatio;
+      const midYRatio =
+        (op.sillHeight + op.height * 0.5) / Math.max(0.25, wall.height);
+      const leanShift = slantLean * Math.max(0, Math.min(1, midYRatio));
+      const nLx = -pt.tz;
+      const nLz = pt.tx;
+
+      const opSelInfo = this.isElementSelected('opening', op.id);
+      const opGrp = buildOpeningAssembly(op, localThick, opSelInfo.selected);
       if (opSelInfo.selected) {
-        this.attachSelectionOutline(opMeshGrp, opSelInfo.primary);
+        this.attachSelectionOutline(opGrp, opSelInfo.primary);
       }
-      opMeshGrp.position.set(item.centerS, item.op.sillHeight, 0);
-      wallHolder.add(opMeshGrp);
-
-      cursor = Math.max(cursor, item.s1);
-    }
-
-    if (cursor < L - 0.02) {
-      addSpanBox(cursor, L, 0, wall.height);
-    }
-
-    // Half-wall stone/wood top coping ledge
-    if (wall.style === 'half') {
-      const coping = new THREE.Mesh(
-        new THREE.BoxGeometry(L + 0.02, 0.04, wall.thickness + 0.05),
-        trimMat
+      opGrp.position.set(
+        pt.x + nLx * leanShift,
+        op.sillHeight,
+        pt.z + nLz * leanShift
       );
-      coping.position.set(L * 0.5, wall.height + 0.02, 0);
-      coping.castShadow = true;
-      coping.userData = { archKind: 'wall', archId: wall.id };
-      wallHolder.add(coping);
+      opGrp.rotation.y = -Math.atan2(pt.tz, pt.tx);
+      wallHolder.add(opGrp);
     }
 
     return grp;
@@ -4193,7 +4186,7 @@ export class ArchBuilderEngine {
       end,
       height:
         defaults.style === 'half'
-          ? Math.min(defaults.height, 1.1)
+          ? Math.min(defaults.height, 1.45)
           : defaults.style === 'railing'
           ? 1.0
           : defaults.height,
@@ -4205,8 +4198,14 @@ export class ArchBuilderEngine {
       roughness: 0.5,
       hasBaseboard: false,
     };
+    if (defaults.activeTemplateId) {
+      applyWallTemplateProfileToWall(previewWall, defaults.activeTemplateId);
+      previewWall.height =
+        defaults.style === 'railing' ? 1.0 : defaults.height;
+      previewWall.thickness = defaults.thickness;
+      previewWall.style = defaults.style;
+    }
 
-    const steps = Math.abs(defaults.curveBulge) >= 0.04 ? 14 : 1;
     const ghostMat = new THREE.MeshBasicMaterial({
       color: '#38bdf8',
       transparent: true,
@@ -4214,23 +4213,23 @@ export class ArchBuilderEngine {
       depthWrite: false,
     });
 
-    for (let i = 0; i < steps; i++) {
-      const p0 = sampleWallCurvePoint(previewWall, i / steps);
-      const p1 = sampleWallCurvePoint(previewWall, (i + 1) / steps);
-      const sLen = Math.hypot(p1.x - p0.x, p1.z - p0.z);
-      const box = new THREE.Mesh(
-        new THREE.BoxGeometry(sLen, previewWall.height, previewWall.thickness),
-        ghostMat
-      );
-      box.position.set(
-        (p0.x + p1.x) * 0.5,
-        baseY + previewWall.height * 0.5,
-        (p0.z + p1.z) * 0.5
-      );
-      box.rotation.y = -Math.atan2(p1.z - p0.z, p1.x - p0.x);
-      box.raycast = () => {};
-      this.previewGroup.add(box);
+    const previewBuilt = buildManifoldWallBodyGeometry(previewWall, []);
+    const ghostHolder = new THREE.Group();
+    ghostHolder.position.set(0, baseY, 0);
+    const bodyGhost = new THREE.Mesh(previewBuilt.bodyGeo, ghostMat);
+    bodyGhost.raycast = () => {};
+    ghostHolder.add(bodyGhost);
+    if (previewBuilt.copingGeo) {
+      const copingGhost = new THREE.Mesh(previewBuilt.copingGeo, ghostMat);
+      copingGhost.raycast = () => {};
+      ghostHolder.add(copingGhost);
     }
+    if (previewBuilt.trimExtrasGeo) {
+      const extrasGhost = new THREE.Mesh(previewBuilt.trimExtrasGeo, ghostMat);
+      extrasGhost.raycast = () => {};
+      ghostHolder.add(extrasGhost);
+    }
+    this.previewGroup.add(ghostHolder);
 
     const trueLen = computeWallLength(previewWall);
     const mid = sampleWallCurvePoint(previewWall, 0.5);

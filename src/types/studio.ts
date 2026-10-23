@@ -504,6 +504,74 @@ export type RoomSemanticType =
   | 'other'
   | 'unassigned';
 
+export type WallTemplateCategory = 'basic' | 'wall-end' | 'corner' | 'shape';
+
+export type WallEndCapKind =
+  | 'none'
+  | 'flat'
+  | 'angled'
+  | 'beveled'
+  | 'rounded'
+  | 'curved'
+  | 'tapered'
+  | 'pointed'
+  | 'stepped'
+  | 'pillar'
+  | 'cap';
+
+export type WallCornerStyleKind =
+  | 'sharp'
+  | 'inner-trim'
+  | 'outer-quoin'
+  | 'rounded-inner'
+  | 'rounded-outer';
+
+export type WallPathMode = 'line' | 'circular-arc' | 's-curve' | 'j-curve-end';
+
+export type WallTemplateId =
+  // 1. Basic Wall Templates (8)
+  | 'straight-wall'
+  | 'half-wall'
+  | 'low-wall'
+  | 'tall-wall'
+  | 'thick-wall'
+  | 'thin-wall'
+  | 'slanted-wall'
+  | 'tapered-wall'
+  // 2. Wall End Templates (10)
+  | 'flat-end-wall'
+  | 'angled-end-wall'
+  | 'beveled-end-wall'
+  | 'rounded-end-wall'
+  | 'curved-end-wall'
+  | 'tapered-end-wall'
+  | 'pointed-end-wall'
+  | 'stepped-end-wall'
+  | 'pillar-end-wall'
+  | 'cap-end-wall'
+  // 3. Corner Wall Templates (10)
+  | 'inner-corner-wall'
+  | 'outer-corner-wall'
+  | 'corner-90-wall'
+  | 'corner-45-wall'
+  | 'rounded-inner-corner'
+  | 'rounded-outer-corner'
+  | 'beveled-corner-wall'
+  | 'curved-corner-wall'
+  | 'three-way-junction-wall'
+  | 'four-way-junction-wall'
+  // 4. Wall Shape Templates (10)
+  | 'l-shaped-wall'
+  | 't-shaped-wall'
+  | 'cross-shaped-wall'
+  | 'u-shaped-wall'
+  | 'zigzag-wall'
+  | 'curved-wall'
+  | 'semi-circular-wall'
+  | 'circular-wall-segment'
+  | 's-shaped-wall'
+  | 'diagonal-wall';
+
 export interface ArchWallSegment {
   id: string;
   floorId: string;
@@ -519,6 +587,18 @@ export interface ArchWallSegment {
   interiorPattern?: ProceduralPatternKind;
   roughness: number;
   hasBaseboard: boolean;
+  /** Phase 1 Smart Wall Template & Profile Metadata */
+  templateId?: WallTemplateId;
+  endCap?: WallEndCapKind;
+  endCapBothEnds?: boolean;
+  slantLean?: number; // lateral lean offset in meters (-1.2 .. +1.2)
+  endHeight?: number; // optional sloped top height at end in meters
+  endThickness?: number; // gradual tapered thickness at end in meters
+  pathMode?: WallPathMode;
+  sWaveAmp?: number; // S-curve wave amplitude in meters
+  cornerStyle?: WallCornerStyleKind;
+  cornerRadius?: number; // fillet radius in meters for rounded-inner / rounded-outer
+  wallGroupId?: string;
   /** Independent construction-material assignments (separate from visual color/pattern!) */
   structuralMaterialId?: string;
   exteriorFinishMaterialId?: string;
@@ -872,6 +952,7 @@ export interface WallDrawDefaults {
   exteriorPattern?: ProceduralPatternKind;
   interiorPattern?: ProceduralPatternKind;
   hasBaseboard: boolean;
+  activeTemplateId?: WallTemplateId;
 }
 
 export interface SceneObjectData {

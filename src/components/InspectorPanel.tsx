@@ -69,8 +69,14 @@ import {
   SubdivisionStats,
   SurfacePlacementRule,
   Vec3,
+  WallTemplateCategory,
+  WallTemplateId,
 } from '../types/studio';
 import { PRIMITIVE_META } from '../engine/primitives';
+import {
+  WALL_TEMPLATE_CATEGORY_LABELS,
+  WALL_TEMPLATES_CATALOG,
+} from '../engine/wallTemplates';
 import { PrimitiveShapePreview } from './ShapeIcons';
 import {
   AdvancedColorMaterialPatch,
@@ -247,6 +253,7 @@ interface InspectorPanelProps {
     patch: Partial<ArchWallSegment>,
     commitHistory?: boolean
   ) => void;
+  onApplyTemplateToWall?: (wallId: string, templateId: WallTemplateId) => void;
   onUpdateArchOpening?: (
     openingId: string,
     patch: Partial<ArchOpeningItem>,
@@ -335,6 +342,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onToggleWallEditAngleLock,
   onSelectArchElement,
   onUpdateArchWall,
+  onApplyTemplateToWall,
   onUpdateArchOpening,
   onToggleDoorOpen,
   onUpdateArchStair,
@@ -1424,6 +1432,58 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         </button>
                       )}
 
+                      {/* Non-Destructive Smart Wall Template Profile Switcher */}
+                      {onApplyTemplateToWall && (
+                        <div className="wall-profile-select-wrap" style={{ marginBottom: 10 }}>
+                          <label className="wall-profile-select-label">
+                            {t.wallTemplateProfileTitle}
+                          </label>
+                          <select
+                            className="inspector-select-input"
+                            value={selWall.templateId ?? 'straight-wall'}
+                            onChange={(e) =>
+                              onApplyTemplateToWall(
+                                selWall.id,
+                                e.target.value as WallTemplateId
+                              )
+                            }
+                          >
+                            {(
+                              [
+                                'basic',
+                                'wall-end',
+                                'corner',
+                                'shape',
+                              ] as WallTemplateCategory[]
+                            ).map((cat) => {
+                              const items = WALL_TEMPLATES_CATALOG.filter(
+                                (w) =>
+                                  w.category === cat &&
+                                  (w.supportsDrawStroke ||
+                                    w.id === 'inner-corner-wall' ||
+                                    w.id === 'outer-corner-wall' ||
+                                    w.id === 'rounded-inner-corner' ||
+                                    w.id === 'rounded-outer-corner')
+                              );
+                              return (
+                                <optgroup
+                                  key={cat}
+                                  label={
+                                    WALL_TEMPLATE_CATEGORY_LABELS[cat][language]
+                                  }
+                                >
+                                  {items.map((w) => (
+                                    <option key={w.id} value={w.id}>
+                                      {w.name[language]}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      )}
+
                       <div className="segmented-tabs" style={{ marginBottom: 10 }}>
                         {(
                           [
@@ -1445,7 +1505,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                                   style: st.id,
                                   height:
                                     st.id === 'half'
-                                      ? 1.1
+                                      ? 1.15
                                       : st.id === 'railing'
                                       ? 1.05
                                       : Math.max(2.4, selWall.height),
@@ -1468,7 +1528,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                           type="range"
                           min={-3}
                           max={3}
-                          step={0.1}
+                          step={0.05}
                           value={selWall.curveBulge}
                           onChange={(e) =>
                             onUpdateArchWall?.(
@@ -1480,6 +1540,140 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                           onPointerUp={onCommitHistory}
                         />
                       </div>
+
+                      {/* Parametric Slant Lean Control */}
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.wallTemplateSlantLabel}</span>
+                          <strong>
+                            {(selWall.slantLean ?? 0).toFixed(2)} m
+                          </strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={-0.8}
+                          max={0.8}
+                          step={0.02}
+                          value={selWall.slantLean ?? 0}
+                          onChange={(e) =>
+                            onUpdateArchWall?.(
+                              selWall.id,
+                              { slantLean: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      {/* Parametric End Tip Thickness (Taper) Control */}
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.wallTemplateEndThicknessLabel}</span>
+                          <strong>
+                            {(
+                              selWall.endThickness ?? selWall.thickness
+                            ).toFixed(2)}{' '}
+                            m
+                          </strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={0.05}
+                          max={0.6}
+                          step={0.01}
+                          value={selWall.endThickness ?? selWall.thickness}
+                          onChange={(e) =>
+                            onUpdateArchWall?.(
+                              selWall.id,
+                              { endThickness: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      {/* Parametric S-Wave Amplitude when pathMode === 's-curve' */}
+                      {selWall.pathMode === 's-curve' && (
+                        <div className="slider-row">
+                          <div className="slider-head">
+                            <span>{t.wallTemplateSWaveLabel}</span>
+                            <strong>
+                              {(selWall.sWaveAmp ?? 0.55).toFixed(2)} m
+                            </strong>
+                          </div>
+                          <input
+                            type="range"
+                            min={-1.2}
+                            max={1.2}
+                            step={0.05}
+                            value={selWall.sWaveAmp ?? 0.55}
+                            onChange={(e) =>
+                              onUpdateArchWall?.(
+                                selWall.id,
+                                { sWaveAmp: parseFloat(e.target.value) },
+                                false
+                              )
+                            }
+                            onPointerUp={onCommitHistory}
+                          />
+                        </div>
+                      )}
+
+                      {/* Parametric Corner Fillet Radius when rounded-inner / rounded-outer */}
+                      {(selWall.cornerStyle === 'rounded-inner' ||
+                        selWall.cornerStyle === 'rounded-outer') && (
+                        <div className="slider-row">
+                          <div className="slider-head">
+                            <span>{t.wallTemplateCornerRadiusLabel}</span>
+                            <strong>
+                              {(selWall.cornerRadius ?? 0.45).toFixed(2)} m
+                            </strong>
+                          </div>
+                          <input
+                            type="range"
+                            min={0.15}
+                            max={1.2}
+                            step={0.03}
+                            value={selWall.cornerRadius ?? 0.45}
+                            onChange={(e) =>
+                              onUpdateArchWall?.(
+                                selWall.id,
+                                { cornerRadius: parseFloat(e.target.value) },
+                                false
+                              )
+                            }
+                            onPointerUp={onCommitHistory}
+                          />
+                        </div>
+                      )}
+
+                      {/* Apply Sculpted End Profile to Both Ends */}
+                      {selWall.endCap &&
+                        selWall.endCap !== 'none' &&
+                        selWall.endCap !== 'flat' && (
+                          <label
+                            className="studio-photo-check"
+                            style={{ marginTop: 8 }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={Boolean(selWall.endCapBothEnds)}
+                              onChange={(e) =>
+                                onUpdateArchWall?.(
+                                  selWall.id,
+                                  { endCapBothEnds: e.target.checked },
+                                  true
+                                )
+                              }
+                            />
+                            <span className="studio-photo-check-box">
+                              {selWall.endCapBothEnds && <Check size={12} />}
+                            </span>
+                            <span>{t.wallTemplateBothEndsCapLabel}</span>
+                          </label>
+                        )}
 
                       <label className="studio-photo-check" style={{ marginTop: 8 }}>
                         <input

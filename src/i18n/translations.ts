@@ -807,6 +807,21 @@ export interface StudioStrings {
   freeRotateHud: string;
   gridScaleHud: string;
   roomVoidLabel: string;
+
+  // Phase 1 Smart Wall Templates (38 Templates) & Parametric Wall Profiles
+  wallTemplatesTabTitle: string;
+  wallTemplatesOpenShelfBtn: string;
+  wallTemplateActiveDrawLabel: string;
+  wallTemplateSpawnBtn: string;
+  wallTemplateDrawModeBtn: string;
+  wallTemplateSpawnedToast: string;
+  wallTemplateDrawSelectedToast: string;
+  wallTemplateProfileTitle: string;
+  wallTemplateSlantLabel: string;
+  wallTemplateEndThicknessLabel: string;
+  wallTemplateCornerRadiusLabel: string;
+  wallTemplateSWaveLabel: string;
+  wallTemplateBothEndsCapLabel: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -1629,6 +1644,20 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     freeRotateHud: 'Putar Sudut Bebas',
     gridScaleHud: 'Skala Grid',
     roomVoidLabel: 'Void Mezzanine (Lubang Lantai)',
+
+    wallTemplatesTabTitle: 'Template Dinding',
+    wallTemplatesOpenShelfBtn: 'Buka Katalog 38 Template Dinding',
+    wallTemplateActiveDrawLabel: 'Template Gambar Aktif',
+    wallTemplateSpawnBtn: '+ Pasang ke Kanvas',
+    wallTemplateDrawModeBtn: 'Gambar dengan Template Ini',
+    wallTemplateSpawnedToast: 'Template dinding ditambahkan ke lantai aktif',
+    wallTemplateDrawSelectedToast: 'Mode gambar dinding aktif dengan template:',
+    wallTemplateProfileTitle: 'Profil & Bentuk Template Dinding',
+    wallTemplateSlantLabel: 'Kemiringan Bidang (Slant)',
+    wallTemplateEndThicknessLabel: 'Tebal Ujung Akhir (Taper)',
+    wallTemplateCornerRadiusLabel: 'Radius Lengkung Sudut',
+    wallTemplateSWaveLabel: 'Amplitudo Gelombang S',
+    wallTemplateBothEndsCapLabel: 'Terapkan Profil ke Kedua Ujung',
   },
 
   en: {
@@ -2450,6 +2479,20 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     freeRotateHud: 'Free Rotation',
     gridScaleHud: 'Grid Scale',
     roomVoidLabel: 'Void Mezzanine (Open Floor)',
+
+    wallTemplatesTabTitle: 'Wall Templates',
+    wallTemplatesOpenShelfBtn: 'Open 38 Wall Templates Catalog',
+    wallTemplateActiveDrawLabel: 'Active Draw Template',
+    wallTemplateSpawnBtn: '+ Place on Canvas',
+    wallTemplateDrawModeBtn: 'Draw with This Template',
+    wallTemplateSpawnedToast: 'Wall template placed on active floor',
+    wallTemplateDrawSelectedToast: 'Wall draw active with template:',
+    wallTemplateProfileTitle: 'Wall Template Shape & Profile',
+    wallTemplateSlantLabel: 'Wall Plane Lean (Slant)',
+    wallTemplateEndThicknessLabel: 'End Tip Thickness (Taper)',
+    wallTemplateCornerRadiusLabel: 'Corner Fillet Radius',
+    wallTemplateSWaveLabel: 'S-Wave Amplitude',
+    wallTemplateBothEndsCapLabel: 'Apply End Profile to Both Ends',
   },
 
   ja: {
@@ -3262,6 +3305,20 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     freeRotateHud: '自由回転',
     gridScaleHud: 'グリッド拡縮',
     roomVoidLabel: '吹き抜け（ボイド床）',
+
+    wallTemplatesTabTitle: '壁テンプレート',
+    wallTemplatesOpenShelfBtn: '38種の壁テンプレート一覧を開く',
+    wallTemplateActiveDrawLabel: '描画テンプレート',
+    wallTemplateSpawnBtn: '+ キャンバスに配置',
+    wallTemplateDrawModeBtn: 'このテンプレートで壁を描く',
+    wallTemplateSpawnedToast: '現在の階に壁テンプレートを配置しました',
+    wallTemplateDrawSelectedToast: '壁描画テンプレートを選択:',
+    wallTemplateProfileTitle: '壁テンプレート形状・プロファイル',
+    wallTemplateSlantLabel: '壁面の傾き (Slant)',
+    wallTemplateEndThicknessLabel: '終端の厚み (Taper)',
+    wallTemplateCornerRadiusLabel: 'コーナー丸み半径',
+    wallTemplateSWaveLabel: 'S字カーブ振幅',
+    wallTemplateBothEndsCapLabel: '両端にプロファイルを適用',
   },
 };
 
