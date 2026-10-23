@@ -30,13 +30,17 @@ import { TRANSLATIONS } from '../i18n/translations';
 import {
   AppLanguage,
   BuildingFloorLayer,
+  DEFAULT_MODIFIER_SETTINGS,
   DEFAULT_SUBDIVISION_SETTINGS,
+  isModifierActive,
   isSubdivisionActive,
   normalizeSubdivisionSettings,
+  ObjectModifierSettings,
   ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PrimitiveKind,
+  ProceduralPatternKind,
   SceneObjectData,
   StudioMode,
   SubdivisionStats,
@@ -153,7 +157,12 @@ interface InspectorPanelProps {
   ) => void;
   onUpdateMaterial: (
     id: string | null,
-    patch: AdvancedColorMaterialPatch & { name?: string; visible?: boolean },
+    patch: AdvancedColorMaterialPatch & {
+      name?: string;
+      visible?: boolean;
+      proceduralPattern?: ProceduralPatternKind;
+      patternScale?: number;
+    },
     commitHistory?: boolean
   ) => void;
   onUpdateSubdivision: (
@@ -161,6 +170,12 @@ interface InspectorPanelProps {
     patch: Partial<ObjectSubdivisionSettings>,
     commitHistory?: boolean
   ) => void;
+  onUpdateModifiers?: (
+    id: string,
+    patch: Partial<ObjectModifierSettings>,
+    commitHistory?: boolean
+  ) => void;
+  onBakeMirrorTwins?: () => void;
   onSplitSubBlocks: () => void;
   onChangePaintMode: (mode: PaintInteractionMode) => void;
   onCommitHistory: () => void;
@@ -203,6 +218,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onUpdateTransform,
   onUpdateMaterial,
   onUpdateSubdivision,
+  onUpdateModifiers,
+  onBakeMirrorTwins,
   onSplitSubBlocks,
   onChangePaintMode,
   onCommitHistory,
@@ -227,6 +244,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     selected?.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS
   );
   const subdivActive = isSubdivisionActive(currentSubdiv);
+  const currentMods: ObjectModifierSettings = {
+    ...DEFAULT_MODIFIER_SETTINGS,
+    ...(selected?.modifiers ?? {}),
+  };
+  const modActive = isModifierActive(currentMods);
   const totalCells =
     currentSubdiv.cutsX * currentSubdiv.cutsY * currentSubdiv.cutsZ;
 
@@ -490,7 +512,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             >
               <Grid size={13} />
               <span>{t.tabSubdiv}</span>
-              {subdivActive && <span className="insp-subdiv-dot" />}
+              {(subdivActive || modActive) && <span className="insp-subdiv-dot" />}
             </button>
           </div>
 
@@ -1040,6 +1062,73 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   )}
                 </div>
               )}
+
+              {/* Procedural Surface Texture Pattern (True RGB Preserving!) */}
+              {selected && !selected.modelAssetId && (
+                <div className="point-light-inspector-card">
+                  <div className="subdiv-row-head">
+                    <span className="prop-label">{t.patternSectionTitle}</span>
+                  </div>
+                  <div className="pattern-chip-grid">
+                    {(
+                      [
+                        { id: 'none', label: t.patternNone },
+                        { id: 'wood', label: t.patternWood },
+                        { id: 'fabric', label: t.patternFabric },
+                        { id: 'marble', label: t.patternMarble },
+                        { id: 'tile', label: t.patternTile },
+                        { id: 'brick', label: t.patternBrick },
+                        { id: 'concrete', label: t.patternConcrete },
+                        { id: 'roof-tile', label: t.patternRoofTile },
+                      ] as const
+                    ).map((pt) => {
+                      const isPat =
+                        (selected.proceduralPattern ?? 'none') === pt.id;
+                      return (
+                        <button
+                          key={pt.id}
+                          type="button"
+                          className={`pattern-chip-btn ${isPat ? 'active' : ''}`}
+                          onClick={() =>
+                            onUpdateMaterial(
+                              selected.id,
+                              { proceduralPattern: pt.id },
+                              true
+                            )
+                          }
+                        >
+                          {pt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {(selected.proceduralPattern ?? 'none') !== 'none' && (
+                    <div className="slider-row" style={{ marginTop: 8 }}>
+                      <div className="slider-head">
+                        <span>{t.patternScaleLabel}</span>
+                        <strong>
+                          {(selected.patternScale ?? 1).toFixed(1)}×
+                        </strong>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.4}
+                        max={4.0}
+                        step={0.1}
+                        value={selected.patternScale ?? 1}
+                        onChange={(e) =>
+                          onUpdateMaterial(
+                            selected.id,
+                            { patternScale: parseFloat(e.target.value) },
+                            false
+                          )
+                        }
+                        onPointerUp={onCommitHistory}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -1280,6 +1369,202 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
                   {subdivStats?.capped && (
                     <div className="subdiv-cap-notice">{t.subdivCapNotice}</div>
+                  )}
+
+                  {/* Blender-Style Non-Destructive Furniture Modifiers */}
+                  {!selected.modelAssetId && onUpdateModifiers && (
+                    <div className="modifier-stack-card">
+                      <div className="subdiv-row-head">
+                        <span className="prop-label">
+                          <Sparkles size={13} />
+                          <span>{t.modifierSectionTitle}</span>
+                        </span>
+                        {modActive && (
+                          <button
+                            type="button"
+                            className="subdiv-reset-link"
+                            onClick={() =>
+                              onUpdateModifiers(
+                                selected.id,
+                                { ...DEFAULT_MODIFIER_SETTINGS },
+                                true
+                              )
+                            }
+                          >
+                            {t.modifierResetBtn}
+                          </button>
+                        )}
+                      </div>
+                      <p className="modifier-desc">{t.modifierSectionDesc}</p>
+
+                      {/* 1. Bevel / Soft Cushion */}
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.modifierBevelLabel}</span>
+                          <strong>{Math.round(currentMods.bevel * 100)}%</strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={1}
+                          step={0.02}
+                          value={currentMods.bevel}
+                          onChange={(e) =>
+                            onUpdateModifiers(
+                              selected.id,
+                              { bevel: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                        <div className="pattern-chip-grid" style={{ marginTop: 4 }}>
+                          {[
+                            { v: 0, label: '0%' },
+                            { v: 0.22, label: '22% Bevel' },
+                            { v: 0.55, label: '55% Cushion' },
+                            { v: 0.9, label: '90% Puff' },
+                          ].map((p) => (
+                            <button
+                              key={p.v}
+                              type="button"
+                              className={`pattern-chip-btn ${
+                                Math.abs(currentMods.bevel - p.v) < 0.03
+                                  ? 'active'
+                                  : ''
+                              }`}
+                              onClick={() =>
+                                onUpdateModifiers(
+                                  selected.id,
+                                  { bevel: p.v },
+                                  true
+                                )
+                              }
+                            >
+                              {p.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 2. Taper X & Taper Z */}
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.modifierTaperXLabel}</span>
+                          <strong>{Math.round(currentMods.taperX * 100)}%</strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={-0.85}
+                          max={0.85}
+                          step={0.05}
+                          value={currentMods.taperX}
+                          onChange={(e) =>
+                            onUpdateModifiers(
+                              selected.id,
+                              { taperX: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      <div className="slider-row">
+                        <div className="slider-head">
+                          <span>{t.modifierTaperZLabel}</span>
+                          <strong>{Math.round(currentMods.taperZ * 100)}%</strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={-0.85}
+                          max={0.85}
+                          step={0.05}
+                          value={currentMods.taperZ}
+                          onChange={(e) =>
+                            onUpdateModifiers(
+                              selected.id,
+                              { taperZ: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
+                      </div>
+
+                      {/* 3. Symmetric Mirror X / Z */}
+                      <div className="modifier-mirror-toggles">
+                        <button
+                          type="button"
+                          className={`pattern-chip-btn ${
+                            currentMods.mirrorX ? 'active' : ''
+                          }`}
+                          onClick={() =>
+                            onUpdateModifiers(
+                              selected.id,
+                              { mirrorX: !currentMods.mirrorX },
+                              true
+                            )
+                          }
+                        >
+                          {t.modifierMirrorX}
+                        </button>
+                        <button
+                          type="button"
+                          className={`pattern-chip-btn ${
+                            currentMods.mirrorZ ? 'active' : ''
+                          }`}
+                          onClick={() =>
+                            onUpdateModifiers(
+                              selected.id,
+                              { mirrorZ: !currentMods.mirrorZ },
+                              true
+                            )
+                          }
+                        >
+                          {t.modifierMirrorZ}
+                        </button>
+                      </div>
+
+                      {(currentMods.mirrorX || currentMods.mirrorZ) && (
+                        <>
+                          <div className="slider-row">
+                            <div className="slider-head">
+                              <span>{t.modifierMirrorDist}</span>
+                              <strong>
+                                {currentMods.mirrorOffset.toFixed(2)} m
+                              </strong>
+                            </div>
+                            <input
+                              type="range"
+                              min={0.1}
+                              max={6.0}
+                              step={0.05}
+                              value={currentMods.mirrorOffset}
+                              onChange={(e) =>
+                                onUpdateModifiers(
+                                  selected.id,
+                                  { mirrorOffset: parseFloat(e.target.value) },
+                                  false
+                                )
+                              }
+                              onPointerUp={onCommitHistory}
+                            />
+                          </div>
+
+                          {onBakeMirrorTwins && (
+                            <button
+                              type="button"
+                              className="subdiv-split-cta-btn"
+                              onClick={onBakeMirrorTwins}
+                            >
+                              <Boxes size={14} />
+                              <span>{t.modifierBakeTwinsBtn}</span>
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
               )}

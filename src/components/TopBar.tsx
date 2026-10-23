@@ -172,10 +172,12 @@ interface TopBarProps {
   isFullscreen: boolean;
   hasSelection: boolean;
   objectCount: number;
+  hasExportableContent?: boolean;
   onGoHome: () => void;
   onSaveNow: () => void;
   onRenameProject: (name: string) => void;
   onTriggerImport3D: () => void;
+  onOpenPhotoStudio?: () => void;
   onCycleLightingMood: () => void;
   onToggleInteriorPeek: () => void;
   onToggleWalkthrough: () => void;
@@ -224,10 +226,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   isFullscreen,
   hasSelection,
   objectCount,
+  hasExportableContent,
   onGoHome,
   onSaveNow,
   onRenameProject,
   onTriggerImport3D,
+  onOpenPhotoStudio,
   onCycleLightingMood,
   onToggleInteriorPeek,
   onToggleWalkthrough,
@@ -1510,6 +1514,19 @@ export const TopBar: React.FC<TopBarProps> = ({
             </PortalDropdown>
           </div>
 
+          {/* Studio HD Photo Snapshot (Available in BOTH Mode Modeling & Buat Rumah) */}
+          {onOpenPhotoStudio && (
+            <button
+              type="button"
+              className="chip-btn"
+              onClick={onOpenPhotoStudio}
+              title={t.photoModalTitle}
+            >
+              <Camera size={15} />
+              <span>{t.photoStudioBtnTitle}</span>
+            </button>
+          )}
+
           {/* Lighting Mood Cycle */}
           <button
             type="button"
@@ -1553,7 +1570,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             type="button"
             className="primary-btn export-btn"
             onClick={() => toggleMenu('export')}
-            disabled={objectCount === 0}
+            disabled={!(hasExportableContent ?? objectCount > 0)}
             title={t.exportFormatHeader}
           >
             <Download size={15} />

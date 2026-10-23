@@ -4,6 +4,7 @@ import {
   Building2,
   ChevronUp,
   Info,
+  Pencil,
   Plus,
   Search,
   Shapes,
@@ -30,6 +31,7 @@ import {
 import { TRANSLATIONS } from '../i18n/translations';
 import {
   AppLanguage,
+  CustomAssetCategory,
   CustomAssetRecord,
   PrimitiveKind,
   ShapeSubcategory,
@@ -50,11 +52,19 @@ const SUBCATEGORY_ORDER: ShapeSubcategory[] = [
 const MODULAR_CATEGORY_ORDER: Array<'all' | ModularCategory> = [
   'all',
   'floors',
-  'walls',
-  'openings',
-  'stairs',
-  'roofs',
+  'pillars',
+  'fences',
   'landscape',
+];
+
+const ASSET_CATEGORY_ORDER: Array<'all' | CustomAssetCategory> = [
+  'all',
+  'chair',
+  'table',
+  'lamp',
+  'cabinet',
+  'decor',
+  'other',
 ];
 
 const LONG_PRESS_MS = 380;
@@ -194,6 +204,7 @@ interface CatalogDrawerProps {
   onSpawnShape: (kind: PrimitiveKind, keepOpen?: boolean) => void;
   onSpawnModularItem?: (item: ModularConstructionItem, label: string) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
+  onEditCustomAsset?: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
 }
 
@@ -208,6 +219,7 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   onSpawnShape,
   onSpawnModularItem,
   onSpawnCustomAsset,
+  onEditCustomAsset,
   onDeleteCustomAsset,
 }) => {
   const t = TRANSLATIONS[language];
@@ -215,6 +227,7 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   const [catalogView, setCatalogView] = useState<CatalogTabMode>(initialTab);
   const [subcat, setSubcat] = useState<ShapeSubcategory>('all');
   const [modCat, setModCat] = useState<'all' | ModularCategory>('all');
+  const [assetCat, setAssetCat] = useState<'all' | CustomAssetCategory>('all');
   const [query, setQuery] = useState('');
   const [inspectedShape, setInspectedShape] = useState<PrimitiveMetaItem | null>(
     null
@@ -262,9 +275,13 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
 
   const filteredCustom = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return customAssets;
-    return customAssets.filter((a) => a.name.toLowerCase().includes(q));
-  }, [customAssets, query]);
+    return customAssets.filter((a) => {
+      const cat = a.category ?? 'other';
+      if (assetCat !== 'all' && cat !== assetCat) return false;
+      if (!q) return true;
+      return a.name.toLowerCase().includes(q);
+    });
+  }, [customAssets, assetCat, query]);
 
   if (!open) return null;
 
@@ -278,16 +295,31 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
         return `${t.modCatAll} (${MODULAR_CONSTRUCTION_CATALOG.length})`;
       case 'floors':
         return t.modCatFloors;
-      case 'walls':
-        return t.modCatWalls;
-      case 'openings':
-        return t.modCatOpenings;
-      case 'stairs':
-        return t.modCatStairs;
-      case 'roofs':
-        return t.modCatRoofs;
+      case 'pillars':
+        return t.modCatPillars;
+      case 'fences':
+        return t.modCatFences;
       case 'landscape':
         return t.modCatLandscape;
+    }
+  };
+
+  const getAssetCategoryLabel = (cat: 'all' | CustomAssetCategory): string => {
+    switch (cat) {
+      case 'all':
+        return `${t.assetCatAll} (${customAssets.length})`;
+      case 'chair':
+        return t.assetCatChair;
+      case 'table':
+        return t.assetCatTable;
+      case 'lamp':
+        return t.assetCatLamp;
+      case 'cabinet':
+        return t.assetCatCabinet;
+      case 'decor':
+        return t.assetCatDecor;
+      case 'other':
+        return t.assetCatOther;
     }
   };
 
@@ -453,6 +485,25 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
               ))}
             </div>
           )}
+
+          {catalogView === 'custom' && (
+            <div className="basic-shapes-tabs" role="tablist">
+              {ASSET_CATEGORY_ORDER.map((ac) => (
+                <button
+                  key={ac}
+                  type="button"
+                  role="tab"
+                  aria-selected={assetCat === ac}
+                  className={`basic-subcat-tab ${
+                    assetCat === ac ? 'active' : ''
+                  }`}
+                  onClick={() => setAssetCat(ac)}
+                >
+                  {getAssetCategoryLabel(ac)}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Grid Body */}
@@ -535,6 +586,20 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                   onClose();
                 }}
               >
+                {onEditCustomAsset && (
+                  <button
+                    type="button"
+                    className="shape-tile-info-dot edit-asset-dot"
+                    title={t.assetReEditBtn}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onEditCustomAsset(asset);
+                      onClose();
+                    }}
+                  >
+                    <Pencil size={11} />
+                  </button>
+                )}
                 {onDeleteCustomAsset && (
                   <button
                     type="button"
@@ -645,6 +710,7 @@ interface SpawnDockProps {
   onSpawn: (kind: PrimitiveKind) => void;
   onSpawnModularItem?: (item: ModularConstructionItem, label: string) => void;
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
+  onEditCustomAsset?: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
 }
 
@@ -655,6 +721,7 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
   onSpawn,
   onSpawnModularItem,
   onSpawnCustomAsset,
+  onEditCustomAsset,
   onDeleteCustomAsset,
 }) => {
   const t = TRANSLATIONS[language];
@@ -765,6 +832,7 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
         onSpawnShape={handleSpawnShape}
         onSpawnModularItem={onSpawnModularItem}
         onSpawnCustomAsset={onSpawnCustomAsset}
+        onEditCustomAsset={onEditCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
       />
     </>
@@ -784,6 +852,7 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
   onSpawn,
   onSpawnModularItem,
   onSpawnCustomAsset,
+  onEditCustomAsset,
   onDeleteCustomAsset,
   objectCount,
   drawerOpen,
@@ -886,6 +955,7 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
         onSpawnShape={handleSpawnShape}
         onSpawnModularItem={onSpawnModularItem}
         onSpawnCustomAsset={onSpawnCustomAsset}
+        onEditCustomAsset={onEditCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
       />
     </>

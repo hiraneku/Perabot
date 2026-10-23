@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   BrickWall,
+  Check,
   DoorOpen,
   Home,
   Layers2,
@@ -22,6 +23,7 @@ interface ArchStudioBarProps {
   archTool: ArchSubTool;
   onResetToSelectTool: () => void;
   detectedRoomCount: number;
+  onCommitExactWallLength?: (meters: number) => void;
 }
 
 export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
@@ -33,7 +35,10 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
   archTool,
   onResetToSelectTool,
   detectedRoomCount,
+  onCommitExactWallLength,
 }) => {
+  const [exactLenDraft, setExactLenDraft] = useState('3.0');
+
   const phases: Array<{
     id: ArchBuildPhase;
     label: string;
@@ -76,6 +81,13 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
       : archTool === 'measure'
       ? t.archMeasureHint
       : null;
+
+  const submitExactWall = () => {
+    const val = parseFloat(exactLenDraft);
+    if (Number.isFinite(val) && val >= 0.25 && onCommitExactWallLength) {
+      onCommitExactWallLength(val);
+    }
+  };
 
   return (
     <div className="arch-studio-hud" onPointerDown={(e) => e.stopPropagation()}>
@@ -130,6 +142,37 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
         <div className="arch-tool-hint-pill">
           {archTool === 'measure' ? <Ruler size={13} /> : <BrickWall size={13} />}
           <span>{activeHint}</span>
+
+          {archTool === 'draw-wall' && onCommitExactWallLength && (
+            <div className="arch-exact-len-inline">
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.25"
+                min="0.25"
+                max="40"
+                value={exactLenDraft}
+                onChange={(e) => setExactLenDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    submitExactWall();
+                  }
+                }}
+                aria-label={t.archExactLengthPlaceholder}
+              />
+              <span className="arch-exact-unit">m</span>
+              <button
+                type="button"
+                className="arch-exact-commit-btn"
+                onClick={submitExactWall}
+              >
+                <Check size={12} />
+                <span>{t.archApplyLengthBtn}</span>
+              </button>
+            </div>
+          )}
+
           <button
             type="button"
             className="frameless-close-btn"

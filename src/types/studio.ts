@@ -313,6 +313,58 @@ export interface MaterialPreset {
   emissiveIntensity?: number;
 }
 
+export type ProceduralPatternKind =
+  | 'none'
+  | 'wood'
+  | 'tile'
+  | 'brick'
+  | 'concrete'
+  | 'marble'
+  | 'fabric'
+  | 'roof-tile';
+
+export interface ObjectModifierSettings {
+  bevel: number; // 0 .. 0.42 smooth cushion/fillet edge rounding
+  taperX: number; // -0.75 .. +0.75 top vs bottom X taper
+  taperZ: number; // -0.75 .. +0.75 top vs bottom Z taper
+  mirrorX: boolean; // symmetric twin across X
+  mirrorZ: boolean; // symmetric twin across Z
+  mirrorOffset: number; // 0.3 .. 6.0m center-to-center distance
+}
+
+export const DEFAULT_MODIFIER_SETTINGS: ObjectModifierSettings = {
+  bevel: 0,
+  taperX: 0,
+  taperZ: 0,
+  mirrorX: false,
+  mirrorZ: false,
+  mirrorOffset: 1.2,
+};
+
+export function isModifierActive(mod?: ObjectModifierSettings): boolean {
+  if (!mod) return false;
+  return (
+    mod.bevel > 0.005 ||
+    Math.abs(mod.taperX) > 0.005 ||
+    Math.abs(mod.taperZ) > 0.005 ||
+    Boolean(mod.mirrorX) ||
+    Boolean(mod.mirrorZ)
+  );
+}
+
+export type CustomAssetCategory =
+  | 'chair'
+  | 'table'
+  | 'lamp'
+  | 'cabinet'
+  | 'decor'
+  | 'other';
+
+export interface StudioSnapshotOptions {
+  resolution: '1080p' | '2k-square';
+  transparentBg: boolean;
+}
+
 export interface ObjectPointLightConfig {
   enabled: boolean;
   color: string;
@@ -364,6 +416,8 @@ export interface ArchWallSegment {
   curveBulge: number; // 0 = straight, -3..+3m sagitta offset for curved walls
   exteriorColor: string;
   interiorColor: string;
+  exteriorPattern?: ProceduralPatternKind;
+  interiorPattern?: ProceduralPatternKind;
   roughness: number;
   hasBaseboard: boolean;
 }
@@ -379,6 +433,7 @@ export interface ArchOpeningItem {
   sillHeight: number;
   frameColor: string;
   flipSwing?: boolean;
+  isOpen?: boolean; // interactive door swing state in Walkthrough & editor
 }
 
 export interface ArchRoomMeta {
@@ -387,6 +442,7 @@ export interface ArchRoomMeta {
   centroid: Vec2XZ;
   name: string;
   floorColor: string;
+  floorPattern?: ProceduralPatternKind;
   ceilingVisible: boolean;
 }
 
@@ -399,6 +455,7 @@ export interface ArchDetectedRoom {
   areaSqm: number;
   perimeterM: number;
   floorColor: string;
+  floorPattern?: ProceduralPatternKind;
   ceilingVisible: boolean;
 }
 
@@ -430,6 +487,10 @@ export interface ArchRoofItem {
   color: string;
   fasciaColor: string;
   rotationY: number;
+  roofPattern?: ProceduralPatternKind;
+  hasSkylight?: boolean;
+  skylightWidth?: number;
+  skylightDepth?: number;
 }
 
 export interface SunEnvironmentSettings {
@@ -465,6 +526,8 @@ export interface WallDrawDefaults {
   angleSnap: boolean;
   exteriorColor: string;
   interiorColor: string;
+  exteriorPattern?: ProceduralPatternKind;
+  interiorPattern?: ProceduralPatternKind;
   hasBaseboard: boolean;
 }
 
@@ -482,7 +545,10 @@ export interface SceneObjectData {
   emissive: string;
   emissiveIntensity: number;
   flatShading: boolean;
+  proceduralPattern?: ProceduralPatternKind;
+  patternScale?: number;
   subdivision: ObjectSubdivisionSettings;
+  modifiers?: ObjectModifierSettings;
   visible: boolean;
   groupId?: string | null;
   groupName?: string;
@@ -554,7 +620,11 @@ export interface CustomAssetPart {
   emissive: string;
   emissiveIntensity: number;
   flatShading: boolean;
+  proceduralPattern?: ProceduralPatternKind;
+  patternScale?: number;
   subdivision: ObjectSubdivisionSettings;
+  modifiers?: ObjectModifierSettings;
+  pointLight?: ObjectPointLightConfig;
   archRole?: ArchitecturalRole;
   modelAssetId?: string;
   modelFormat?: string;
@@ -565,8 +635,10 @@ export interface CustomAssetPart {
 export interface CustomAssetRecord {
   id: string;
   name: string;
+  category?: CustomAssetCategory;
   thumbnailDataUrl: string;
   createdAt: number;
+  updatedAt?: number;
   parts: CustomAssetPart[];
 }
 

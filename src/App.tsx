@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   ChevronLeft,
   Magnet,
   PaintBucket,
+  Pencil,
   Pipette,
+  Sparkles,
+  X,
 } from 'lucide-react';
 import {
   BoxSelectRect,
@@ -56,6 +60,7 @@ import {
   AxisLockMode,
   BuildingFloorLayer,
   createEmptyArchHouseData,
+  CustomAssetCategory,
   CustomAssetRecord,
   DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
@@ -68,11 +73,13 @@ import {
   GlobalAppSettings,
   GridSettings,
   LightingMood,
+  ObjectModifierSettings,
   ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PlacementValidationStatus,
   PrimitiveKind,
+  ProceduralPatternKind,
   RepeatArrayConfig,
   RotationSnapStep,
   SavedProjectRecord,
@@ -80,6 +87,7 @@ import {
   SelectionSubMode,
   SnapSettings,
   StudioMode,
+  StudioSnapshotOptions,
   STUDIO_THEMES,
   SubdivisionStats,
   SunEnvironmentSettings,
@@ -105,6 +113,7 @@ import { TerrainSculptBar } from './components/TerrainSculptBar';
 import { FloorLayerWidget } from './components/FloorLayerWidget';
 import { ArchStudioBar } from './components/ArchStudioBar';
 import { ArchContextPanel } from './components/ArchContextPanel';
+import { StudioPhotoModal } from './components/StudioPhotoModal';
 import { exportFloorBlueprintPNG } from './engine/blueprintExporter';
 import { AdvancedColorMaterialPatch } from './components/ColorWheelPicker';
 
@@ -139,6 +148,11 @@ function computeProjectContentSignature(
             1
           )}:${o.pointLight.distance.toFixed(1)}`
         : '0';
+      const md = o.modifiers
+        ? `${o.modifiers.bevel.toFixed(2)},${o.modifiers.taperX.toFixed(2)},${o.modifiers.taperZ.toFixed(
+            2
+          )},${o.modifiers.mirrorX ? 1 : 0},${o.modifiers.mirrorZ ? 1 : 0},${o.modifiers.mirrorOffset.toFixed(2)}`
+        : '0';
       return [
         o.id,
         o.kind,
@@ -165,6 +179,9 @@ function computeProjectContentSignature(
         o.emissive ?? '',
         (o.emissiveIntensity ?? 0).toFixed(2),
         o.flatShading ? 1 : 0,
+        o.proceduralPattern || 'none',
+        (o.patternScale ?? 1).toFixed(1),
+        md,
         sub,
         pl,
       ].join(':');
@@ -1299,12 +1316,28 @@ export const App: React.FC = () => {
     []
   );
 
+  const [photoStudioOpen, setPhotoStudioOpen] = useState(false);
+  const [editingCustomAsset, setEditingCustomAsset] =
+    useState<CustomAssetRecord | null>(null);
+  const [saveAssetModal, setSaveAssetModal] = useState<{
+    name: string;
+    category: CustomAssetCategory;
+  } | null>(null);
+
   const handleSaveAsCustomAsset = useCallback(
-    async (customName?: string) => {
+    async (customName?: string, categoryOverride?: CustomAssetCategory) => {
       const engine = engineRef.current;
       if (!engine) return;
       const extracted = engine.extractPartsForCustomAsset();
       if (!extracted) return;
+
+      if (!customName) {
+        setSaveAssetModal({
+          name: editingCustomAsset?.name || extracted.defaultName,
+          category: editingCustomAsset?.category || 'other',
+        });
+        return;
+      }
 
       const finalName = (customName || extracted.defaultName).trim();
       const thumb = renderPartsThumbnailDataUrl(extracted.parts);
@@ -1312,17 +1345,51 @@ export const App: React.FC = () => {
       const record: CustomAssetRecord = {
         id: `asset_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         name: finalName,
+        category: categoryOverride ?? 'other',
         createdAt: Date.now(),
+        updatedAt: Date.now(),
         thumbnailDataUrl: thumb,
         parts: extracted.parts,
       };
 
       await saveCustomAssetRecord(record);
       await refreshLibraries();
+      setSaveAssetModal(null);
       showToast(t.savedToAssetsToast);
     },
-    [refreshLibraries, showToast, t.savedToAssetsToast]
+    [editingCustomAsset, refreshLibraries, showToast, t.savedToAssetsToast]
   );
+
+  const handleEditCustomAsset = useCallback(
+    (asset: CustomAssetRecord) => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      engine.loadCustomAssetPartsForEdit(asset.parts, asset.name);
+      setEditSinglePartMode(true);
+      setEditingCustomAsset(asset);
+      showToast(`${t.assetReEditLoadedToast} (${asset.name})`);
+    },
+    [showToast, t.assetReEditLoadedToast]
+  );
+
+  const handleUpdateExistingCustomAsset = useCallback(async () => {
+    const engine = engineRef.current;
+    if (!engine || !editingCustomAsset) return;
+    const extracted = engine.extractPartsForCustomAsset();
+    if (!extracted) return;
+
+    const thumb = renderPartsThumbnailDataUrl(extracted.parts);
+    const updated: CustomAssetRecord = {
+      ...editingCustomAsset,
+      updatedAt: Date.now(),
+      thumbnailDataUrl: thumb,
+      parts: extracted.parts,
+    };
+    await saveCustomAssetRecord(updated);
+    await refreshLibraries();
+    setEditingCustomAsset(updated);
+    showToast(t.assetUpdatedToast);
+  }, [editingCustomAsset, refreshLibraries, showToast, t.assetUpdatedToast]);
 
   const handleToggleEditSinglePart = useCallback((enabled: boolean) => {
     engineRef.current?.setEditSinglePartMode(enabled);
@@ -1627,7 +1694,9 @@ export const App: React.FC = () => {
   const handleUpdateArchRoomMeta = useCallback(
     (
       roomId: string,
-      patch: Partial<Pick<ArchRoomMeta, 'name' | 'floorColor' | 'ceilingVisible'>>,
+      patch: Partial<
+        Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+      >,
       commit = true
     ) => {
       engineRef.current?.updateArchRoomMeta(roomId, patch, commit);
@@ -1636,14 +1705,41 @@ export const App: React.FC = () => {
   );
 
   const handleApplyAllWallsColor = useCallback(
-    (extColor: string, intColor: string) => {
+    (
+      extColor: string,
+      intColor: string,
+      extPattern?: ProceduralPatternKind,
+      intPattern?: ProceduralPatternKind
+    ) => {
       const count =
-        engineRef.current?.applyFloorWallsDualColor(extColor, intColor) ?? 0;
+        engineRef.current?.applyFloorWallsDualColor(
+          extColor,
+          intColor,
+          extPattern,
+          intPattern
+        ) ?? 0;
       if (count > 0) {
         showToast(`${count} × ${t.archPhaseWalls}`);
       }
     },
     [showToast, t.archPhaseWalls]
+  );
+
+  const handleCommitExactWallLength = useCallback(
+    (meters: number) => {
+      const ok = engineRef.current?.commitWallWithExactLength(meters);
+      if (ok) {
+        showToast(`${meters.toFixed(2)} m`);
+      }
+    },
+    [showToast]
+  );
+
+  const handleAddRoofWing = useCallback(
+    (style: ArchRoofStyle) => {
+      engineRef.current?.addSmartRoofWing(style, t.archPhaseRoofs);
+    },
+    [t.archPhaseRoofs]
   );
 
   const handleDeleteSelectedArch = useCallback(() => {
@@ -1696,7 +1792,12 @@ export const App: React.FC = () => {
   const handleUpdateMaterial = useCallback(
     (
       id: string | null,
-      patch: AdvancedColorMaterialPatch & { name?: string; visible?: boolean },
+      patch: AdvancedColorMaterialPatch & {
+        name?: string;
+        visible?: boolean;
+        proceduralPattern?: ProceduralPatternKind;
+        patternScale?: number;
+      },
       commitHistory = true
     ) => {
       const brushPatch: Partial<PaintBrushPayload> = {};
@@ -1732,6 +1833,31 @@ export const App: React.FC = () => {
       commitHistory = true
     ) => {
       engineRef.current?.updateObjectSubdivision(id, patch, commitHistory);
+    },
+    []
+  );
+
+  const handleUpdateModifiers = useCallback(
+    (
+      id: string,
+      patch: Partial<ObjectModifierSettings>,
+      commitHistory = true
+    ) => {
+      engineRef.current?.updateObjectModifiers(id, patch, commitHistory);
+    },
+    []
+  );
+
+  const handleBakeMirrorTwins = useCallback(() => {
+    const count = engineRef.current?.bakeSelectedMirrorTwins() ?? 0;
+    if (count > 0) {
+      showToast(`+${count}`);
+    }
+  }, [showToast]);
+
+  const handleCaptureStudioPhoto = useCallback(
+    (options: StudioSnapshotOptions) => {
+      return engineRef.current?.captureStudioSnapshot(options) ?? '';
     },
     []
   );
@@ -2036,10 +2162,17 @@ export const App: React.FC = () => {
         isFullscreen={isFullscreen}
         hasSelection={Boolean(selectedId)}
         objectCount={objects.length}
+        hasExportableContent={
+          objects.length > 0 ||
+          archData.walls.length > 0 ||
+          archData.roofs.length > 0 ||
+          archData.stairs.length > 0
+        }
         onGoHome={() => void handleGoHome()}
         onSaveNow={() => void handleSaveProjectManual()}
         onRenameProject={(name) => void handleRenameActiveProject(name)}
         onTriggerImport3D={handleTriggerImport3D}
+        onOpenPhotoStudio={() => setPhotoStudioOpen(true)}
         onCycleLightingMood={handleCycleLightingMood}
         onToggleInteriorPeek={handleToggleInteriorPeek}
         onToggleWalkthrough={handleToggleWalkthrough}
@@ -2171,6 +2304,7 @@ export const App: React.FC = () => {
                 archTool={archTool}
                 onResetToSelectTool={() => handleSetArchTool('select')}
                 detectedRoomCount={detectedRooms.length}
+                onCommitExactWallLength={handleCommitExactWallLength}
               />
 
               {activeArchPhase && (
@@ -2195,6 +2329,7 @@ export const App: React.FC = () => {
                   onAddStair={handleAddArchStair}
                   onUpdateStair={handleUpdateArchStair}
                   onGenerateAutoRoof={handleGenerateAutoRoof}
+                  onAddRoofWing={handleAddRoofWing}
                   onUpdateRoof={handleUpdateArchRoof}
                   onUpdateRoomMeta={handleUpdateArchRoomMeta}
                   onApplyAllWallsColor={handleApplyAllWallsColor}
@@ -2379,6 +2514,34 @@ export const App: React.FC = () => {
             />
           )}
 
+          {/* In-Place Custom Asset Re-Editing Banner */}
+          {!walkthroughActive && editingCustomAsset && (
+            <div className="asset-edit-live-banner">
+              <span className="banner-icon-label">
+                <Pencil size={13} />
+                <span>
+                  {t.assetReEditBtn}: <strong>{editingCustomAsset.name}</strong>
+                </span>
+              </span>
+              <button
+                type="button"
+                className="asset-update-confirm-btn"
+                onClick={() => void handleUpdateExistingCustomAsset()}
+              >
+                <Check size={13} />
+                <span>{t.assetUpdateSavedBtn}</span>
+              </button>
+              <button
+                type="button"
+                className="frameless-close-btn"
+                onClick={() => setEditingCustomAsset(null)}
+                aria-label={t.done}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
+
           {!walkthroughActive && (
             <DesktopSpawnDock
               studioMode={activeProject.mode}
@@ -2387,6 +2550,7 @@ export const App: React.FC = () => {
               onSpawn={handleSpawn}
               onSpawnModularItem={handleSpawnModularItem}
               onSpawnCustomAsset={handleSpawnCustomAsset}
+              onEditCustomAsset={handleEditCustomAsset}
               onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
             />
           )}
@@ -2458,6 +2622,8 @@ export const App: React.FC = () => {
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
+            onUpdateModifiers={handleUpdateModifiers}
+            onBakeMirrorTwins={handleBakeMirrorTwins}
             onSplitSubBlocks={handleSplitSubBlocks}
             onChangePaintMode={handleChangePaintMode}
             onCommitHistory={handleCommitHistory}
@@ -2497,6 +2663,8 @@ export const App: React.FC = () => {
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
+            onUpdateModifiers={handleUpdateModifiers}
+            onBakeMirrorTwins={handleBakeMirrorTwins}
             onSplitSubBlocks={handleSplitSubBlocks}
             onChangePaintMode={handleChangePaintMode}
             onCommitHistory={handleCommitHistory}
@@ -2520,12 +2688,125 @@ export const App: React.FC = () => {
           onSpawn={handleSpawn}
           onSpawnModularItem={handleSpawnModularItem}
           onSpawnCustomAsset={handleSpawnCustomAsset}
+          onEditCustomAsset={handleEditCustomAsset}
           onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
           objectCount={objects.length}
           drawerOpen={mobileDrawerOpen}
           onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}
         />
       )}
+
+      {/* Save Custom Asset with Category Modal */}
+      {saveAssetModal && (
+        <div
+          className="modal-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSaveAssetModal(null);
+          }}
+        >
+          <div className="modal-card save-asset-modal">
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <span className="modal-icon-badge">
+                  <Sparkles size={17} />
+                </span>
+                <div>
+                  <h3>{t.saveToAssets}</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="panel-close-icon"
+                onClick={() => setSaveAssetModal(null)}
+                aria-label={t.done}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="save-asset-form-body">
+              <input
+                type="text"
+                className="name-input"
+                value={saveAssetModal.name}
+                onChange={(e) =>
+                  setSaveAssetModal((prev) =>
+                    prev ? { ...prev, name: e.target.value } : prev
+                  )
+                }
+                placeholder={t.objectNamePlaceholder}
+              />
+
+              <span className="prop-label">{t.assetCategoryLabel}</span>
+              <div className="pattern-chip-grid">
+                {(
+                  [
+                    { id: 'chair', label: t.assetCatChair },
+                    { id: 'table', label: t.assetCatTable },
+                    { id: 'lamp', label: t.assetCatLamp },
+                    { id: 'cabinet', label: t.assetCatCabinet },
+                    { id: 'decor', label: t.assetCatDecor },
+                    { id: 'other', label: t.assetCatOther },
+                  ] as const
+                ).map((cat) => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    className={`pattern-chip-btn ${
+                      saveAssetModal.category === cat.id ? 'active' : ''
+                    }`}
+                    onClick={() =>
+                      setSaveAssetModal((prev) =>
+                        prev ? { ...prev, category: cat.id } : prev
+                      )
+                    }
+                  >
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="modal-actions-row">
+              {editingCustomAsset && (
+                <button
+                  type="button"
+                  className="studio-secondary-action-btn"
+                  onClick={() => {
+                    setSaveAssetModal(null);
+                    void handleUpdateExistingCustomAsset();
+                  }}
+                >
+                  <Check size={15} />
+                  <span>{t.assetUpdateSavedBtn}</span>
+                </button>
+              )}
+              <button
+                type="button"
+                className="studio-primary-action-btn"
+                onClick={() =>
+                  void handleSaveAsCustomAsset(
+                    saveAssetModal.name,
+                    saveAssetModal.category
+                  )
+                }
+              >
+                <Sparkles size={15} />
+                <span>{t.saveToAssets}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <StudioPhotoModal
+        open={photoStudioOpen}
+        projectName={activeProject.name}
+        t={t}
+        onCapture={handleCaptureStudioPhoto}
+        onClose={() => setPhotoStudioOpen(false)}
+        onSavedToast={(msg) => showToast(msg)}
+      />
 
       <GlobalSettingsModal
         open={settingsOpen}

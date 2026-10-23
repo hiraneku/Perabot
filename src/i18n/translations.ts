@@ -487,6 +487,69 @@ export interface StudioStrings {
   pointLightCardDesc: string;
   pointLightIntensity: string;
   pointLightRange: string;
+
+  // Procedural Surface Patterns (True RGB preserved)
+  patternSectionTitle: string;
+  patternNone: string;
+  patternWood: string;
+  patternTile: string;
+  patternBrick: string;
+  patternConcrete: string;
+  patternMarble: string;
+  patternFabric: string;
+  patternRoofTile: string;
+  patternScaleLabel: string;
+
+  // Blender-Style Perabot Modifiers
+  modifierSectionTitle: string;
+  modifierSectionDesc: string;
+  modifierBevelLabel: string;
+  modifierTaperXLabel: string;
+  modifierTaperZLabel: string;
+  modifierMirrorX: string;
+  modifierMirrorZ: string;
+  modifierMirrorDist: string;
+  modifierResetBtn: string;
+  modifierBakeTwinsBtn: string;
+
+  // Custom Asset Categories & Re-Edit
+  assetCatAll: string;
+  assetCatChair: string;
+  assetCatTable: string;
+  assetCatLamp: string;
+  assetCatCabinet: string;
+  assetCatDecor: string;
+  assetCatOther: string;
+  assetCategoryLabel: string;
+  assetReEditBtn: string;
+  assetUpdateSavedBtn: string;
+  assetReEditLoadedToast: string;
+  assetUpdatedToast: string;
+
+  // Exact Length Input, Door Toggle, Multi-Wing Roof & Skylight, Studio Photo
+  archExactLengthPlaceholder: string;
+  archApplyLengthBtn: string;
+  archDoorToggleOpenBtn: string;
+  archDoorStateOpen: string;
+  archDoorStateClosed: string;
+  archWalkDoorHint: string;
+  archRoofAddWingBtn: string;
+  archRoofRotationLabel: string;
+  archRoofSkylightToggle: string;
+  archRoofSkylightSizeLabel: string;
+  archDragNodeHint: string;
+
+  photoStudioBtnTitle: string;
+  photoModalTitle: string;
+  photoModalDesc: string;
+  photoRes1080p: string;
+  photoRes2kSquare: string;
+  photoTransparentBg: string;
+  photoCaptureBtn: string;
+  photoCapturedToast: string;
+
+  modCatPillars: string;
+  modCatFences: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -994,6 +1057,65 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     pointLightCardDesc: 'Nyalakan agar objek lampu rakitanmu memancarkan cahaya hangat ke ruangan sekitar',
     pointLightIntensity: 'Terang Cahaya',
     pointLightRange: 'Jangkauan Meter',
+
+    patternSectionTitle: 'Motif Permukaan (Warna RGB Tetap Asli)',
+    patternNone: 'Polos',
+    patternWood: 'Serat Kayu',
+    patternTile: 'Keramik Nat',
+    patternBrick: 'Bata Ekspos',
+    patternConcrete: 'Beton Halus',
+    patternMarble: 'Marmer',
+    patternFabric: 'Kain Sofa',
+    patternRoofTile: 'Genteng',
+    patternScaleLabel: 'Kerapatan Motif',
+
+    modifierSectionTitle: 'Modifier Bentuk Perabot (Blender)',
+    modifierSectionDesc: 'Haluskan sudut bantal/meja, runcingkan kaki kursi, atau cerminkan simetris otomatis.',
+    modifierBevelLabel: 'Tepi Halus / Bevel',
+    modifierTaperXLabel: 'Runcing Sumbu X (Taper)',
+    modifierTaperZLabel: 'Runcing Sumbu Z (Taper)',
+    modifierMirrorX: 'Cermin Sisi X',
+    modifierMirrorZ: 'Cermin Sisi Z',
+    modifierMirrorDist: 'Jarak Cermin (m)',
+    modifierResetBtn: 'Reset Modifier',
+    modifierBakeTwinsBtn: 'Pisahkan Cermin Jadi Objek Mandiri',
+
+    assetCatAll: 'Semua',
+    assetCatChair: 'Kursi & Sofa',
+    assetCatTable: 'Meja',
+    assetCatLamp: 'Lampu',
+    assetCatCabinet: 'Lemari & Rak',
+    assetCatDecor: 'Dekorasi',
+    assetCatOther: 'Lainnya',
+    assetCategoryLabel: 'Kategori Koleksi',
+    assetReEditBtn: 'Edit Ulang',
+    assetUpdateSavedBtn: 'Perbarui Aset Ini',
+    assetReEditLoadedToast: 'Aset dimuat ke panggung untuk diedit ulang',
+    assetUpdatedToast: 'Koleksi properti berhasil diperbarui',
+
+    archExactLengthPlaceholder: 'Ketik m (mis. 4.5)',
+    archApplyLengthBtn: 'Buat',
+    archDoorToggleOpenBtn: 'Buka / Tutup Daun Pintu',
+    archDoorStateOpen: 'Terbuka',
+    archDoorStateClosed: 'Tertutup',
+    archWalkDoorHint: 'Ketuk pintu di depanmu untuk membuka / menutup',
+    archRoofAddWingBtn: '+ Tambah Sayap Atap (Rumah L / Teras)',
+    archRoofRotationLabel: 'Putar Atap (°)',
+    archRoofSkylightToggle: 'Jendela Atap Kaca (Skylight)',
+    archRoofSkylightSizeLabel: 'Lebar Skylight',
+    archDragNodeHint: 'Seret titik sudut biru di kanvas untuk mengubah bentuk dinding & ruang secara langsung',
+
+    photoStudioBtnTitle: 'Foto Studio HD',
+    photoModalTitle: 'Foto Studio & Render Snapshot',
+    photoModalDesc: 'Potret hasil perabot atau rumahmu dalam resolusi tinggi tanpa garis bantu & gizmo.',
+    photoRes1080p: 'Lanskap HD (1920×1080)',
+    photoRes2kSquare: 'Persegi Katalog 2K (2048×2048)',
+    photoTransparentBg: 'Latar Belakang Transparan (.PNG Alpha)',
+    photoCaptureBtn: 'Ambil & Unduh Foto (.PNG)',
+    photoCapturedToast: 'Foto Studio HD berhasil disimpan',
+
+    modCatPillars: 'Pilar & Kanopi',
+    modCatFences: 'Pagar & Gerbang',
   },
 
   en: {
@@ -1500,6 +1622,65 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     pointLightCardDesc: 'Enable so your custom-built lamp object illuminates nearby walls & rooms',
     pointLightIntensity: 'Light Intensity',
     pointLightRange: 'Light Reach (m)',
+
+    patternSectionTitle: 'Surface Pattern (Keeps True RGB Color)',
+    patternNone: 'Smooth',
+    patternWood: 'Wood Grain',
+    patternTile: 'Ceramic Tile',
+    patternBrick: 'Brickwork',
+    patternConcrete: 'Concrete',
+    patternMarble: 'Marble Vein',
+    patternFabric: 'Woven Fabric',
+    patternRoofTile: 'Roof Tiles',
+    patternScaleLabel: 'Pattern Density',
+
+    modifierSectionTitle: 'Furniture Shape Modifiers (Blender)',
+    modifierSectionDesc: 'Round cushion/table edges, taper legs & lampshades, or mirror parts symmetrically.',
+    modifierBevelLabel: 'Smooth Bevel / Cushion',
+    modifierTaperXLabel: 'Taper X Profile',
+    modifierTaperZLabel: 'Taper Z Profile',
+    modifierMirrorX: 'Mirror X Axis',
+    modifierMirrorZ: 'Mirror Z Axis',
+    modifierMirrorDist: 'Mirror Span (m)',
+    modifierResetBtn: 'Reset Modifiers',
+    modifierBakeTwinsBtn: 'Separate Mirrored Copies as Objects',
+
+    assetCatAll: 'All',
+    assetCatChair: 'Seating',
+    assetCatTable: 'Tables',
+    assetCatLamp: 'Lighting',
+    assetCatCabinet: 'Storage',
+    assetCatDecor: 'Decor',
+    assetCatOther: 'Other',
+    assetCategoryLabel: 'Asset Category',
+    assetReEditBtn: 'Re-Edit',
+    assetUpdateSavedBtn: 'Update Existing Asset',
+    assetReEditLoadedToast: 'Asset placed on stage for re-editing',
+    assetUpdatedToast: 'Saved custom asset updated',
+
+    archExactLengthPlaceholder: 'Type m (e.g. 4.5)',
+    archApplyLengthBtn: 'Place',
+    archDoorToggleOpenBtn: 'Open / Close Door Leaf',
+    archDoorStateOpen: 'Open',
+    archDoorStateClosed: 'Closed',
+    archWalkDoorHint: 'Tap any door ahead to swing it open or closed',
+    archRoofAddWingBtn: '+ Add Roof Wing (L-Plan / Porch)',
+    archRoofRotationLabel: 'Roof Rotation (°)',
+    archRoofSkylightToggle: 'Glass Roof Skylight',
+    archRoofSkylightSizeLabel: 'Skylight Span',
+    archDragNodeHint: 'Drag blue corner nodes in the viewport to reshape connected walls & rooms live',
+
+    photoStudioBtnTitle: 'HD Studio Photo',
+    photoModalTitle: 'Studio Photo & Render Snapshot',
+    photoModalDesc: 'Capture crisp high-resolution renders of your furniture or house with all helpers hidden.',
+    photoRes1080p: 'HD Landscape (1920×1080)',
+    photoRes2kSquare: '2K Catalog Square (2048×2048)',
+    photoTransparentBg: 'Transparent Background (.PNG Alpha)',
+    photoCaptureBtn: 'Capture & Download (.PNG)',
+    photoCapturedToast: 'HD Studio Photo downloaded',
+
+    modCatPillars: 'Pillars & Pergola',
+    modCatFences: 'Fences & Gates',
   },
 
   ja: {
@@ -1997,6 +2178,65 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     pointLightCardDesc: 'ONにすると自作の照明オブジェクトから周囲の部屋へ光が灯ります',
     pointLightIntensity: '光の強さ',
     pointLightRange: '光の届く距離(m)',
+
+    patternSectionTitle: '表面テクスチャ模様（RGBカラーはそのまま維持）',
+    patternNone: 'フラット無地',
+    patternWood: '木目・ウッド',
+    patternTile: 'タイル目地',
+    patternBrick: 'レンガ積み',
+    patternConcrete: 'コンクリート',
+    patternMarble: '大理石マーブル',
+    patternFabric: 'ファブリック布地',
+    patternRoofTile: '瓦・ルーフタイル',
+    patternScaleLabel: '模様の細かさ',
+
+    modifierSectionTitle: '家具シェイプ・モディファイア (Blender式)',
+    modifierSectionDesc: '角の丸め(ベベル)、脚やシェードのテーパー加工、左右対称ミラーを自在に適用。',
+    modifierBevelLabel: '角の丸み / ベベル',
+    modifierTaperXLabel: 'X軸テーパー（先細り）',
+    modifierTaperZLabel: 'Z軸テーパー（先細り）',
+    modifierMirrorX: 'X軸ミラー対称',
+    modifierMirrorZ: 'Z軸ミラー対称',
+    modifierMirrorDist: 'ミラー間隔 (m)',
+    modifierResetBtn: 'モディファイア解除',
+    modifierBakeTwinsBtn: 'ミラー複製を独立オブジェクト化',
+
+    assetCatAll: 'すべて',
+    assetCatChair: 'チェア・ソファ',
+    assetCatTable: 'テーブル',
+    assetCatLamp: '照明ライト',
+    assetCatCabinet: '収納・棚',
+    assetCatDecor: 'デコレーション',
+    assetCatOther: 'その他',
+    assetCategoryLabel: '保存カテゴリ',
+    assetReEditBtn: '再編集',
+    assetUpdateSavedBtn: 'このアセットを上書き更新',
+    assetReEditLoadedToast: '再編集用にステージへ配置しました',
+    assetUpdatedToast: 'マイアセットを更新しました',
+
+    archExactLengthPlaceholder: '数値m (例: 4.5)',
+    archApplyLengthBtn: '確定',
+    archDoorToggleOpenBtn: 'ドアの開閉切替',
+    archDoorStateOpen: '開いている',
+    archDoorStateClosed: '閉じている',
+    archWalkDoorHint: '目の前のドアをタップすると開閉できます',
+    archRoofAddWingBtn: '+ 屋根ウィング追加（L字間取り・ポーチ用）',
+    archRoofRotationLabel: '屋根の回転角 (°)',
+    archRoofSkylightToggle: 'ガラス天窓 (スカイライト)',
+    archRoofSkylightSizeLabel: '天窓サイズ',
+    archDragNodeHint: '青い角ノードをドラッグすると接続された壁と部屋面積がリアルタイム変形します',
+
+    photoStudioBtnTitle: 'HDスタジオ撮影',
+    photoModalTitle: 'スタジオ撮影＆高画質スナップショット',
+    photoModalDesc: 'グリッドやギズモを自動非表示にして、家具や建築を高解像度PNGで書き出します。',
+    photoRes1080p: 'HDワイド (1920×1080)',
+    photoRes2kSquare: '2Kカタログ正方形 (2048×2048)',
+    photoTransparentBg: '背景透過 (.PNG アルファ)',
+    photoCaptureBtn: '撮影して保存 (.PNG)',
+    photoCapturedToast: 'HDスタジオ写真を保存しました',
+
+    modCatPillars: '柱・パーゴラ',
+    modCatFences: 'フェンス・門扉',
   },
 };
 

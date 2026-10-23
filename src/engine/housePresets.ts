@@ -1,10 +1,15 @@
 import * as THREE from 'three';
-import { CustomAssetPart, PrimitiveKind } from '../types/studio';
+import { CustomAssetPart, isModifierActive } from '../types/studio';
 import { createPrimitiveGeometry } from './primitives';
+import {
+  applyGeometryDeformModifiers,
+  syncMeshMirrorTwins,
+} from './ModifierEngine';
+import { applyProceduralPatternToMaterial } from './proceduralTextures';
 
 /**
  * Renders a crisp 240x240 PNG thumbnail for user-created Custom Assets ("Koleksi Properti Saya")
- * with exact bounding-sphere framing so no corners are ever clipped.
+ * with exact bounding-sphere framing, procedural surface patterns, emissive lamp glow & Blender modifiers!
  */
 export function renderPartsThumbnailDataUrl(parts: CustomAssetPart[]): string {
   if (parts.length === 0) return '';
@@ -35,24 +40,31 @@ export function renderPartsThumbnailDataUrl(parts: CustomAssetPart[]): string {
     scene.add(rim);
 
     const group = new THREE.Group();
-    const geoCache = new Map<PrimitiveKind, THREE.BufferGeometry>();
+    const geos: THREE.BufferGeometry[] = [];
     const mats: THREE.Material[] = [];
     const DEG = Math.PI / 180;
 
     for (const p of parts) {
       if (p.modelAssetId) continue;
-      let geo = geoCache.get(p.kind);
-      if (!geo) {
-        geo = createPrimitiveGeometry(p.kind);
-        geoCache.set(p.kind, geo);
+      let geo = createPrimitiveGeometry(p.kind);
+      if (isModifierActive(p.modifiers)) {
+        geo = applyGeometryDeformModifiers(geo, p.modifiers);
       }
+      geos.push(geo);
+
       const mat = new THREE.MeshStandardMaterial({
         color: new THREE.Color(p.color),
         roughness: p.roughness,
         metalness: p.metalness,
         transparent: p.opacity < 0.99,
         opacity: p.opacity,
+        emissive: new THREE.Color(p.emissive || '#000000'),
+        emissiveIntensity: p.emissiveIntensity || 0,
       });
+      if (p.proceduralPattern && p.proceduralPattern !== 'none') {
+        const rep = p.patternScale ?? 1;
+        applyProceduralPatternToMaterial(mat, p.proceduralPattern, rep, rep);
+      }
       mats.push(mat);
 
       const m = new THREE.Mesh(geo, mat);
@@ -63,6 +75,9 @@ export function renderPartsThumbnailDataUrl(parts: CustomAssetPart[]): string {
         p.rotation.z * DEG
       );
       m.scale.set(p.scale.x, p.scale.y, p.scale.z);
+      if (p.modifiers?.mirrorX || p.modifiers?.mirrorZ) {
+        syncMeshMirrorTwins(m, p.modifiers, mat);
+      }
       group.add(m);
     }
 
@@ -94,7 +109,7 @@ export function renderPartsThumbnailDataUrl(parts: CustomAssetPart[]): string {
     renderer.render(scene, camera);
     const dataUrl = renderer.domElement.toDataURL('image/png');
 
-    for (const g of geoCache.values()) g.dispose();
+    for (const g of geos) g.dispose();
     for (const m of mats) m.dispose();
     renderer.dispose();
     renderer.forceContextLoss();

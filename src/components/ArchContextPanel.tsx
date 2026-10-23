@@ -35,6 +35,7 @@ import {
   ArchWallSegment,
   ArchWallStyle,
   BuildingFloorLayer,
+  ProceduralPatternKind,
   SunEnvironmentSettings,
   WallDrawDefaults,
 } from '../types/studio';
@@ -61,13 +62,21 @@ interface ArchContextPanelProps {
   onAddStair: (kind: ArchStairKind) => void;
   onUpdateStair: (id: string, patch: Partial<ArchStairItem>, commit?: boolean) => void;
   onGenerateAutoRoof: (style: ArchRoofStyle) => void;
+  onAddRoofWing?: (style: ArchRoofStyle) => void;
   onUpdateRoof: (id: string, patch: Partial<ArchRoofItem>, commit?: boolean) => void;
   onUpdateRoomMeta: (
     roomId: string,
-    patch: Partial<Pick<ArchRoomMeta, 'name' | 'floorColor' | 'ceilingVisible'>>,
+    patch: Partial<
+      Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+    >,
     commit?: boolean
   ) => void;
-  onApplyAllWallsColor: (extColor: string, intColor: string) => void;
+  onApplyAllWallsColor: (
+    extColor: string,
+    intColor: string,
+    extPattern?: ProceduralPatternKind,
+    intPattern?: ProceduralPatternKind
+  ) => void;
   onDeleteSelectedArch: () => void;
   onChangeSun: (patch: Partial<SunEnvironmentSettings>, commit?: boolean) => void;
   cameraLensFov: number;
@@ -140,6 +149,7 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
   onAddStair,
   onUpdateStair,
   onGenerateAutoRoof,
+  onAddRoofWing,
   onUpdateRoof,
   onUpdateRoomMeta,
   onApplyAllWallsColor,
@@ -641,20 +651,45 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                 )}
 
                 {selectedOpening.kind.startsWith('door') && (
-                  <button
-                    type="button"
-                    className="arch-secondary-cta"
-                    onClick={() =>
-                      onUpdateOpening(
-                        selectedOpening.id,
-                        { flipSwing: !selectedOpening.flipSwing },
-                        true
-                      )
-                    }
-                  >
-                    <ArrowLeftRight size={14} />
-                    <span>{t.archOpenFlipSwing}</span>
-                  </button>
+                  <div className="arch-segmented-row">
+                    <button
+                      type="button"
+                      className={`arch-seg-btn ${
+                        selectedOpening.isOpen !== false ? 'active' : ''
+                      }`}
+                      onClick={() =>
+                        onUpdateOpening(
+                          selectedOpening.id,
+                          {
+                            isOpen:
+                              selectedOpening.isOpen === false ? true : false,
+                          },
+                          true
+                        )
+                      }
+                    >
+                      <DoorOpen size={14} />
+                      <span>
+                        {selectedOpening.isOpen !== false
+                          ? t.archDoorStateOpen
+                          : t.archDoorStateClosed}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="arch-seg-btn"
+                      onClick={() =>
+                        onUpdateOpening(
+                          selectedOpening.id,
+                          { flipSwing: !selectedOpening.flipSwing },
+                          true
+                        )
+                      }
+                    >
+                      <ArrowLeftRight size={14} />
+                      <span>{t.archOpenFlipSwing}</span>
+                    </button>
+                  </div>
                 )}
               </div>
             )}
@@ -820,6 +855,17 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
               <span>{t.archRoofAutoBtn}</span>
             </button>
 
+            {onAddRoofWing && (
+              <button
+                type="button"
+                className="arch-secondary-cta"
+                onClick={() => onAddRoofWing(roofStyleDraft)}
+              >
+                <Plus size={14} />
+                <span>{t.archRoofAddWingBtn}</span>
+              </button>
+            )}
+
             {selectedRoof && (
               <div className="arch-selected-card">
                 <div className="arch-selected-head">
@@ -979,6 +1025,109 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                     }
                   />
                 </div>
+
+                {/* Roof Surface Pattern */}
+                <div className="pattern-chip-grid" style={{ marginTop: 6 }}>
+                  {(
+                    [
+                      { id: 'roof-tile', label: t.patternRoofTile },
+                      { id: 'concrete', label: t.patternConcrete },
+                      { id: 'wood', label: t.patternWood },
+                      { id: 'none', label: t.patternNone },
+                    ] as const
+                  ).map((rp) => {
+                    const activePat =
+                      (selectedRoof.roofPattern ??
+                        (selectedRoof.style === 'flat'
+                          ? 'concrete'
+                          : 'roof-tile')) === rp.id;
+                    return (
+                      <button
+                        key={rp.id}
+                        type="button"
+                        className={`pattern-chip-btn ${activePat ? 'active' : ''}`}
+                        onClick={() =>
+                          onUpdateRoof(
+                            selectedRoof.id,
+                            { roofPattern: rp.id },
+                            true
+                          )
+                        }
+                      >
+                        {rp.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Architectural Daylight Glass Skylight */}
+                <label className="arch-check-row" style={{ marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(selectedRoof.hasSkylight)}
+                    onChange={(e) =>
+                      onUpdateRoof(
+                        selectedRoof.id,
+                        { hasSkylight: e.target.checked },
+                        true
+                      )
+                    }
+                  />
+                  <span>{t.archRoofSkylightToggle}</span>
+                </label>
+
+                {selectedRoof.hasSkylight && (
+                  <>
+                    <div className="arch-slider-group">
+                      <div className="arch-slider-head">
+                        <span>{t.archRoofSkylightSizeLabel} (X)</span>
+                        <strong>
+                          {(selectedRoof.skylightWidth ?? 1.8).toFixed(2)} m
+                        </strong>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.8}
+                        max={5.0}
+                        step={0.1}
+                        value={selectedRoof.skylightWidth ?? 1.8}
+                        onChange={(e) =>
+                          onUpdateRoof(
+                            selectedRoof.id,
+                            { skylightWidth: parseFloat(e.target.value) },
+                            false
+                          )
+                        }
+                        onMouseUp={() => onUpdateRoof(selectedRoof.id, {}, true)}
+                        onTouchEnd={() => onUpdateRoof(selectedRoof.id, {}, true)}
+                      />
+                    </div>
+                    <div className="arch-slider-group">
+                      <div className="arch-slider-head">
+                        <span>{t.archRoofSkylightSizeLabel} (Z)</span>
+                        <strong>
+                          {(selectedRoof.skylightDepth ?? 1.4).toFixed(2)} m
+                        </strong>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.8}
+                        max={5.0}
+                        step={0.1}
+                        value={selectedRoof.skylightDepth ?? 1.4}
+                        onChange={(e) =>
+                          onUpdateRoof(
+                            selectedRoof.id,
+                            { skylightDepth: parseFloat(e.target.value) },
+                            false
+                          )
+                        }
+                        onMouseUp={() => onUpdateRoof(selectedRoof.id, {}, true)}
+                        onTouchEnd={() => onUpdateRoof(selectedRoof.id, {}, true)}
+                      />
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </>
@@ -1079,6 +1228,42 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                             }
                           />
                         </div>
+                        <div
+                          className="pattern-chip-grid"
+                          style={{ marginTop: 6 }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {(
+                            [
+                              { id: 'wood', label: t.patternWood },
+                              { id: 'tile', label: t.patternTile },
+                              { id: 'marble', label: t.patternMarble },
+                              { id: 'concrete', label: t.patternConcrete },
+                              { id: 'none', label: t.patternNone },
+                            ] as const
+                          ).map((fp) => {
+                            const isPat =
+                              (room.floorPattern ?? 'wood') === fp.id;
+                            return (
+                              <button
+                                key={fp.id}
+                                type="button"
+                                className={`pattern-chip-btn ${
+                                  isPat ? 'active' : ''
+                                }`}
+                                onClick={() =>
+                                  onUpdateRoomMeta(
+                                    room.id,
+                                    { floorPattern: fp.id },
+                                    true
+                                  )
+                                }
+                              >
+                                {fp.label}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
 
                       <label
@@ -1161,9 +1346,44 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                   }}
                 />
               </div>
+              <div className="pattern-chip-grid" style={{ marginTop: 6 }}>
+                {(
+                  [
+                    { id: 'none', label: t.patternNone },
+                    { id: 'brick', label: t.patternBrick },
+                    { id: 'concrete', label: t.patternConcrete },
+                    { id: 'wood', label: t.patternWood },
+                    { id: 'marble', label: t.patternMarble },
+                  ] as const
+                ).map((wp) => {
+                  const cur =
+                    (selectedWall
+                      ? selectedWall.exteriorPattern
+                      : wallDefaults.exteriorPattern) ?? 'none';
+                  return (
+                    <button
+                      key={wp.id}
+                      type="button"
+                      className={`pattern-chip-btn ${cur === wp.id ? 'active' : ''}`}
+                      onClick={() => {
+                        onChangeWallDefaults({ exteriorPattern: wp.id });
+                        if (selectedWall) {
+                          onUpdateWall(
+                            selectedWall.id,
+                            { exteriorPattern: wp.id },
+                            true
+                          );
+                        }
+                      }}
+                    >
+                      {wp.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            {/* Interior Side Color */}
+            {/* Interior Side Color & Pattern */}
             <div className="arch-dual-paint-block">
               <div className="arch-slider-head">
                 <span>{t.archWallIntColor}</span>
@@ -1217,6 +1437,41 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                   }}
                 />
               </div>
+              <div className="pattern-chip-grid" style={{ marginTop: 6 }}>
+                {(
+                  [
+                    { id: 'none', label: t.patternNone },
+                    { id: 'wood', label: t.patternWood },
+                    { id: 'tile', label: t.patternTile },
+                    { id: 'brick', label: t.patternBrick },
+                    { id: 'marble', label: t.patternMarble },
+                  ] as const
+                ).map((wp) => {
+                  const cur =
+                    (selectedWall
+                      ? selectedWall.interiorPattern
+                      : wallDefaults.interiorPattern) ?? 'none';
+                  return (
+                    <button
+                      key={wp.id}
+                      type="button"
+                      className={`pattern-chip-btn ${cur === wp.id ? 'active' : ''}`}
+                      onClick={() => {
+                        onChangeWallDefaults({ interiorPattern: wp.id });
+                        if (selectedWall) {
+                          onUpdateWall(
+                            selectedWall.id,
+                            { interiorPattern: wp.id },
+                            true
+                          );
+                        }
+                      }}
+                    >
+                      {wp.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <button
@@ -1225,7 +1480,9 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
               onClick={() =>
                 onApplyAllWallsColor(
                   wallDefaults.exteriorColor,
-                  wallDefaults.interiorColor
+                  wallDefaults.interiorColor,
+                  wallDefaults.exteriorPattern,
+                  wallDefaults.interiorPattern
                 )
               }
             >

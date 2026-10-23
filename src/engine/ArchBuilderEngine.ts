@@ -16,9 +16,11 @@ import {
   DEFAULT_SUBDIVISION_SETTINGS,
   DEFAULT_WALL_DRAW,
   FloorViewMode,
+  ProceduralPatternKind,
   Vec2XZ,
   WallDrawDefaults,
 } from '../types/studio';
+import { applyProceduralPatternToMaterial } from './proceduralTextures';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -464,6 +466,7 @@ function detectClosedRoomsOnFloor(
       areaSqm: Math.round(area * 100) / 100,
       perimeterM: Math.round(perimeter * 100) / 100,
       floorColor: matched?.floorColor ?? '#d6c7b2',
+      floorPattern: matched?.floorPattern ?? 'wood',
       ceilingVisible: matched?.ceilingVisible !== false,
     });
   });
@@ -499,11 +502,71 @@ function buildParametricRoofGroup(
     emissive: isSelected ? new THREE.Color('#2563eb') : new THREE.Color('#000000'),
     emissiveIntensity: isSelected ? 0.22 : 0,
   });
+  const effRoofPat =
+    roof.roofPattern ?? (roof.style === 'flat' ? 'concrete' : 'roof-tile');
+  applyProceduralPatternToMaterial(
+    roofMat,
+    effRoofPat,
+    Math.max(1.5, roof.width * 0.65),
+    Math.max(1.5, roof.depth * 0.65)
+  );
+
   const fasciaMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(roof.fasciaColor || '#e2e8f0'),
     roughness: 0.76,
     metalness: 0.05,
   });
+
+  const appendSkylightFrame = (skyY: number, tiltXRad = 0) => {
+    if (!roof.hasSkylight) return;
+    const sw = Math.min(hx * 1.35, Math.max(0.8, roof.skylightWidth ?? 1.8));
+    const sd = Math.min(hz * 1.35, Math.max(0.8, roof.skylightDepth ?? 1.4));
+    const skyHolder = new THREE.Group();
+    skyHolder.position.set(0, skyY, tiltXRad !== 0 ? hz * 0.34 : 0);
+    skyHolder.rotation.x = tiltXRad;
+
+    const frameM = new THREE.MeshStandardMaterial({
+      color: '#1e293b',
+      metalness: 0.72,
+      roughness: 0.28,
+    });
+    const skyGlassM = new THREE.MeshStandardMaterial({
+      color: '#bae6fd',
+      roughness: 0.06,
+      metalness: 0.18,
+      transparent: true,
+      opacity: 0.36,
+      depthWrite: false,
+    });
+
+    const fThick = 0.07;
+    const fH = 0.14;
+    const bN = new THREE.Mesh(new THREE.BoxGeometry(sw, fH, fThick), frameM);
+    bN.position.set(0, fH * 0.5, -sd * 0.5);
+    const bS = bN.clone();
+    bS.position.z = sd * 0.5;
+    const bW = new THREE.Mesh(new THREE.BoxGeometry(fThick, fH, sd), frameM);
+    bW.position.set(-sw * 0.5, fH * 0.5, 0);
+    const bE = bW.clone();
+    bE.position.x = sw * 0.5;
+    const midBar = new THREE.Mesh(
+      new THREE.BoxGeometry(0.045, fH * 0.85, sd),
+      frameM
+    );
+    midBar.position.set(0, fH * 0.5, 0);
+
+    const glass = new THREE.Mesh(
+      new THREE.BoxGeometry(sw - fThick, 0.025, sd - fThick),
+      skyGlassM
+    );
+    glass.position.set(0, fH * 0.72, 0);
+
+    [bN, bS, bW, bE, midBar, glass].forEach((m) => {
+      m.userData = { archKind: 'roof', archId: roof.id };
+      skyHolder.add(m);
+    });
+    grp.add(skyHolder);
+  };
 
   const pushTri = (
     positions: number[],
@@ -560,6 +623,7 @@ function buildParametricRoofGroup(
       m.userData = { archKind: 'roof', archId: roof.id };
       grp.add(m);
     });
+    appendSkylightFrame(slabH + 0.02, 0);
     return grp;
   }
 
@@ -671,6 +735,11 @@ function buildParametricRoofGroup(
   fasciaRim.userData = { archKind: 'roof', archId: roof.id };
   grp.add(fasciaRim);
 
+  if (roof.hasSkylight) {
+    const slopeTilt = Math.atan2(rise, hz);
+    appendSkylightFrame(rise * 0.62, slopeTilt);
+  }
+
   return grp;
 }
 
@@ -747,17 +816,19 @@ function buildOpeningAssembly(
 
   const innerW = Math.max(0.2, w - frameT * 2);
   const innerH = Math.max(0.2, h - frameT);
+  const isDoorOpen = op.isOpen !== false;
 
   if (op.kind === 'door-single') {
-    // Slightly ajar architectural door leaf (18 deg) so rooms feel inviting & passable!
+    // Interactive door leaf: swings open 76 deg when isOpen !== false, or 0 deg flush when closed!
     const pivot = new THREE.Group();
     const dir = op.flipSwing ? -1 : 1;
     pivot.position.set((-innerW * 0.5) * dir, 0, 0);
-    pivot.rotation.y = dir * 22 * DEG2RAD;
+    pivot.rotation.y = dir * (isDoorOpen ? 76 : 0) * DEG2RAD;
     const leaf = new THREE.Mesh(
       new THREE.BoxGeometry(innerW, innerH - 0.02, 0.045),
       woodLeafMat
     );
+    applyProceduralPatternToMaterial(woodLeafMat, 'wood', 1.2, 2.2);
     leaf.position.set((innerW * 0.5) * dir, (innerH - 0.02) * 0.5, 0);
     leaf.castShadow = true;
     leaf.userData = { archKind: 'opening', archId: op.id, wallId: op.wallId };
@@ -772,11 +843,13 @@ function buildOpeningAssembly(
     pivot.add(handle);
     grp.add(pivot);
   } else if (op.kind === 'door-double') {
+    applyProceduralPatternToMaterial(woodLeafMat, 'wood', 1.2, 2.2);
     const halfLeafW = innerW * 0.5 - 0.008;
+    const openDeg = isDoorOpen ? 72 : 0;
     for (const side of [-1, 1] as const) {
       const pivot = new THREE.Group();
       pivot.position.set(side * (innerW * 0.5), 0, 0);
-      pivot.rotation.y = -side * (op.flipSwing ? -16 : 16) * DEG2RAD;
+      pivot.rotation.y = -side * (op.flipSwing ? -openDeg : openDeg) * DEG2RAD;
       const leaf = new THREE.Mesh(
         new THREE.BoxGeometry(halfLeafW, innerH - 0.02, 0.045),
         woodLeafMat
@@ -957,6 +1030,7 @@ export class ArchBuilderEngine {
   private readonly previewGroup = new THREE.Group();
   private readonly measureGroup = new THREE.Group();
   private readonly labelsGroup = new THREE.Group();
+  public readonly handlesGroup = new THREE.Group();
 
   private data: ArchHouseData;
   private detectedRooms: ArchDetectedRoom[] = [];
@@ -967,8 +1041,10 @@ export class ArchBuilderEngine {
   constructor(initialData: ArchHouseData) {
     this.structuralGroup.name = 'PerabotArchitecturalStructure';
     this.overlayGroup.name = '__archStudioOverlays';
+    this.handlesGroup.name = '__archCornerHandles';
     this.data = initialData;
     this.overlayGroup.add(this.labelsGroup);
+    this.overlayGroup.add(this.handlesGroup);
     this.overlayGroup.add(this.previewGroup);
     this.overlayGroup.add(this.measureGroup);
   }
@@ -1221,6 +1297,8 @@ export class ArchBuilderEngine {
       curveBulge: defaults.curveBulge,
       exteriorColor: defaults.exteriorColor,
       interiorColor: defaults.interiorColor,
+      exteriorPattern: defaults.exteriorPattern,
+      interiorPattern: defaults.interiorPattern,
       roughness: 0.78,
       hasBaseboard: defaults.hasBaseboard,
     };
@@ -1253,17 +1331,124 @@ export class ArchBuilderEngine {
   public applyWallColorsOnFloor(
     floorId: string,
     exteriorColor: string,
-    interiorColor: string
+    interiorColor: string,
+    exteriorPattern?: ProceduralPatternKind,
+    interiorPattern?: ProceduralPatternKind
   ): number {
     let count = 0;
     for (const w of this.data.walls) {
       if (w.floorId === floorId) {
         w.exteriorColor = exteriorColor;
         w.interiorColor = interiorColor;
+        if (exteriorPattern !== undefined) w.exteriorPattern = exteriorPattern;
+        if (interiorPattern !== undefined) w.interiorPattern = interiorPattern;
         count++;
       }
     }
     return count;
+  }
+
+  /**
+   * Moves ALL wall endpoints connected to `oldXZ` on `floorId` simultaneously (Direct Viewport Node Drag!)
+   */
+  public moveConnectedWallVertex(
+    floorId: string,
+    oldXZ: Vec2XZ,
+    newXZ: Vec2XZ
+  ): number {
+    const EPS = 0.08;
+    let moved = 0;
+    for (const w of this.data.walls) {
+      if (w.floorId !== floorId) continue;
+      if (Math.hypot(w.start.x - oldXZ.x, w.start.z - oldXZ.z) <= EPS) {
+        w.start = { x: round3(newXZ.x), z: round3(newXZ.z) };
+        moved++;
+      } else if (Math.hypot(w.end.x - oldXZ.x, w.end.z - oldXZ.z) <= EPS) {
+        w.end = { x: round3(newXZ.x), z: round3(newXZ.z) };
+        moved++;
+      }
+    }
+    return moved;
+  }
+
+  /**
+   * Commits a wall segment of an exact typed meter length from `start` toward `aimPoint` (or +X)
+   */
+  public commitWallByExactLength(
+    floorId: string,
+    start: Vec2XZ,
+    aimPoint: Vec2XZ | null,
+    exactLengthM: number,
+    defaults: WallDrawDefaults = DEFAULT_WALL_DRAW
+  ): { wall: ArchWallSegment; endPoint: Vec2XZ } | null {
+    const cleanLen = Math.max(0.25, Math.min(40, exactLengthM));
+    let dx = aimPoint ? aimPoint.x - start.x : 1;
+    let dz = aimPoint ? aimPoint.z - start.z : 0;
+    if (Math.hypot(dx, dz) < 0.04) {
+      dx = 1;
+      dz = 0;
+    }
+    let ang = Math.atan2(dz, dx);
+    if (defaults.angleSnap) {
+      const step = Math.PI / 4;
+      ang = Math.round(ang / step) * step;
+    }
+    const endPoint: Vec2XZ = {
+      x: round3(start.x + Math.cos(ang) * cleanLen),
+      z: round3(start.z + Math.sin(ang) * cleanLen),
+    };
+    const wall = this.addWallSegment(floorId, start, endPoint, defaults);
+    return wall ? { wall, endPoint } : null;
+  }
+
+  /**
+   * Slides an existing Door / Window / Archway smoothly along its host wall during viewport drag
+   */
+  public slideOpeningToWorldXZ(openingId: string, pointXZ: Vec2XZ): boolean {
+    const op = this.data.openings.find((o) => o.id === openingId);
+    if (!op) return false;
+    const wall = this.data.walls.find((w) => w.id === op.wallId);
+    if (!wall) return false;
+
+    const totalLen = Math.max(0.4, computeWallLength(wall));
+    const minRatio = Math.min(0.45, (op.width * 0.5 + 0.08) / totalLen);
+    const maxRatio = Math.max(0.55, 1 - minRatio);
+
+    const samples = Math.abs(wall.curveBulge) >= 0.04 ? 24 : 1;
+    let bestT = op.offsetRatio;
+    let bestDist = Infinity;
+
+    for (let s = 0; s < samples; s++) {
+      const t0 = s / samples;
+      const t1 = (s + 1) / samples;
+      const p0 = sampleWallCurvePoint(wall, t0);
+      const p1 = sampleWallCurvePoint(wall, t1);
+      const dx = p1.x - p0.x;
+      const dz = p1.z - p0.z;
+      const segSq = dx * dx + dz * dz;
+      if (segSq < 1e-6) continue;
+      const lt = Math.max(
+        0,
+        Math.min(1, ((pointXZ.x - p0.x) * dx + (pointXZ.z - p0.z) * dz) / segSq)
+      );
+      const px = p0.x + dx * lt;
+      const pz = p0.z + dz * lt;
+      const d = Math.hypot(pointXZ.x - px, pointXZ.z - pz);
+      if (d < bestDist) {
+        bestDist = d;
+        bestT = t0 + (t1 - t0) * lt;
+      }
+    }
+
+    op.offsetRatio = round3(Math.max(minRatio, Math.min(maxRatio, bestT)));
+    return true;
+  }
+
+  public toggleDoorOpen(openingId: string): boolean | null {
+    const op = this.data.openings.find((o) => o.id === openingId);
+    if (!op || (!op.kind.startsWith('door'))) return null;
+    op.isOpen = op.isOpen === false ? true : false;
+    return op.isOpen;
   }
 
   public addOpeningOnWall(
@@ -1309,7 +1494,9 @@ export class ArchBuilderEngine {
 
   public updateRoomMeta(
     roomId: string,
-    patch: Partial<Pick<ArchRoomMeta, 'name' | 'floorColor' | 'ceilingVisible'>>
+    patch: Partial<
+      Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+    >
   ): boolean {
     const detected = this.detectedRooms.find((r) => r.id === roomId);
     if (!detected) return false;
@@ -1322,6 +1509,7 @@ export class ArchBuilderEngine {
         centroid: { ...detected.centroid },
         name: detected.name,
         floorColor: detected.floorColor,
+        floorPattern: detected.floorPattern ?? 'wood',
         ceilingVisible: detected.ceilingVisible,
       };
       this.data.roomMetas.push(meta);
@@ -1432,6 +1620,43 @@ export class ArchBuilderEngine {
       color: '#b85d3b',
       fasciaColor: '#e2e8f0',
       rotationY: 0,
+    };
+    this.data.roofs.push(roof);
+    this.selection = { kind: 'roof', id: roof.id };
+    return roof;
+  }
+
+  public addCustomRoofWing(
+    floors: BuildingFloorLayer[],
+    activeFloorId: string,
+    style: ArchRoofStyle = 'gable',
+    roofName = 'Sayap Atap'
+  ): ArchRoofItem {
+    const activeFl =
+      floors.find((f) => f.id === activeFloorId) ?? floors[0];
+    const existingCount = this.data.roofs.length;
+    const offset = (existingCount % 4) * 1.6;
+    const baseY = activeFl ? activeFl.elevation + activeFl.height : 3.0;
+
+    const roof: ArchRoofItem = {
+      id: `roof_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 5)}`,
+      floorId: activeFl ? activeFl.id : 'floor_1',
+      name: `${roofName} #${existingCount + 1}`,
+      style,
+      center: { x: round3(offset), z: round3(offset * 0.6) },
+      width: 4.5,
+      depth: 4.0,
+      baseY: round3(baseY),
+      pitchDeg: style === 'shed' ? 18 : 28,
+      overhang: 0.4,
+      ridgeAxis: existingCount % 2 === 1 ? 'z' : 'x',
+      color: '#b85d3b',
+      fasciaColor: '#e2e8f0',
+      rotationY: 0,
+      roofPattern: style === 'flat' ? 'concrete' : 'roof-tile',
+      hasSkylight: false,
+      skylightWidth: 1.8,
+      skylightDepth: 1.4,
     };
     this.data.roofs.push(roof);
     this.selection = { kind: 'roof', id: roof.id };
@@ -1563,7 +1788,89 @@ export class ArchBuilderEngine {
   }
 
   /**
-   * Walkthrough Stair Elevation Solver: allows walking smoothly up & down architectural stairs!
+   * Walkthrough Sliding Wall Collision Solver:
+   * Blocks passing through solid wall spans while letting walker glide smoothly along walls
+   * and walk freely through Archways & Open Doors!
+   */
+  public resolveWalkthroughMovement(
+    prevX: number,
+    prevZ: number,
+    desiredX: number,
+    desiredZ: number,
+    currentFootY: number,
+    floors: BuildingFloorLayer[]
+  ): Vec2XZ {
+    let rx = desiredX;
+    let rz = desiredZ;
+    const PLAYER_RADIUS = 0.28;
+
+    for (const w of this.data.walls) {
+      const fl = floors.find((f) => f.id === w.floorId);
+      const baseY = fl ? fl.elevation : 0;
+      if (currentFootY < baseY - 0.35 || currentFootY > baseY + w.height - 0.25) {
+        continue;
+      }
+
+      const wallLen = computeWallLength(w);
+      if (wallLen < 0.2) continue;
+      const wallOps = this.data.openings.filter((o) => o.wallId === w.id);
+
+      const steps = Math.abs(w.curveBulge) >= 0.04 ? 12 : 1;
+      for (let s = 0; s < steps; s++) {
+        const t0 = s / steps;
+        const t1 = (s + 1) / steps;
+        const p0 = sampleWallCurvePoint(w, t0);
+        const p1 = sampleWallCurvePoint(w, t1);
+        const segDx = p1.x - p0.x;
+        const segDz = p1.z - p0.z;
+        const segLenSq = segDx * segDx + segDz * segDz;
+        if (segLenSq < 1e-6) continue;
+
+        const lt = Math.max(
+          0,
+          Math.min(1, ((rx - p0.x) * segDx + (rz - p0.z) * segDz) / segLenSq)
+        );
+        const cx = p0.x + segDx * lt;
+        const cz = p0.z + segDz * lt;
+        const dist = Math.hypot(rx - cx, rz - cz);
+        const minClearance = w.thickness * 0.5 + PLAYER_RADIUS;
+
+        if (dist < minClearance) {
+          // Check if player is passing through an Archway or an Open Door!
+          const sAlong = (t0 + (t1 - t0) * lt) * wallLen;
+          const passable = wallOps.some((op) => {
+            const isDoorPassable =
+              op.kind === 'archway' ||
+              (op.kind.startsWith('door') && op.isOpen !== false);
+            if (!isDoorPassable) return false;
+            const opCenterS = op.offsetRatio * wallLen;
+            return Math.abs(sAlong - opCenterS) <= Math.max(0.22, op.width * 0.5 - 0.14);
+          });
+
+          if (!passable) {
+            let nx = rx - cx;
+            let nz = rz - cz;
+            let nLen = Math.hypot(nx, nz);
+            if (nLen < 1e-4) {
+              nx = prevX - cx;
+              nz = prevZ - cz;
+              nLen = Math.max(1e-4, Math.hypot(nx, nz));
+            }
+            nx /= nLen;
+            nz /= nLen;
+            const push = minClearance - dist;
+            rx += nx * push;
+            rz += nz * push;
+          }
+        }
+      }
+    }
+
+    return { x: rx, z: rz };
+  }
+
+  /**
+   * Walkthrough Stair Elevation Solver (`straight` AND `l-shape` stairs!)
    */
   public sampleWalkthroughFloorElevation(
     x: number,
@@ -1571,7 +1878,7 @@ export class ArchBuilderEngine {
     currentFootY: number,
     floors: BuildingFloorLayer[]
   ): number | null {
-    // 1. Check if walker is on any Staircase ramp!
+    // 1. Check if walker is on any Staircase ramp (`straight` or `l-shape`)!
     for (const st of this.data.stairs) {
       const dx = x - st.position.x;
       const dz = z - st.position.z;
@@ -1590,6 +1897,26 @@ export class ArchBuilderEngine {
           if (Math.abs(rampY - currentFootY) <= 1.35) {
             return rampY;
           }
+        }
+      } else {
+        // L-shape stair: Leg 1 (-Z -> 0 at X in [-w, 0]), Landing (X in [-w, 0], Z in [0, w]), Leg 2 (X in [0, leg2Run], Z in [0, w])
+        const w = Math.max(0.75, st.width);
+        const legRun = Math.max(1.6, st.runLength) * 0.55;
+        const halfH = st.height * 0.5;
+
+        if (lx >= -w * 1.05 && lx <= 0.08 && lz >= -legRun - 0.1 && lz <= 0.05) {
+          const t1 = Math.max(0, Math.min(1, (lz + legRun) / legRun));
+          const y1 = st.position.y + t1 * halfH;
+          if (Math.abs(y1 - currentFootY) <= 1.35) return y1;
+        }
+        if (lx >= -w * 1.05 && lx <= 0.1 && lz >= -0.05 && lz <= w * 1.05) {
+          const yLand = st.position.y + halfH;
+          if (Math.abs(yLand - currentFootY) <= 1.35) return yLand;
+        }
+        if (lx >= -0.05 && lx <= legRun + 0.15 && lz >= -0.05 && lz <= w * 1.05) {
+          const t2 = Math.max(0, Math.min(1, lx / legRun));
+          const y2 = st.position.y + halfH + t2 * halfH;
+          if (Math.abs(y2 - currentFootY) <= 1.35) return y2;
         }
       }
     }
@@ -1686,6 +2013,8 @@ export class ArchBuilderEngine {
     this.structuralGroup.clear();
     disposeObjectTree(this.labelsGroup);
     this.labelsGroup.clear();
+    disposeObjectTree(this.handlesGroup);
+    this.handlesGroup.clear();
     this.ceilingMeshes = [];
 
     if (!isHouseMode) {
@@ -1800,6 +2129,9 @@ export class ArchBuilderEngine {
           : new THREE.Color('#000000'),
         emissiveIntensity: isRoomSelected ? 0.18 : 0,
       });
+      if (!fStyle.ghost && room.floorPattern && room.floorPattern !== 'none') {
+        applyProceduralPatternToMaterial(floorMat, room.floorPattern, 0.75, 0.75);
+      }
 
       const slabMesh = new THREE.Mesh(floorGeo, floorMat);
       slabMesh.position.y = fStyle.baseY + 0.062;
@@ -1812,9 +2144,26 @@ export class ArchBuilderEngine {
       };
       this.structuralGroup.add(slabMesh);
 
-      // Smart Auto-Hide Ceiling
+      // Smart Auto-Hide Ceiling (with automatic Skylight hole when a Skylight Roof sits overhead!)
       if (room.ceilingVisible && !fStyle.ghost) {
-        const ceilGeo = new THREE.ShapeGeometry(shape);
+        const ceilShape = shape.clone();
+        const ceilingY = fStyle.baseY + fStyle.storyH;
+        for (const rf of this.data.roofs) {
+          if (!rf.hasSkylight) continue;
+          if (Math.abs(rf.baseY - ceilingY) > 0.85) continue;
+          if (this.pointInPolygonXZ(rf.center.x, rf.center.z, room.polygon)) {
+            const shw = (rf.skylightWidth ?? 1.8) * 0.5;
+            const shd = (rf.skylightDepth ?? 1.4) * 0.5;
+            const skyHole = new THREE.Path();
+            skyHole.moveTo(rf.center.x - shw, rf.center.z - shd);
+            skyHole.lineTo(rf.center.x + shw, rf.center.z - shd);
+            skyHole.lineTo(rf.center.x + shw, rf.center.z + shd);
+            skyHole.lineTo(rf.center.x - shw, rf.center.z + shd);
+            skyHole.closePath();
+            ceilShape.holes.push(skyHole);
+          }
+        }
+        const ceilGeo = new THREE.ShapeGeometry(ceilShape);
         ceilGeo.rotateX(Math.PI * 0.5);
         const ceilMat = new THREE.MeshStandardMaterial({
           color: new THREE.Color('#f8fafc'),
@@ -1823,7 +2172,6 @@ export class ArchBuilderEngine {
           side: THREE.DoubleSide,
         });
         const ceilMesh = new THREE.Mesh(ceilGeo, ceilMat);
-        const ceilingY = fStyle.baseY + fStyle.storyH;
         ceilMesh.position.y = ceilingY - 0.01;
         ceilMesh.visible = false;
         ceilMesh.receiveShadow = true;
@@ -1930,7 +2278,45 @@ export class ArchBuilderEngine {
       }
     }
 
-    // Add seamless Corner Junction Columns wherever 2+ walls connect
+    // Add seamless Corner Junction Columns + Draggable Blue Corner Node Handles on Active Floor!
+    const handleAddedKeys = new Set<string>();
+    for (const w of this.data.walls) {
+      if (!activeFl || w.floorId !== activeFl.id) continue;
+      for (const pt of [w.start, w.end]) {
+        const hk = `${Math.round(pt.x * 20)}:${Math.round(pt.z * 20)}`;
+        if (handleAddedKeys.has(hk)) continue;
+        handleAddedKeys.add(hk);
+
+        const handleRadius = this.isBlueprint2D ? 0.2 : 0.15;
+        const hGeo = new THREE.CylinderGeometry(
+          handleRadius,
+          handleRadius,
+          0.12,
+          18
+        );
+        const hMat = new THREE.MeshBasicMaterial({
+          color: '#38bdf8',
+          transparent: true,
+          opacity: 0.9,
+          depthTest: false,
+        });
+        const hMesh = new THREE.Mesh(hGeo, hMat);
+        hMesh.position.set(
+          pt.x,
+          activeFl.elevation + (this.isBlueprint2D ? w.height + 0.15 : 0.08),
+          pt.z
+        );
+        hMesh.renderOrder = 22;
+        hMesh.userData = {
+          archHandleKind: 'wall-node',
+          floorId: activeFl.id,
+          nodeX: pt.x,
+          nodeZ: pt.z,
+        };
+        this.handlesGroup.add(hMesh);
+      }
+    }
+
     for (const jn of vertexJunctionMap.values()) {
       if (jn.count < 2) continue;
       const colGeo = new THREE.CylinderGeometry(
@@ -1992,6 +2378,7 @@ export class ArchBuilderEngine {
       : new THREE.Color('#000000');
     const emissiveInt = isSelected ? 0.22 : 0;
 
+    const LTotal = Math.max(0.5, computeWallLength(wall));
     const extMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(wall.exteriorColor),
       roughness: wall.roughness,
@@ -2001,6 +2388,15 @@ export class ArchBuilderEngine {
       emissive: emissiveCol,
       emissiveIntensity: emissiveInt,
     });
+    if (!ghost && wall.exteriorPattern && wall.exteriorPattern !== 'none') {
+      applyProceduralPatternToMaterial(
+        extMat,
+        wall.exteriorPattern,
+        Math.max(1, LTotal * 0.7),
+        Math.max(1, wall.height * 0.7)
+      );
+    }
+
     const intMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color(wall.interiorColor),
       roughness: wall.roughness,
@@ -2010,6 +2406,14 @@ export class ArchBuilderEngine {
       emissive: emissiveCol,
       emissiveIntensity: emissiveInt,
     });
+    if (!ghost && wall.interiorPattern && wall.interiorPattern !== 'none') {
+      applyProceduralPatternToMaterial(
+        intMat,
+        wall.interiorPattern,
+        Math.max(1, LTotal * 0.7),
+        Math.max(1, wall.height * 0.7)
+      );
+    }
     const trimMat = new THREE.MeshStandardMaterial({
       color: new THREE.Color('#e2e8f0'),
       roughness: 0.72,

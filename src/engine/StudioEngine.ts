@@ -26,6 +26,12 @@ import {
 import { ModularConstructionItem } from './modularConstruction';
 import { ArchBuilderEngine } from './ArchBuilderEngine';
 import {
+  applyGeometryDeformModifiers,
+  normalizeModifierSettings,
+  syncMeshMirrorTwins,
+} from './ModifierEngine';
+import { applyProceduralPatternToMaterial } from './proceduralTextures';
+import {
   ArchDetectedRoom,
   ArchHouseData,
   ArchOpeningItem,
@@ -45,6 +51,7 @@ import {
   CustomAssetPart,
   DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
+  DEFAULT_MODIFIER_SETTINGS,
   DEFAULT_SNAP_SETTINGS,
   DEFAULT_SUBDIVISION_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
@@ -57,16 +64,19 @@ import {
   isSubdivisionActive,
   LightingMood,
   normalizeSubdivisionSettings,
+  ObjectModifierSettings,
   ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
   PlacementValidationStatus,
   PrimitiveKind,
+  ProceduralPatternKind,
   RepeatArrayConfig,
   SceneObjectData,
   SelectionSubMode,
   SnapSettings,
   StudioMode,
+  StudioSnapshotOptions,
   SubdivisionStats,
   SunEnvironmentSettings,
   SurfacePlacementRule,
@@ -133,6 +143,7 @@ export interface StudioEngineCallbacks {
     archTool: ArchSubTool;
     isBlueprint2D: boolean;
     cameraLensFov: number;
+    wallChainActive: boolean;
   }) => void;
   onDragFeedback: (feedback: DragFeedback) => void;
   onEyedropperSample?: (sample: PaintBrushPayload, objectName: string) => void;
@@ -212,6 +223,33 @@ export class StudioEngine {
   private wallDrawDefaults: WallDrawDefaults = { ...DEFAULT_WALL_DRAW };
   private activeOpeningKind: ArchOpeningKind = 'door-single';
   private wallChainStart: Vec2XZ | null = null;
+  private lastHoverWallXZ: Vec2XZ | null = null;
+  private activeArchDrag:
+    | {
+        kind: 'wall-node';
+        floorId: string;
+        curXZ: Vec2XZ;
+        moved: boolean;
+      }
+    | {
+        kind: 'opening-slide';
+        openingId: string;
+        moved: boolean;
+      }
+    | {
+        kind: 'stair-move';
+        stairId: string;
+        offsetXZ: Vec2XZ;
+        moved: boolean;
+      }
+    | {
+        kind: 'roof-move';
+        roofId: string;
+        offsetXZ: Vec2XZ;
+        moved: boolean;
+      }
+    | null = null;
+  private bounceLight!: THREE.HemisphereLight;
   private measureStart: THREE.Vector3 | null = null;
   private measureEnd: THREE.Vector3 | null = null;
   private isBlueprint2D = false;
@@ -1196,21 +1234,60 @@ export class StudioEngine {
 
   public applyFloorWallsDualColor(
     exteriorColor: string,
-    interiorColor: string
+    interiorColor: string,
+    exteriorPattern?: ProceduralPatternKind,
+    interiorPattern?: ProceduralPatternKind
   ): number {
     const updated = this.archEngine.applyWallColorsOnFloor(
       this.activeFloorId,
       exteriorColor,
-      interiorColor
+      interiorColor,
+      exteriorPattern,
+      interiorPattern
     );
     this.wallDrawDefaults.exteriorColor = exteriorColor;
     this.wallDrawDefaults.interiorColor = interiorColor;
+    if (exteriorPattern !== undefined) {
+      this.wallDrawDefaults.exteriorPattern = exteriorPattern;
+    }
+    if (interiorPattern !== undefined) {
+      this.wallDrawDefaults.interiorPattern = interiorPattern;
+    }
     if (updated > 0) {
       this.rebuildArchitecture();
       this.pushHistorySnapshot();
       this.emitState();
     }
     return updated;
+  }
+
+  public commitWallWithExactLength(exactLengthM: number): boolean {
+    if (this.studioMode !== 'house' || this.archTool !== 'draw-wall') {
+      return false;
+    }
+    const startPt: Vec2XZ = this.wallChainStart ?? { x: 0, z: 0 };
+    const res = this.archEngine.commitWallByExactLength(
+      this.activeFloorId,
+      startPt,
+      this.lastHoverWallXZ,
+      exactLengthM,
+      this.wallDrawDefaults
+    );
+    if (!res) return false;
+    this.wallChainStart = res.endPoint;
+    const activeFl =
+      this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+    this.archEngine.updateWallDrawPreview(
+      this.wallChainStart,
+      null,
+      activeFl ? activeFl.elevation : 0,
+      this.wallDrawDefaults,
+      this.wallChainStart
+    );
+    this.rebuildArchitecture();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
   }
 
   public updateArchOpening(
@@ -1226,7 +1303,9 @@ export class StudioEngine {
 
   public updateArchRoomMeta(
     roomId: string,
-    patch: Partial<Pick<ArchRoomMeta, 'name' | 'floorColor' | 'ceilingVisible'>>,
+    patch: Partial<
+      Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+    >,
     commitHistory = true
   ): void {
     if (!this.archEngine.updateRoomMeta(roomId, patch)) return;
@@ -1270,6 +1349,24 @@ export class StudioEngine {
   ): ArchRoofItem | null {
     if (this.studioMode !== 'house') return null;
     const created = this.archEngine.generateAutoRoof(
+      this.floors,
+      this.activeFloorId,
+      style,
+      roofName
+    );
+    this.selectObject(null, false);
+    this.rebuildArchitecture();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return created;
+  }
+
+  public addSmartRoofWing(
+    style: ArchRoofStyle = 'gable',
+    roofName = 'Sayap Atap'
+  ): ArchRoofItem | null {
+    if (this.studioMode !== 'house') return null;
+    const created = this.archEngine.addCustomRoofWing(
       this.floors,
       this.activeFloorId,
       style,
@@ -1433,7 +1530,15 @@ export class StudioEngine {
   }
 
   private raycastActiveFloorXZ(event: PointerEvent): Vec2XZ | null {
-    this.setPointerNDCFromEvent(event);
+    const touchYOffset =
+      event.pointerType === 'touch' &&
+      (this.archTool === 'draw-wall' || this.archTool === 'place-opening')
+        ? -26
+        : 0;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNDC.y =
+      -((event.clientY + touchYOffset - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointerNDC, this.camera);
     const activeFl =
       this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
@@ -1442,6 +1547,21 @@ export class StudioEngine {
     const hitPt = new THREE.Vector3();
     const ok = this.raycaster.ray.intersectPlane(plane, hitPt);
     return ok ? { x: hitPt.x, z: hitPt.z } : null;
+  }
+
+  /**
+   * Collects all visible Smart Architectural Meshes (Walls, Room Floor Slabs, Stairs, Roofs & Ceilings)
+   * so Surface Align & Drop-to-Floor snap custom furniture flush onto walls, floors, and ceilings!
+   */
+  private collectArchSurfaceMeshes(): THREE.Mesh[] {
+    if (this.studioMode !== 'house') return [];
+    const out: THREE.Mesh[] = [];
+    this.archEngine.structuralGroup.traverse((node) => {
+      if ((node as THREE.Mesh).isMesh && node.visible) {
+        out.push(node as THREE.Mesh);
+      }
+    });
+    return out;
   }
 
   private raycastAnyScenePoint(event: PointerEvent): THREE.Vector3 | null {
@@ -1515,6 +1635,9 @@ export class StudioEngine {
         emissive: p.emissive,
         emissiveIntensity: p.emissiveIntensity,
         flatShading: p.flatShading,
+        proceduralPattern: p.proceduralPattern,
+        patternScale: p.patternScale,
+        modifiers: p.modifiers ? { ...p.modifiers } : undefined,
         subdivision: { ...(p.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
         visible: true,
         groupId: gid,
@@ -1522,6 +1645,7 @@ export class StudioEngine {
         archRole: p.archRole ?? item.archRole,
         surfaceRule: item.surfaceRule,
         floorId: activeFl?.id,
+        pointLight: p.pointLight ? { ...p.pointLight } : undefined,
       };
 
       const mesh = this.buildMeshFromData(data);
@@ -2152,8 +2276,24 @@ export class StudioEngine {
         -Math.sin(this.walkYaw)
       );
 
+      const prevX = this.camera.position.x;
+      const prevZ = this.camera.position.z;
       this.camera.position.addScaledVector(forwardVec, normF * speed);
       this.camera.position.addScaledVector(rightVec, normR * speed);
+
+      if (this.studioMode === 'house') {
+        const footY = this.camera.position.y - 1.65;
+        const resolved = this.archEngine.resolveWalkthroughMovement(
+          prevX,
+          prevZ,
+          this.camera.position.x,
+          this.camera.position.z,
+          footY,
+          this.floors
+        );
+        this.camera.position.x = resolved.x;
+        this.camera.position.z = resolved.z;
+      }
     }
 
     const targetFloorY = this.sampleWalkFloorHeight(
@@ -2346,12 +2486,16 @@ export class StudioEngine {
       emissive: o.emissive,
       emissiveIntensity: o.emissiveIntensity,
       flatShading: o.flatShading,
+      proceduralPattern: o.proceduralPattern,
+      patternScale: o.patternScale,
+      modifiers: o.modifiers ? { ...o.modifiers } : undefined,
       subdivision: { ...o.subdivision },
       archRole: o.archRole ?? 'prop',
       modelAssetId: o.modelAssetId,
       modelFormat: o.modelFormat,
       modelThumbUrl: o.modelThumbUrl,
       useCustomMaterial: o.useCustomMaterial,
+      pointLight: o.pointLight ? { ...o.pointLight } : undefined,
     }));
 
     return { defaultName, parts };
@@ -2716,13 +2860,18 @@ export class StudioEngine {
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
     this.keyLight.shadow.camera.bottom = -d;
-    this.keyLight.shadow.bias = -0.0002;
-    this.keyLight.shadow.normalBias = 0.045;
+    this.keyLight.shadow.bias = -0.00035;
+    this.keyLight.shadow.normalBias = 0.022;
     this.scene.add(this.keyLight);
 
     this.fillLight = new THREE.DirectionalLight('#9ec5ff', 0.55);
     this.fillLight.position.set(-12, 9, -10);
     this.scene.add(this.fillLight);
+
+    // Subtle upward interior bounce fill light so house rooms stay softly lit without harsh dark corners
+    this.bounceLight = new THREE.HemisphereLight('#f8fafc', '#fde68a', 0.28);
+    this.bounceLight.position.set(0, 1.5, 0);
+    this.scene.add(this.bounceLight);
   }
 
   private updateGizmoResponsiveSize(): void {
@@ -2802,6 +2951,109 @@ export class StudioEngine {
         );
       }
       return;
+    }
+
+    // Direct Viewport Architectural Drag (`house` mode, `select` tool)
+    if (
+      this.studioMode === 'house' &&
+      this.archTool === 'select' &&
+      this.paintMode === 'none' &&
+      event.button <= 0 &&
+      !this.transformControls.axis
+    ) {
+      this.setPointerNDCFromEvent(event);
+      this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+
+      // 1. Check Wall Corner Node Handles first (highest priority!)
+      const handleHits = this.raycaster.intersectObjects(
+        this.archEngine.handlesGroup.children,
+        false
+      );
+      if (handleHits.length > 0) {
+        const hm = handleHits[0].object;
+        const floorId = hm.userData?.floorId as string | undefined;
+        const nodeX = hm.userData?.nodeX as number | undefined;
+        const nodeZ = hm.userData?.nodeZ as number | undefined;
+        if (floorId && nodeX !== undefined && nodeZ !== undefined) {
+          this.activeArchDrag = {
+            kind: 'wall-node',
+            floorId,
+            curXZ: { x: nodeX, z: nodeZ },
+            moved: false,
+          };
+          this.orbitControls.enabled = false;
+          this.renderer.domElement.setPointerCapture?.(event.pointerId);
+          return;
+        }
+      }
+
+      // 2. Check Opening (slide along wall), Stair (move XZ), or Selected Roof (move XZ)
+      const archHits = this.raycaster.intersectObjects(
+        this.archEngine.structuralGroup.children,
+        true
+      );
+      const clickXZ = this.raycastActiveFloorXZ(event);
+      if (archHits.length > 0 && clickXZ) {
+        let cur: THREE.Object3D | null = archHits[0].object;
+        while (cur && cur !== this.archEngine.structuralGroup) {
+          const kind = cur.userData?.archKind as string | undefined;
+          const id = cur.userData?.archId as string | undefined;
+          if (kind === 'opening' && id) {
+            this.archEngine.setSelection({ kind: 'opening', id });
+            this.activeArchDrag = {
+              kind: 'opening-slide',
+              openingId: id,
+              moved: false,
+            };
+            this.orbitControls.enabled = false;
+            this.renderer.domElement.setPointerCapture?.(event.pointerId);
+            return;
+          }
+          if (kind === 'stair' && id) {
+            const st = this.archEngine
+              .getData()
+              .stairs.find((s) => s.id === id);
+            if (st) {
+              this.archEngine.setSelection({ kind: 'stair', id });
+              this.activeArchDrag = {
+                kind: 'stair-move',
+                stairId: id,
+                offsetXZ: {
+                  x: st.position.x - clickXZ.x,
+                  z: st.position.z - clickXZ.z,
+                },
+                moved: false,
+              };
+              this.orbitControls.enabled = false;
+              this.renderer.domElement.setPointerCapture?.(event.pointerId);
+              return;
+            }
+          }
+          if (
+            kind === 'roof' &&
+            id &&
+            this.archEngine.getSelection()?.kind === 'roof' &&
+            this.archEngine.getSelection()?.id === id
+          ) {
+            const rf = this.archEngine.getData().roofs.find((r) => r.id === id);
+            if (rf) {
+              this.activeArchDrag = {
+                kind: 'roof-move',
+                roofId: id,
+                offsetXZ: {
+                  x: rf.center.x - clickXZ.x,
+                  z: rf.center.z - clickXZ.z,
+                },
+                moved: false,
+              };
+              this.orbitControls.enabled = false;
+              this.renderer.domElement.setPointerCapture?.(event.pointerId);
+              return;
+            }
+          }
+          cur = cur.parent;
+        }
+      }
     }
 
     // #6 Box Marquee Selection Start (`select` mode + `box` sub-mode)
@@ -2893,6 +3145,78 @@ export class StudioEngine {
       return;
     }
 
+    // Direct Viewport Architectural Drag Move (`wall-node`, `opening-slide`, `stair-move`, `roof-move`)
+    if (this.activeArchDrag) {
+      const dx = event.clientX - this.pointerDownPos.x;
+      const dy = event.clientY - this.pointerDownPos.y;
+      if (!this.activeArchDrag.moved && Math.hypot(dx, dy) < 4) return;
+
+      const rawXZ = this.raycastActiveFloorXZ(event);
+      if (!rawXZ) return;
+
+      const snapStep =
+        this.snapSettings.enabled && this.snapSettings.grid
+          ? Math.min(0.25, this.snapSettings.gridStep)
+          : 0.05;
+      const q = (v: number) => Math.round(v / snapStep) * snapStep;
+
+      if (this.activeArchDrag.kind === 'wall-node') {
+        const nextXZ: Vec2XZ = { x: q(rawXZ.x), z: q(rawXZ.z) };
+        if (
+          Math.hypot(
+            nextXZ.x - this.activeArchDrag.curXZ.x,
+            nextXZ.z - this.activeArchDrag.curXZ.z
+          ) >= 0.02
+        ) {
+          this.archEngine.moveConnectedWallVertex(
+            this.activeArchDrag.floorId,
+            this.activeArchDrag.curXZ,
+            nextXZ
+          );
+          this.activeArchDrag.curXZ = nextXZ;
+          this.activeArchDrag.moved = true;
+          this.rebuildArchitecture();
+          this.emitState();
+        }
+      } else if (this.activeArchDrag.kind === 'opening-slide') {
+        if (
+          this.archEngine.slideOpeningToWorldXZ(
+            this.activeArchDrag.openingId,
+            rawXZ
+          )
+        ) {
+          this.activeArchDrag.moved = true;
+          this.rebuildArchitecture();
+          this.emitState();
+        }
+      } else if (this.activeArchDrag.kind === 'stair-move') {
+        const nx = q(rawXZ.x + this.activeArchDrag.offsetXZ.x);
+        const nz = q(rawXZ.z + this.activeArchDrag.offsetXZ.z);
+        const dragStairId = this.activeArchDrag.stairId;
+        const curSt = this.archEngine
+          .getData()
+          .stairs.find((s) => s.id === dragStairId);
+        if (curSt) {
+          this.archEngine.updateStair(curSt.id, {
+            position: { x: nx, y: curSt.position.y, z: nz },
+          });
+          this.activeArchDrag.moved = true;
+          this.rebuildArchitecture();
+          this.emitState();
+        }
+      } else if (this.activeArchDrag.kind === 'roof-move') {
+        const nx = q(rawXZ.x + this.activeArchDrag.offsetXZ.x);
+        const nz = q(rawXZ.z + this.activeArchDrag.offsetXZ.z);
+        this.archEngine.updateRoof(this.activeArchDrag.roofId, {
+          center: { x: nx, z: nz },
+        });
+        this.activeArchDrag.moved = true;
+        this.rebuildArchitecture();
+        this.emitState();
+      }
+      return;
+    }
+
     // Architect Life × Blender Interactive Previews (`house` mode)
     if (this.studioMode === 'house' && this.archTool !== 'select') {
       const activeFl =
@@ -2913,6 +3237,7 @@ export class StudioEngine {
             this.wallDrawDefaults.angleSnap,
             snapStep
           );
+          this.lastHoverWallXZ = snapped.point;
           this.archEngine.updateWallDrawPreview(
             this.wallChainStart,
             this.wallChainStart ? snapped.point : null,
@@ -2973,7 +3298,10 @@ export class StudioEngine {
     this.setPointerNDCFromEvent(event);
     this.raycaster.setFromCamera(this.pointerNDC, this.camera);
 
-    const others = this.getNonSiblingMeshes(selMesh);
+    const others = [
+      ...this.getNonSiblingMeshes(selMesh),
+      ...this.collectArchSurfaceMeshes(),
+    ];
     const hit = this.surfaceEngine.raycastPointerSurface(
       this.raycaster,
       selMesh,
@@ -3018,7 +3346,47 @@ export class StudioEngine {
         this.isWalkLooking = false;
         this.renderer.domElement.releasePointerCapture?.(event.pointerId);
       }
+      // Interactive Tap-to-Open/Close Doors while walking through your house!
+      const wdx = event.clientX - this.pointerDownPos.x;
+      const wdy = event.clientY - this.pointerDownPos.y;
+      if (this.studioMode === 'house' && Math.hypot(wdx, wdy) <= 6) {
+        this.setPointerNDCFromEvent(event);
+        this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+        const hits = this.raycaster.intersectObjects(
+          this.archEngine.structuralGroup.children,
+          true
+        );
+        if (hits.length > 0 && hits[0].distance <= 3.8) {
+          let cur: THREE.Object3D | null = hits[0].object;
+          while (cur && cur !== this.archEngine.structuralGroup) {
+            if (cur.userData?.archKind === 'opening' && cur.userData?.archId) {
+              const toggled = this.archEngine.toggleDoorOpen(
+                cur.userData.archId as string
+              );
+              if (toggled !== null) {
+                this.rebuildArchitecture();
+                this.emitState();
+              }
+              break;
+            }
+            cur = cur.parent;
+          }
+        }
+      }
       return;
+    }
+
+    // Finalize Direct Architectural Viewport Drag
+    if (this.activeArchDrag) {
+      const wasMoved = this.activeArchDrag.moved;
+      this.activeArchDrag = null;
+      this.orbitControls.enabled = true;
+      this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+      if (wasMoved) {
+        this.pushHistorySnapshot();
+        this.emitState();
+        return;
+      }
     }
 
     // #3 Finalize Terrain Sculpt Stroke
@@ -3156,6 +3524,7 @@ export class StudioEngine {
 
         if (!this.wallChainStart) {
           this.wallChainStart = snapped.point;
+          this.lastHoverWallXZ = snapped.point;
           this.archEngine.updateWallDrawPreview(
             snapped.point,
             null,
@@ -3163,6 +3532,7 @@ export class StudioEngine {
             this.wallDrawDefaults,
             snapped.point
           );
+          this.emitState();
         } else {
           const created = this.archEngine.addWallSegment(
             this.activeFloorId,
@@ -3400,7 +3770,8 @@ export class StudioEngine {
       !this.transformControls.dragging &&
       !this.isSurfaceSliding &&
       !this.isSculptingStroke &&
-      !this.isBoxSelecting
+      !this.isBoxSelecting &&
+      !this.activeArchDrag
     ) {
       this.orbitControls.enabled = true;
       this.orbitControls.update();
@@ -3617,6 +3988,9 @@ export class StudioEngine {
         emissive: p.emissive,
         emissiveIntensity: p.emissiveIntensity,
         flatShading: p.flatShading,
+        proceduralPattern: p.proceduralPattern,
+        patternScale: p.patternScale,
+        modifiers: p.modifiers ? { ...p.modifiers } : undefined,
         subdivision: { ...(p.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
         visible: true,
         groupId: gid,
@@ -3626,6 +4000,7 @@ export class StudioEngine {
         modelFormat: p.modelFormat,
         modelThumbUrl: p.modelThumbUrl,
         useCustomMaterial: p.useCustomMaterial,
+        pointLight: p.pointLight ? { ...p.pointLight } : undefined,
       };
 
       const mesh = this.buildMeshFromData(data);
@@ -3640,6 +4015,77 @@ export class StudioEngine {
     this.pushHistorySnapshot();
     this.emitState();
     return leaderId;
+  }
+
+  /**
+   * Loads a saved Custom Asset onto the center `(0, 0, 0)` in Single-Part Edit Mode so the user
+   * can tweak individual cushions/legs/lights and update the saved asset in place!
+   */
+  public loadCustomAssetPartsForEdit(
+    parts: CustomAssetPart[],
+    assetName: string
+  ): string | null {
+    if (parts.length === 0) return null;
+    const groundY = this.gridSystem.sampleHeight(0, 0);
+    const gid =
+      parts.length > 1
+        ? `grp_edit_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`
+        : null;
+
+    let firstId: string | null = null;
+    const newIds: string[] = [];
+
+    parts.forEach((p, idx) => {
+      const id = `editpart-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`;
+      if (idx === 0) firstId = id;
+      newIds.push(id);
+
+      const data: SceneObjectData = {
+        id,
+        name: p.name || `${assetName} ${idx + 1}`,
+        kind: p.kind,
+        position: {
+          x: round3(p.localPosition.x),
+          y: round3(groundY + p.localPosition.y),
+          z: round3(p.localPosition.z),
+        },
+        rotation: { ...p.rotation },
+        scale: { ...p.scale },
+        color: p.color,
+        roughness: p.roughness,
+        metalness: p.metalness,
+        opacity: p.opacity,
+        emissive: p.emissive,
+        emissiveIntensity: p.emissiveIntensity,
+        flatShading: p.flatShading,
+        proceduralPattern: p.proceduralPattern,
+        patternScale: p.patternScale,
+        modifiers: p.modifiers ? { ...p.modifiers } : undefined,
+        subdivision: { ...(p.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
+        visible: true,
+        groupId: gid,
+        groupName: gid ? assetName : undefined,
+        archRole: p.archRole ?? 'prop',
+        modelAssetId: p.modelAssetId,
+        modelFormat: p.modelFormat,
+        modelThumbUrl: p.modelThumbUrl,
+        useCustomMaterial: p.useCustomMaterial,
+        pointLight: p.pointLight ? { ...p.pointLight } : undefined,
+      };
+
+      const mesh = this.buildMeshFromData(data);
+      this.objectGroup.add(mesh);
+      this.meshMap.set(id, mesh);
+    });
+
+    this.editSinglePartMode = true;
+    this.updateSeamlessTouchFaces();
+    this.selectedIds = newIds;
+    this.selectedId = firstId;
+    this.reattachTransformAfterSelectionChange();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return firstId;
   }
 
   public getDomainWorldSize(): number {
@@ -3980,6 +4426,7 @@ export class StudioEngine {
       : undefined;
 
     const subdiv = normalizeSubdivisionSettings(data.subdivision);
+    const modifiers = normalizeModifierSettings(data.modifiers);
     let geometry: THREE.BufferGeometry;
     let gridLinesGeometry: THREE.BufferGeometry | null = null;
     let stats: SubdivisionStats;
@@ -3995,15 +4442,20 @@ export class StudioEngine {
     } else {
       const baseGeo = this.getOrCreateBaseGeometry(data.kind);
       const built = buildSubdividedGeometry(baseGeo, subdiv);
-      geometry = built.geometry;
+      geometry = applyGeometryDeformModifiers(built.geometry, modifiers);
+      if (geometry !== built.geometry) {
+        built.geometry.dispose();
+      }
       gridLinesGeometry = built.gridLinesGeometry;
-      stats = built.stats;
+      stats = computeGeometryStats(baseGeo, geometry, subdiv, false);
     }
 
     const opacity = data.opacity !== undefined ? data.opacity : 1;
     const emissiveHex = data.emissive ?? '#000000';
     const emissiveIntensity = data.emissiveIntensity ?? 0;
     const flatShading = Boolean(data.flatShading);
+    const procPattern = data.proceduralPattern ?? 'none';
+    const patScale = data.patternScale ?? 1;
 
     const baseMaterial = new THREE.MeshStandardMaterial({
       color: new THREE.Color(data.color),
@@ -4016,6 +4468,14 @@ export class StudioEngine {
       emissiveIntensity,
       flatShading,
     });
+    if (procPattern !== 'none') {
+      applyProceduralPatternToMaterial(
+        baseMaterial,
+        procPattern,
+        patScale,
+        patScale
+      );
+    }
 
     const mesh = new THREE.Mesh(
       geometry,
@@ -4040,6 +4500,9 @@ export class StudioEngine {
       userVisible: data.visible,
       userEmissiveHex: emissiveHex,
       userEmissiveIntensity: emissiveIntensity,
+      proceduralPattern: procPattern,
+      patternScale: patScale,
+      modifiers: { ...modifiers },
       subdivision: { ...subdiv },
       subdivStats: stats,
       groupId: data.groupId ?? null,
@@ -4065,6 +4528,9 @@ export class StudioEngine {
     }
 
     this.syncMeshPointLight(mesh, data.pointLight);
+    if (!importedEntry) {
+      syncMeshMirrorTwins(mesh, modifiers, baseMaterial);
+    }
 
     this.syncSubdivisionGridLines(
       mesh,
@@ -4417,9 +4883,26 @@ export class StudioEngine {
     if (geomChanged || nextSubdiv.showGridLines !== currentSubdiv.showGridLines) {
       const built = buildSubdividedGeometry(baseGeo, nextSubdiv);
       if (geomChanged) {
+        const curMods = normalizeModifierSettings(
+          mesh.userData.modifiers as ObjectModifierSettings | undefined
+        );
+        const finalGeo = importedEntry
+          ? built.geometry
+          : applyGeometryDeformModifiers(built.geometry, curMods);
+        if (finalGeo !== built.geometry) {
+          built.geometry.dispose();
+        }
         mesh.geometry.dispose();
-        mesh.geometry = built.geometry;
-        mesh.userData.subdivStats = built.stats;
+        mesh.geometry = finalGeo;
+        mesh.userData.subdivStats = computeGeometryStats(
+          baseGeo,
+          finalGeo,
+          nextSubdiv,
+          false
+        );
+        if (!importedEntry) {
+          syncMeshMirrorTwins(mesh, curMods, this.getBaseMaterial(mesh));
+        }
       } else {
         built.geometry.dispose();
       }
@@ -4441,6 +4924,131 @@ export class StudioEngine {
     }
     this.emitState();
     return (mesh.userData.subdivStats as SubdivisionStats) ?? null;
+  }
+
+  /**
+   * Non-Destructive Blender-Style Furniture Modifiers (`Bevel`, `Taper X/Z`, `Mirror X/Z`)
+   */
+  public updateObjectModifiers(
+    id: string,
+    patch: Partial<ObjectModifierSettings>,
+    recordHistory = true
+  ): void {
+    const mesh = this.meshMap.get(id);
+    if (!mesh || mesh.userData.modelAssetId) return;
+
+    const currentMods = normalizeModifierSettings(
+      mesh.userData.modifiers as ObjectModifierSettings | undefined
+    );
+    const nextMods = normalizeModifierSettings({ ...currentMods, ...patch });
+
+    const deformChanged =
+      Math.abs(nextMods.bevel - currentMods.bevel) > 0.001 ||
+      Math.abs(nextMods.taperX - currentMods.taperX) > 0.002 ||
+      Math.abs(nextMods.taperZ - currentMods.taperZ) > 0.002;
+
+    if (deformChanged) {
+      const baseGeo = this.getOrCreateBaseGeometry(
+        mesh.userData.kind as PrimitiveKind
+      );
+      const curSubdiv = normalizeSubdivisionSettings(
+        mesh.userData.subdivision as ObjectSubdivisionSettings | undefined
+      );
+      const built = buildSubdividedGeometry(baseGeo, curSubdiv);
+      const finalGeo = applyGeometryDeformModifiers(built.geometry, nextMods);
+      if (finalGeo !== built.geometry) {
+        built.geometry.dispose();
+      }
+      if (built.gridLinesGeometry) {
+        built.gridLinesGeometry.dispose();
+      }
+      mesh.geometry.dispose();
+      mesh.geometry = finalGeo;
+      mesh.userData.subdivStats = computeGeometryStats(
+        baseGeo,
+        finalGeo,
+        curSubdiv,
+        false
+      );
+    }
+
+    mesh.userData.modifiers = nextMods;
+    syncMeshMirrorTwins(mesh, nextMods, this.getBaseMaterial(mesh));
+    this.updateSeamlessTouchFaces();
+
+    if (recordHistory) {
+      this.pushHistorySnapshot();
+    }
+    this.emitState();
+  }
+
+  /**
+   * Converts live Mirror X/Z twins of the selected object into separate independent SceneObjects!
+   */
+  public bakeSelectedMirrorTwins(): number {
+    if (!this.selectedId) return 0;
+    const mesh = this.meshMap.get(this.selectedId);
+    const ser = this.selectedId ? this.serializeObject(this.selectedId) : null;
+    if (!mesh || !ser || !ser.modifiers) return 0;
+
+    const mods = normalizeModifierSettings(ser.modifiers);
+    if (!mods.mirrorX && !mods.mirrorZ) return 0;
+
+    const twinChildren = mesh.children.filter((c) =>
+      c.name.startsWith('__mirrorTwin_')
+    ) as THREE.Mesh[];
+    if (twinChildren.length === 0) return 0;
+
+    const baseMods: ObjectModifierSettings = {
+      ...mods,
+      mirrorX: false,
+      mirrorZ: false,
+    };
+
+    const createdIds: string[] = [ser.id];
+    mesh.updateMatrixWorld(true);
+
+    twinChildren.forEach((tw, idx) => {
+      tw.updateMatrixWorld(true);
+      const wp = new THREE.Vector3();
+      const wq = new THREE.Quaternion();
+      const ws = new THREE.Vector3();
+      tw.matrixWorld.decompose(wp, wq, ws);
+      const we = new THREE.Euler().setFromQuaternion(wq, 'XYZ');
+
+      const newId = `${ser.kind}-twin-${Date.now()}-${idx}`;
+      createdIds.push(newId);
+      const twinData: SceneObjectData = {
+        ...ser,
+        id: newId,
+        name: `${ser.name} • Twin ${idx + 1}`,
+        position: { x: round3(wp.x), y: round3(wp.y), z: round3(wp.z) },
+        rotation: {
+          x: round3(we.x * RAD2DEG),
+          y: round3(we.y * RAD2DEG),
+          z: round3(we.z * RAD2DEG),
+        },
+        scale: {
+          x: round3(Math.abs(ws.x)),
+          y: round3(Math.abs(ws.y)),
+          z: round3(Math.abs(ws.z)),
+        },
+        modifiers: { ...baseMods },
+      };
+      const newMesh = this.buildMeshFromData(twinData);
+      this.objectGroup.add(newMesh);
+      this.meshMap.set(newId, newMesh);
+    });
+
+    this.updateObjectModifiers(
+      ser.id,
+      { mirrorX: false, mirrorZ: false },
+      false
+    );
+    this.selectedIds = createdIds;
+    this.pushHistorySnapshot();
+    this.emitState();
+    return twinChildren.length;
   }
 
   /**
@@ -4661,6 +5269,15 @@ export class StudioEngine {
         Math.max(0.05, patch.scale.y),
         Math.max(0.05, patch.scale.z)
       );
+      if (!mesh.userData.modelAssetId && mesh.userData.modifiers) {
+        syncMeshMirrorTwins(
+          mesh,
+          normalizeModifierSettings(
+            mesh.userData.modifiers as ObjectModifierSettings
+          ),
+          this.getBaseMaterial(mesh)
+        );
+      }
     }
 
     this.syncGroupSiblingsFromLeader(mesh);
@@ -4703,7 +5320,10 @@ export class StudioEngine {
     if (!mesh) return '';
 
     this.captureGroupRelativeMatrices(mesh);
-    const others = this.getNonSiblingMeshes(mesh);
+    const others = [
+      ...this.getNonSiblingMeshes(mesh),
+      ...this.collectArchSurfaceMeshes(),
+    ];
     const hit = this.surfaceEngine.findBestConformTarget(
       mesh,
       others,
@@ -4741,6 +5361,8 @@ export class StudioEngine {
       emissive: string;
       emissiveIntensity: number;
       flatShading: boolean;
+      proceduralPattern: ProceduralPatternKind;
+      patternScale: number;
       visible: boolean;
     }>,
     recordHistory = true
@@ -4760,6 +5382,19 @@ export class StudioEngine {
     }
     if (patch.metalness !== undefined) {
       mat.metalness = patch.metalness;
+    }
+    if (
+      patch.proceduralPattern !== undefined ||
+      patch.patternScale !== undefined
+    ) {
+      const nextPat =
+        patch.proceduralPattern ??
+        ((mesh.userData.proceduralPattern as ProceduralPatternKind) ?? 'none');
+      const nextScale =
+        patch.patternScale ?? ((mesh.userData.patternScale as number) ?? 1);
+      mesh.userData.proceduralPattern = nextPat;
+      mesh.userData.patternScale = nextScale;
+      applyProceduralPatternToMaterial(mat, nextPat, nextScale, nextScale);
     }
     if (patch.opacity !== undefined) {
       const op = Math.max(0.08, Math.min(1, patch.opacity));
@@ -5105,6 +5740,19 @@ export class StudioEngine {
       cleanMesh.position.copy(mesh.position);
       cleanMesh.quaternion.copy(mesh.quaternion);
       cleanMesh.scale.copy(mesh.scale);
+      for (const child of mesh.children) {
+        if (
+          (child as THREE.Mesh).isMesh &&
+          child.name.startsWith('__mirrorTwin_')
+        ) {
+          const tw = child as THREE.Mesh;
+          const twClone = new THREE.Mesh(tw.geometry.clone(), baseMat.clone());
+          twClone.name = `${mesh.name}_${tw.name.replace('__', '')}`;
+          twClone.position.copy(tw.position);
+          twClone.scale.copy(tw.scale);
+          cleanMesh.add(twClone);
+        }
+      }
       exportScene.add(cleanMesh);
     }
 
@@ -5214,6 +5862,14 @@ export class StudioEngine {
       emissive: userEmissive,
       emissiveIntensity: round3(userIntensity),
       flatShading: Boolean(mat.flatShading),
+      proceduralPattern:
+        (mesh.userData.proceduralPattern as ProceduralPatternKind | undefined) ??
+        'none',
+      patternScale:
+        (mesh.userData.patternScale as number | undefined) ?? 1,
+      modifiers: mesh.userData.modifiers
+        ? { ...(mesh.userData.modifiers as ObjectModifierSettings) }
+        : { ...DEFAULT_MODIFIER_SETTINGS },
       subdivision: { ...subdiv },
       visible: userVisible,
       groupId: (mesh.userData.groupId as string | null | undefined) ?? null,
@@ -5482,7 +6138,105 @@ export class StudioEngine {
       archTool: this.archTool,
       isBlueprint2D: this.isBlueprint2D,
       cameraLensFov: this.cameraLensFov,
+      wallChainActive: Boolean(this.wallChainStart),
     });
+  }
+
+  /**
+   * Studio HD Photo / Render Snapshot (`1920x1080` or `2048x2048`, optional `.PNG` transparent background,
+   * automatically hiding all editor gizmos, grids, badges, and selection emissive tint during capture!)
+   */
+  public captureStudioSnapshot(options: StudioSnapshotOptions): string {
+    const targetW = options.resolution === '2k-square' ? 2048 : 1920;
+    const targetH = options.resolution === '2k-square' ? 2048 : 1080;
+
+    const prevSize = new THREE.Vector2();
+    this.renderer.getSize(prevSize);
+    const prevPixelRatio = this.renderer.getPixelRatio();
+    const prevAspect = this.camera.aspect;
+    const prevBg = this.scene.background;
+    const prevFog = this.scene.fog;
+    const prevClearAlpha = this.renderer.getClearAlpha();
+    const prevClearColor = new THREE.Color();
+    this.renderer.getClearColor(prevClearColor);
+
+    const gizmoHelper = this.transformControls.getHelper();
+    const prevStates = {
+      grid: this.gridSystem.group.visible,
+      gizmo: gizmoHelper.visible,
+      archOverlay: this.archEngine.overlayGroup.visible,
+      snapVis: this.snapVisualizer.group.visible,
+      protVis: this.protractorVisualizer.group.visible,
+      surfVis: this.surfaceNormalVisualizer.group.visible,
+      valVis: this.validationVisualizer.group.visible,
+    };
+
+    // Temporarily clear selection emissive glow so renders look photo-clean
+    const savedEmissives: Array<{
+      mat: THREE.MeshStandardMaterial;
+      hex: number;
+      intensity: number;
+    }> = [];
+    for (const [id, mesh] of this.meshMap.entries()) {
+      if (this.selectedIds.includes(id) || this.selectedId === id) {
+        const mat = this.getBaseMaterial(mesh);
+        savedEmissives.push({
+          mat,
+          hex: mat.emissive.getHex(),
+          intensity: mat.emissiveIntensity,
+        });
+        const userHex = (mesh.userData.userEmissiveHex as string) ?? '#000000';
+        const userInt = (mesh.userData.userEmissiveIntensity as number) ?? 0;
+        mat.emissive.set(userHex);
+        mat.emissiveIntensity = userInt;
+      }
+    }
+
+    try {
+      this.gridSystem.group.visible = false;
+      gizmoHelper.visible = false;
+      this.archEngine.overlayGroup.visible = false;
+      this.snapVisualizer.group.visible = false;
+      this.protractorVisualizer.group.visible = false;
+      this.surfaceNormalVisualizer.group.visible = false;
+      this.validationVisualizer.group.visible = false;
+
+      if (options.transparentBg) {
+        this.scene.background = null;
+        this.scene.fog = null;
+        this.renderer.setClearColor(0x000000, 0);
+      }
+
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(targetW, targetH, false);
+      this.camera.aspect = targetW / targetH;
+      this.camera.updateProjectionMatrix();
+
+      this.renderer.clear();
+      this.renderer.render(this.scene, this.camera);
+      return this.renderer.domElement.toDataURL('image/png');
+    } finally {
+      this.gridSystem.group.visible = prevStates.grid;
+      gizmoHelper.visible = prevStates.gizmo;
+      this.archEngine.overlayGroup.visible = prevStates.archOverlay;
+      this.snapVisualizer.group.visible = prevStates.snapVis;
+      this.protractorVisualizer.group.visible = prevStates.protVis;
+      this.surfaceNormalVisualizer.group.visible = prevStates.surfVis;
+      this.validationVisualizer.group.visible = prevStates.valVis;
+
+      for (const item of savedEmissives) {
+        item.mat.emissive.setHex(item.hex);
+        item.mat.emissiveIntensity = item.intensity;
+      }
+
+      this.scene.background = prevBg;
+      this.scene.fog = prevFog;
+      this.renderer.setClearColor(prevClearColor, prevClearAlpha);
+      this.renderer.setPixelRatio(prevPixelRatio);
+      this.renderer.setSize(prevSize.x, prevSize.y, false);
+      this.camera.aspect = prevAspect;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   private disposeMesh(mesh: THREE.Mesh): void {
@@ -5492,6 +6246,13 @@ export class StudioEngine {
     if (customLight) {
       mesh.remove(customLight);
       customLight.dispose();
+    }
+    const mirrorTwins = mesh.children.filter((c) =>
+      c.name.startsWith('__mirrorTwin_')
+    ) as THREE.Mesh[];
+    for (const tw of mirrorTwins) {
+      mesh.remove(tw);
+      tw.geometry.dispose();
     }
     const gridLines = mesh.getObjectByName('__subdivGridLines') as
       | THREE.LineSegments

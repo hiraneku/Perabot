@@ -15,11 +15,26 @@ export default defineConfig({
     allowedHosts: true,
   },
   build: {
+    chunkSizeWarningLimit: 720,
     rollupOptions: {
       output: {
-        manualChunks: {
-          three: ['three'],
-          react: ['react', 'react-dom'],
+        manualChunks(id) {
+          if (id.includes('node_modules/three/examples')) {
+            return 'three-addons';
+          }
+          if (id.includes('node_modules/three')) {
+            return 'three-core';
+          }
+          if (id.includes('node_modules/lucide-react')) {
+            return 'icons-vendor';
+          }
+          if (
+            id.includes('node_modules/react') ||
+            id.includes('node_modules/scheduler')
+          ) {
+            return 'react-vendor';
+          }
+          return undefined;
         },
       },
     },
