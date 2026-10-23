@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { StudioStrings } from '../i18n/translations';
 import {
+  AppLanguage,
   ArchBuildPhase,
   ArchDetectedRoom,
   ArchHouseData,
@@ -37,12 +38,24 @@ import {
   ArchWallStyle,
   BuildingFloorLayer,
   ProceduralPatternKind,
+  RoomSemanticType,
   SunEnvironmentSettings,
   WallDrawDefaults,
 } from '../types/studio';
 import { computeWallLength } from '../engine/ArchBuilderEngine';
+import { ROOM_TYPE_LABELS } from '../engine/archAnalysis/briefEvaluator';
+import {
+  computeSingleRoofQuantities,
+  computeSingleWallQuantities,
+  resolveSemanticRoomType,
+} from '../engine/archAnalysis/geometryMetrics';
+import {
+  createDefaultConstructionMaterialCatalog,
+  getMaterialDisplayName,
+} from '../engine/archAnalysis/materialTakeoff';
 
 interface ArchContextPanelProps {
+  lang?: AppLanguage;
   t: StudioStrings;
   phase: ArchBuildPhase;
   onClose: () => void;
@@ -68,7 +81,15 @@ interface ArchContextPanelProps {
   onUpdateRoomMeta: (
     roomId: string,
     patch: Partial<
-      Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+      Pick<
+        ArchRoomMeta,
+        | 'name'
+        | 'roomType'
+        | 'floorColor'
+        | 'floorPattern'
+        | 'floorMaterialId'
+        | 'ceilingVisible'
+      >
     >,
     commit?: boolean
   ) => void;
@@ -131,6 +152,7 @@ function formatHourClock(hourFloat: number): string {
 }
 
 export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
+  lang = 'id',
   t,
   phase,
   onClose,
@@ -164,6 +186,11 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
   isActivelyDrawing = false,
 }) => {
   const [roofStyleDraft, setRoofStyleDraft] = useState<ArchRoofStyle>('gable');
+
+  const materialCatalog =
+    archData.materialCatalog && archData.materialCatalog.length > 0
+      ? archData.materialCatalog
+      : createDefaultConstructionMaterialCatalog();
 
   const selectedWall =
     archSelection?.kind === 'wall'
@@ -538,6 +565,86 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                   />
                 </div>
 
+                {/* Independent Construction Material Selectors (System 2) */}
+                <div className="arch-const-mat-box">
+                  <div className="arch-slider-head">
+                    <span>{t.constMatSectionTitle}</span>
+                    <strong>
+                      {computeSingleWallQuantities(
+                        selectedWall,
+                        archData.openings
+                      ).netSingleSideAreaSqm.toFixed(2)}{' '}
+                      m²
+                    </strong>
+                  </div>
+                  <label className="arch-const-mat-row">
+                    <span>{t.constMatStructLabel}</span>
+                    <select
+                      value={selectedWall.structuralMaterialId ?? ''}
+                      onChange={(e) =>
+                        onUpdateWall(
+                          selectedWall.id,
+                          { structuralMaterialId: e.target.value || undefined },
+                          true
+                        )
+                      }
+                    >
+                      <option value="">{t.constMatUnassignedOption}</option>
+                      {materialCatalog.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {getMaterialDisplayName(m, lang)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="arch-const-mat-row">
+                    <span>{t.constMatExtFinishLabel}</span>
+                    <select
+                      value={selectedWall.exteriorFinishMaterialId ?? ''}
+                      onChange={(e) =>
+                        onUpdateWall(
+                          selectedWall.id,
+                          {
+                            exteriorFinishMaterialId:
+                              e.target.value || undefined,
+                          },
+                          true
+                        )
+                      }
+                    >
+                      <option value="">{t.constMatUnassignedOption}</option>
+                      {materialCatalog.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {getMaterialDisplayName(m, lang)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="arch-const-mat-row">
+                    <span>{t.constMatIntFinishLabel}</span>
+                    <select
+                      value={selectedWall.interiorFinishMaterialId ?? ''}
+                      onChange={(e) =>
+                        onUpdateWall(
+                          selectedWall.id,
+                          {
+                            interiorFinishMaterialId:
+                              e.target.value || undefined,
+                          },
+                          true
+                        )
+                      }
+                    >
+                      <option value="">{t.constMatUnassignedOption}</option>
+                      {materialCatalog.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {getMaterialDisplayName(m, lang)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
                 <button
                   type="button"
                   className="arch-secondary-cta"
@@ -727,6 +834,31 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                       <ArrowLeftRight size={14} />
                       <span>{t.archOpenFlipSwing}</span>
                     </button>
+                  </div>
+                )}
+
+                {selectedOpening.kind !== 'archway' && (
+                  <div className="arch-const-mat-box">
+                    <label className="arch-const-mat-row">
+                      <span>{t.constMatOpeningLabel}</span>
+                      <select
+                        value={selectedOpening.openingMaterialId ?? ''}
+                        onChange={(e) =>
+                          onUpdateOpening(
+                            selectedOpening.id,
+                            { openingMaterialId: e.target.value || undefined },
+                            true
+                          )
+                        }
+                      >
+                        <option value="">{t.constMatUnassignedOption}</option>
+                        {materialCatalog.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {getMaterialDisplayName(m, lang)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
                   </div>
                 )}
               </div>
@@ -1166,6 +1298,37 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                     </div>
                   </>
                 )}
+
+                <div className="arch-const-mat-box">
+                  <div className="arch-slider-head">
+                    <span>{t.constMatRoofLabel}</span>
+                    <strong>
+                      {computeSingleRoofQuantities(
+                        selectedRoof
+                      ).slopedSurfaceAreaSqm.toFixed(2)}{' '}
+                      m²
+                    </strong>
+                  </div>
+                  <label className="arch-const-mat-row">
+                    <select
+                      value={selectedRoof.roofMaterialId ?? ''}
+                      onChange={(e) =>
+                        onUpdateRoof(
+                          selectedRoof.id,
+                          { roofMaterialId: e.target.value || undefined },
+                          true
+                        )
+                      }
+                    >
+                      <option value="">{t.constMatUnassignedOption}</option>
+                      {materialCatalog.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {getMaterialDisplayName(m, lang)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
               </div>
             )}
           </>
@@ -1219,12 +1382,89 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                             className="arch-tiny-chip"
                             onClick={(e) => {
                               e.stopPropagation();
-                              onUpdateRoomMeta(room.id, { name: rp }, true);
+                              const inferred = resolveSemanticRoomType(
+                                undefined,
+                                rp
+                              );
+                              onUpdateRoomMeta(
+                                room.id,
+                                {
+                                  name: rp,
+                                  roomType:
+                                    inferred.roomType !== 'unassigned'
+                                      ? inferred.roomType
+                                      : undefined,
+                                },
+                                true
+                              );
                             }}
                           >
                             {rp}
                           </button>
                         ))}
+                      </div>
+
+                      <div
+                        className="arch-const-mat-box"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <label className="arch-const-mat-row">
+                          <span>{t.briefRoomTypeLabel}</span>
+                          <select
+                            value={room.roomType}
+                            onChange={(e) =>
+                              onUpdateRoomMeta(
+                                room.id,
+                                {
+                                  roomType: e.target.value as RoomSemanticType,
+                                },
+                                true
+                              )
+                            }
+                          >
+                            <option value="unassigned">
+                              {ROOM_TYPE_LABELS.unassigned[lang]}
+                            </option>
+                            {(
+                              [
+                                'living',
+                                'bedroom',
+                                'bathroom',
+                                'kitchen',
+                                'dining',
+                                'study',
+                                'garage',
+                                'terrace',
+                                'storage',
+                                'other',
+                              ] as const
+                            ).map((rt) => (
+                              <option key={rt} value={rt}>
+                                {ROOM_TYPE_LABELS[rt][lang]}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="arch-const-mat-row">
+                          <span>{t.constMatFloorLabel}</span>
+                          <select
+                            value={room.floorMaterialId ?? ''}
+                            onChange={(e) =>
+                              onUpdateRoomMeta(
+                                room.id,
+                                { floorMaterialId: e.target.value || undefined },
+                                true
+                              )
+                            }
+                          >
+                            <option value="">{t.constMatUnassignedOption}</option>
+                            {materialCatalog.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {getMaterialDisplayName(m, lang)}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
                       </div>
 
                       <div className="arch-room-controls">

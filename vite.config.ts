@@ -34,6 +34,15 @@ export default defineConfig({
           ) {
             return 'react-vendor';
           }
+          if (id.includes('/src/i18n/')) {
+            return 'i18n-dict';
+          }
+          if (
+            id.includes('/src/engine/archAnalysis/') ||
+            id.includes('/src/engine/blueprintExporter')
+          ) {
+            return 'arch-analysis';
+          }
           return undefined;
         },
       },

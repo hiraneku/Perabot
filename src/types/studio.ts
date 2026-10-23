@@ -430,6 +430,19 @@ export interface Vec2XZ {
   z: number;
 }
 
+export type RoomSemanticType =
+  | 'living'
+  | 'bedroom'
+  | 'bathroom'
+  | 'kitchen'
+  | 'dining'
+  | 'study'
+  | 'garage'
+  | 'terrace'
+  | 'storage'
+  | 'other'
+  | 'unassigned';
+
 export interface ArchWallSegment {
   id: string;
   floorId: string;
@@ -445,6 +458,10 @@ export interface ArchWallSegment {
   interiorPattern?: ProceduralPatternKind;
   roughness: number;
   hasBaseboard: boolean;
+  /** Independent construction-material assignments (separate from visual color/pattern!) */
+  structuralMaterialId?: string;
+  exteriorFinishMaterialId?: string;
+  interiorFinishMaterialId?: string;
 }
 
 export interface ArchOpeningItem {
@@ -459,6 +476,7 @@ export interface ArchOpeningItem {
   frameColor: string;
   flipSwing?: boolean;
   isOpen?: boolean; // interactive door swing state in Walkthrough & editor
+  openingMaterialId?: string;
 }
 
 export interface ArchRoomMeta {
@@ -466,8 +484,10 @@ export interface ArchRoomMeta {
   floorId: string;
   centroid: Vec2XZ;
   name: string;
+  roomType?: RoomSemanticType;
   floorColor: string;
   floorPattern?: ProceduralPatternKind;
+  floorMaterialId?: string;
   ceilingVisible: boolean;
 }
 
@@ -475,12 +495,15 @@ export interface ArchDetectedRoom {
   id: string;
   floorId: string;
   name: string;
+  roomType: RoomSemanticType;
+  roomTypeExplicit: boolean;
   polygon: Vec2XZ[];
   centroid: Vec2XZ;
   areaSqm: number;
   perimeterM: number;
   floorColor: string;
   floorPattern?: ProceduralPatternKind;
+  floorMaterialId?: string;
   ceilingVisible: boolean;
 }
 
@@ -495,6 +518,7 @@ export interface ArchStairItem {
   runLength: number; // default 2.8m
   color: string;
   autoCutoutUpper: boolean;
+  stairMaterialId?: string;
 }
 
 export interface ArchRoofItem {
@@ -516,7 +540,218 @@ export interface ArchRoofItem {
   hasSkylight?: boolean;
   skylightWidth?: number;
   skylightDepth?: number;
+  roofMaterialId?: string;
 }
+
+/* =========================================================
+   6-System Integrated Architectural Project Workflow Types
+   ========================================================= */
+
+// SYSTEM 1: Project Brief & Requirements
+export type RequirementKind =
+  | 'required'
+  | 'target'
+  | 'preference'
+  | 'information';
+
+export type RequirementStatus =
+  | 'met'
+  | 'unmet'
+  | 'review'
+  | 'not-applicable';
+
+export type RequirementPriority = 'high' | 'normal' | 'low';
+
+export type RequirementMetricTarget =
+  | 'room-count'
+  | 'room-min-area'
+  | 'total-floor-area'
+  | 'floor-count'
+  | 'site-min-area'
+  | 'style-note';
+
+export interface ProjectRequirementItem {
+  id: string;
+  kind: RequirementKind;
+  metric: RequirementMetricTarget;
+  label: string;
+  roomType?: Exclude<RoomSemanticType, 'unassigned'>;
+  targetCount?: number;
+  minVal?: number;
+  maxVal?: number;
+  noteValue?: string;
+  priority: RequirementPriority;
+  enabled: boolean;
+}
+
+export interface ProjectBudgetTarget {
+  enabled: boolean;
+  amount: number;
+  currency: 'IDR' | 'USD' | 'JPY';
+  scope: 'materials' | 'construction' | 'custom';
+}
+
+export type BriefTemplateId =
+  | 'single-storey'
+  | 'two-storey-family'
+  | 'modern-minimalist'
+  | 'home-with-garage'
+  | 'blank-custom';
+
+export interface ProjectBriefData {
+  id: string;
+  projectType: string;
+  description: string;
+  preferredStyle: string;
+  freeformNotes: string;
+  requirements: ProjectRequirementItem[];
+  targetBudget: ProjectBudgetTarget;
+}
+
+// SYSTEM 2: Construction Materials & Cost Estimator
+export type ConstructionMaterialCategory =
+  | 'structure'
+  | 'masonry'
+  | 'finish-wall'
+  | 'flooring'
+  | 'roofing'
+  | 'openings'
+  | 'outdoor';
+
+export type MaterialUnitKind = 'm2' | 'm3' | 'm' | 'kg' | 'L' | 'pcs';
+
+export type MaterialPriceSourceKind =
+  | 'catalog-illustrative'
+  | 'user-defined'
+  | 'estimated';
+
+export interface ConstructionMaterialDef {
+  id: string;
+  name: Record<AppLanguage, string>;
+  customName?: string;
+  category: ConstructionMaterialCategory;
+  unit: MaterialUnitKind;
+  unitPrice?: number; // undefined = unpriced (never silently treated as 0 verified!)
+  currency: 'IDR';
+  wastePercentage: number; // applied ONLY when supportsWaste === true
+  supportsWaste: boolean;
+  coveragePerUnit?: number; // e.g. m2 per Liter for paint secondary estimate
+  thicknessAssumptionM?: number;
+  priceSource?: string;
+  priceDate?: string;
+  notes?: string;
+  sourceKind: MaterialPriceSourceKind;
+}
+
+// SYSTEM 5: Site & Terrain Planning
+// Coordinate convention: +Z = Front (South street entrance), -Z = Rear (North), -X = Left (West), +X = Right (East)
+export type SiteEdgeSide = 'front' | 'rear' | 'left' | 'right';
+
+export type OutdoorZoneKind =
+  | 'garden'
+  | 'driveway'
+  | 'patio'
+  | 'walkway'
+  | 'parking'
+  | 'recreation';
+
+export interface SiteSetbacks {
+  front: number; // +Z edge distance in meters
+  rear: number; // -Z edge distance in meters
+  left: number; // -X edge distance in meters
+  right: number; // +X edge distance in meters
+}
+
+export interface SiteOutdoorZone {
+  id: string;
+  name: string;
+  kind: OutdoorZoneKind;
+  center: Vec2XZ;
+  width: number;
+  depth: number;
+  color: string;
+  surfaceMaterialId?: string;
+}
+
+export interface SitePlanningData {
+  enabled: boolean;
+  width: number; // X span in meters (e.g. 15m)
+  depth: number; // Z span in meters (e.g. 20m)
+  center: Vec2XZ; // World XZ center of the rectangular site plot
+  setbacksEnabled: boolean;
+  setbacks: SiteSetbacks;
+  entranceSide: SiteEdgeSide;
+  snapToSite: boolean;
+  outdoorZones: SiteOutdoorZone[];
+}
+
+// SYSTEM 4: Spatial & Design Validation
+export type ValidationSeverity = 'error' | 'warning' | 'info';
+
+export type ValidationCategory =
+  | 'geometry'
+  | 'opening-conflict'
+  | 'spatial-usability'
+  | 'project-requirement'
+  | 'site-planning';
+
+export type ValidationAutoFixAction =
+  | {
+      kind: 'clamp-opening-to-wall';
+      openingId: string;
+      nextOffsetRatio: number;
+      nextWidth: number;
+      nextHeight: number;
+      nextSillHeight: number;
+    }
+  | {
+      kind: 'delete-degenerate-wall';
+      wallId: string;
+    };
+
+export interface DesignValidationFinding {
+  id: string;
+  ruleId: string;
+  category: ValidationCategory;
+  severity: ValidationSeverity;
+  title: string;
+  explanation: string;
+  suggestion?: string;
+  relatedElementIds: Array<{
+    domain: 'wall' | 'opening' | 'room' | 'stair' | 'roof' | 'object' | 'site' | 'brief';
+    id: string;
+    label?: string;
+  }>;
+  autoFix?: ValidationAutoFixAction;
+}
+
+// SYSTEM 6: Live Design Documentation Settings
+export type ArchDocumentKind =
+  | 'floor-plan'
+  | 'site-plan'
+  | 'elevation'
+  | 'door-window-schedule'
+  | 'material-report'
+  | 'validation-report';
+
+export type ElevationViewDirection = 'front' | 'rear' | 'left' | 'right';
+
+export interface DocumentationExportSettings {
+  selectedDocKind: ArchDocumentKind;
+  elevationDirection: ElevationViewDirection;
+  showDimensions: boolean;
+  showRoomLabels: boolean;
+  showSetbacks: boolean;
+  paperTheme: 'blueprint-dark' | 'architect-white';
+}
+
+export type ArchWorkflowTab =
+  | 'brief'
+  | 'site'
+  | 'materials'
+  | 'validation'
+  | 'versions'
+  | 'docs';
 
 export interface SunEnvironmentSettings {
   sunOverride: boolean;
@@ -532,6 +767,10 @@ export interface ArchHouseData {
   stairs: ArchStairItem[];
   roofs: ArchRoofItem[];
   sun: SunEnvironmentSettings;
+  brief?: ProjectBriefData;
+  materialCatalog?: ConstructionMaterialDef[];
+  site?: SitePlanningData;
+  docSettings?: DocumentationExportSettings;
 }
 
 export type ArchSelection =
@@ -584,6 +823,7 @@ export interface SceneObjectData {
   modularId?: string;
   surfaceRule?: SurfacePlacementRule;
   floorId?: string;
+  constructionMaterialId?: string;
   pointLight?: ObjectPointLightConfig;
   modelAssetId?: string;
   modelFormat?: string;
@@ -600,8 +840,32 @@ export interface ImportedModelBlobRecord {
   createdAt: number;
 }
 
+// SYSTEM 3: Design Alternatives & Versioning (Independent Deep Snapshots)
+export const CURRENT_PROJECT_SCHEMA_VERSION = 2;
+
+export interface DesignAlternativeSnapshot {
+  objects: SceneObjectData[];
+  floors: BuildingFloorLayer[];
+  activeFloorId: string;
+  floorViewMode: FloorViewMode;
+  archData: ArchHouseData;
+  gridSettings?: GridSettings;
+  sculptedHeightsB64?: string | null;
+}
+
+export interface DesignAlternativeRecord {
+  id: string;
+  name: string;
+  description: string;
+  createdAt: number;
+  schemaVersion: number;
+  thumbnailDataUrl?: string;
+  snapshot: DesignAlternativeSnapshot;
+}
+
 export interface SerializedProjectFile {
   format: 'perabot-project-v1';
+  schemaVersion?: number;
   id: string;
   name: string;
   mode: StudioMode;
@@ -618,6 +882,7 @@ export interface SerializedProjectFile {
   floorViewMode?: FloorViewMode;
   placementValidation?: boolean;
   archData?: ArchHouseData;
+  designAlternatives?: DesignAlternativeRecord[];
   embeddedModels?: Record<
     string,
     { name: string; format: string; thumbDataUrl: string; base64Glb: string }
@@ -878,6 +1143,53 @@ export const DEFAULT_SUN_ENVIRONMENT: SunEnvironmentSettings = {
   cameraFov: 46,
 };
 
+export function createDefaultProjectBrief(): ProjectBriefData {
+  return {
+    id: 'brief_default',
+    projectType: '',
+    description: '',
+    preferredStyle: '',
+    freeformNotes: '',
+    requirements: [],
+    targetBudget: {
+      enabled: false,
+      amount: 850_000_000,
+      currency: 'IDR',
+      scope: 'construction',
+    },
+  };
+}
+
+export function createDefaultSitePlanningData(): SitePlanningData {
+  return {
+    enabled: false,
+    width: 15,
+    depth: 20,
+    center: { x: 0, z: 0 },
+    setbacksEnabled: true,
+    setbacks: {
+      front: 3.0,
+      rear: 2.0,
+      left: 1.5,
+      right: 1.5,
+    },
+    entranceSide: 'front',
+    snapToSite: false,
+    outdoorZones: [],
+  };
+}
+
+export function createDefaultDocSettings(): DocumentationExportSettings {
+  return {
+    selectedDocKind: 'floor-plan',
+    elevationDirection: 'front',
+    showDimensions: true,
+    showRoomLabels: true,
+    showSetbacks: true,
+    paperTheme: 'blueprint-dark',
+  };
+}
+
 export function createEmptyArchHouseData(): ArchHouseData {
   return {
     walls: [],
@@ -886,6 +1198,9 @@ export function createEmptyArchHouseData(): ArchHouseData {
     stairs: [],
     roofs: [],
     sun: { ...DEFAULT_SUN_ENVIRONMENT },
+    brief: createDefaultProjectBrief(),
+    site: createDefaultSitePlanningData(),
+    docSettings: createDefaultDocSettings(),
   };
 }
 

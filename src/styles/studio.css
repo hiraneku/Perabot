@@ -8220,6 +8220,699 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   color: #6ee7b7;
 }
 
+/* =========================================================
+   Integrated 6-System Architectural Project Workflow Styles
+   ========================================================= */
+
+.arch-phase-btn.is-workflow {
+  border-color: rgba(56, 189, 248, 0.42);
+  color: #e0f2fe;
+}
+
+.arch-phase-btn.is-workflow.active {
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+  border-color: #7dd3fc;
+  color: #ffffff;
+}
+
+.arch-phase-badge.warn {
+  background: #f59e0b;
+  color: #0f172a;
+}
+
+.arch-const-mat-box {
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arch-const-mat-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.8px;
+  color: var(--text-secondary);
+}
+
+.arch-const-mat-row select {
+  width: 100%;
+  padding: 5px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11.2px;
+}
+
+.arch-workflow-drawer {
+  position: absolute;
+  top: 60px;
+  left: 58px;
+  width: min(430px, calc(100vw - 76px));
+  max-height: calc(100% - 148px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  border: 1px solid var(--border-strong, rgba(148, 163, 184, 0.28));
+  background: var(--bg-panel);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+  z-index: 28;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.arch-wf-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+
+.arch-wf-header-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.arch-wf-updating-pill {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}
+
+.arch-wf-inspect-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px;
+  background: rgba(245, 158, 11, 0.16);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+  font-size: 11px;
+}
+
+.arch-wf-inspect-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.arch-wf-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+}
+
+.arch-wf-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.arch-wf-tab {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.2px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.arch-wf-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.arch-wf-tab.active {
+  background: rgba(37, 99, 235, 0.22);
+  border-color: rgba(96, 165, 250, 0.55);
+  color: #93c5fd;
+}
+
+.arch-wf-tab-badge {
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9.8px;
+  font-weight: 800;
+  background: rgba(148, 163, 184, 0.24);
+  color: var(--text-primary);
+}
+
+.arch-wf-tab-badge.danger {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.arch-wf-tab-badge.warn {
+  background: #f59e0b;
+  color: #0f172a;
+}
+
+.arch-wf-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 10px 11px 14px;
+}
+
+.arch-wf-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.arch-wf-card {
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.arch-wf-card.warn-border {
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.arch-wf-card-title {
+  font-size: 11.5px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.arch-wf-subhead {
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.arch-wf-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.arch-wf-chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.arch-wf-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 10.8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.arch-wf-chip-btn.active,
+.arch-wf-chip-btn:hover {
+  border-color: var(--accent-blue);
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.arch-wf-chip-btn.full,
+.arch-wf-primary-btn.full {
+  width: 100%;
+}
+
+.arch-wf-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  background: linear-gradient(135deg, #0284c7, #2563eb);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.arch-wf-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.arch-wf-mini-btn.active {
+  border-color: #f59e0b;
+  color: #fde68a;
+}
+
+.arch-wf-icon-danger {
+  padding: 4px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #f87171;
+  cursor: pointer;
+}
+
+.arch-wf-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.arch-wf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.6px;
+  color: var(--text-secondary);
+}
+
+.arch-wf-field input,
+.arch-wf-field select,
+.arch-wf-field textarea,
+.arch-wf-card input[type='text'],
+.arch-wf-card select {
+  padding: 5px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 11.2px;
+  font-family: inherit;
+}
+
+.arch-wf-inline-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.arch-wf-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.arch-wf-room-assign-list,
+.arch-wf-req-list,
+.arch-wf-compact-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.arch-wf-room-assign-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 128px auto;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.arch-wf-room-assign-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.arch-wf-room-assign-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arch-wf-room-assign-meta span {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.arch-wf-req-card,
+.arch-wf-alt-card,
+.arch-wf-finding-card {
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.26);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.arch-wf-req-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.arch-wf-req-controls select,
+.arch-wf-req-controls input {
+  padding: 3px 5px;
+  border-radius: 5px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 10.5px;
+  max-width: 110px;
+}
+
+.arch-wf-status-pill,
+.arch-wf-sev-pill,
+.arch-wf-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.arch-wf-status-pill.met {
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+}
+
+.arch-wf-status-pill.unmet,
+.arch-wf-sev-pill.error {
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+}
+
+.arch-wf-status-pill.review,
+.arch-wf-sev-pill.warning {
+  background: rgba(245, 158, 11, 0.22);
+  color: #fcd34d;
+}
+
+.arch-wf-status-pill.not-applicable,
+.arch-wf-sev-pill.info,
+.arch-wf-scope-badge {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}
+
+.arch-wf-req-actual {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.arch-wf-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.arch-wf-stat-box {
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.arch-wf-stat-box span {
+  font-size: 9.8px;
+  color: var(--text-muted);
+}
+
+.arch-wf-stat-box strong {
+  font-size: 11.8px;
+  color: var(--text-primary);
+}
+
+.arch-wf-disclaimer {
+  margin: 0;
+  font-size: 10.4px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.arch-wf-nudge-bar {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.arch-wf-big-cost {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 6px 0 2px;
+}
+
+.arch-wf-big-cost span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.arch-wf-big-cost strong {
+  font-size: 17px;
+  font-weight: 800;
+  color: #34d399;
+}
+
+.arch-wf-budget-box {
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+}
+
+.arch-wf-warn-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde68a;
+  font-size: 10.4px;
+  line-height: 1.38;
+}
+
+.arch-wf-table-scroll {
+  overflow-x: auto;
+}
+
+.arch-wf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10.8px;
+}
+
+.arch-wf-table th,
+.arch-wf-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.arch-wf-table th {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.arch-wf-subcell {
+  font-size: 9.6px;
+  color: var(--text-muted);
+}
+
+.arch-wf-catalog-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.arch-wf-custom-mat-creator {
+  padding: 7px;
+  border-radius: 7px;
+  border: 1px dashed var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.arch-wf-cat-item {
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.arch-wf-cat-item-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.arch-wf-exclusions p {
+  margin: 4px 0 0;
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.arch-wf-healthy-box {
+  padding: 16px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  background: rgba(6, 78, 59, 0.25);
+  color: #6ee7b7;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.arch-wf-finding-card.sev-error {
+  border-left: 3px solid #ef4444;
+}
+
+.arch-wf-finding-card.sev-warning {
+  border-left: 3px solid #f59e0b;
+}
+
+.arch-wf-finding-card.sev-info {
+  border-left: 3px solid #38bdf8;
+}
+
+.arch-wf-finding-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.4px;
+}
+
+.arch-wf-finding-desc {
+  margin: 0;
+  font-size: 10.6px;
+  color: var(--text-secondary);
+}
+
+.arch-wf-finding-sug {
+  margin: 0;
+  font-size: 10.3px;
+  color: #93c5fd;
+}
+
+.arch-wf-alt-title-input {
+  flex: 1;
+  font-weight: 700;
+}
+
+.arch-wf-restore-confirm {
+  padding: 7px;
+  border-radius: 7px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  font-size: 10.6px;
+}
+
+.arch-wf-restore-confirm p {
+  margin: 0 0 6px;
+}
+
+.arch-wf-doc-preview {
+  margin-top: 6px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: #0c192c;
+}
+
+.arch-wf-doc-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.arch-wf-doc-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.txt-emerald {
+  color: #34d399;
+}
+
+.txt-rose {
+  color: #fb7185;
+}
+
+@media (max-width: 768px) {
+  .arch-workflow-drawer {
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: 66px;
+    width: auto;
+    max-height: 56dvh;
+  }
+
+  .arch-wf-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
 
 
 

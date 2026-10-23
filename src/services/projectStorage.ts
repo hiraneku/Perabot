@@ -6,6 +6,7 @@ import {
   SavedProjectRecord,
   SerializedProjectFile,
 } from '../types/studio';
+import { migrateSerializedProjectFile } from '../engine/archAnalysis/schemaMigration';
 
 const DB_NAME = 'PerabotStudioDB';
 const DB_VERSION = 2;
@@ -147,7 +148,12 @@ export async function listProjects(): Promise<SavedProjectRecord[]> {
       const store = tx.objectStore(STORE_PROJECTS);
       const req = store.getAll();
       req.onsuccess = () => {
-        const items = (req.result as SavedProjectRecord[]) ?? [];
+        const items = ((req.result as SavedProjectRecord[]) ?? []).map(
+          (rec) => ({
+            ...rec,
+            scene: migrateSerializedProjectFile(rec.scene),
+          })
+        );
         items.sort((a, b) => b.updatedAt - a.updatedAt);
         resolve(items);
       };
@@ -314,7 +320,7 @@ export async function importProjectBackupFile(
     file.name.replace(/\.(perabot|json)$/i, '') ||
     'Impor Proyek';
 
-  const scene: SerializedProjectFile = {
+  const scene: SerializedProjectFile = migrateSerializedProjectFile({
     format: 'perabot-project-v1',
     id: newId,
     name: cleanName,
@@ -326,14 +332,22 @@ export async function importProjectBackupFile(
     snapSettings: parsed.snapSettings,
     surfaceSettings: parsed.surfaceSettings,
     lightingMood: parsed.lightingMood,
-  };
+    sculptedHeightsB64: parsed.sculptedHeightsB64 ?? null,
+    floors: parsed.floors,
+    activeFloorId: parsed.activeFloorId,
+    floorViewMode: parsed.floorViewMode,
+    placementValidation: parsed.placementValidation,
+    archData: parsed.archData,
+    designAlternatives: parsed.designAlternatives,
+  });
 
+  const wallCnt = scene.archData?.walls.length ?? 0;
   const record: SavedProjectRecord = {
     id: newId,
     name: cleanName,
     mode: scene.mode,
     thumbnailDataUrl: '',
-    objectCount: scene.objects.length,
+    objectCount: scene.objects.length + wallCnt,
     createdAt: scene.createdAt,
     updatedAt: now,
     scene,

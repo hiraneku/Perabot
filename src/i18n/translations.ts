@@ -587,6 +587,129 @@ export interface StudioStrings {
   importAssetsPackBtn: string;
   assetsPackExportedToast: string;
   assetsPackImportedToast: string;
+
+  // Integrated 6-System Architectural Project Workflow (`Buat Rumah`)
+  archWorkflowBtn: string;
+  archWorkflowTitle: string;
+  archWorkflowUpdating: string;
+  wfTabBrief: string;
+  wfTabSite: string;
+  wfTabMaterials: string;
+  wfTabValidation: string;
+  wfTabVersions: string;
+  wfTabDocs: string;
+
+  // System 1: Project Brief & Requirements
+  briefTemplateLabel: string;
+  briefTplSingleStorey: string;
+  briefTplTwoStorey: string;
+  briefTplMinimalist: string;
+  briefTplGarage: string;
+  briefTplBlank: string;
+  briefProjectTypeLabel: string;
+  briefStyleLabel: string;
+  briefDescLabel: string;
+  briefNotesLabel: string;
+  briefBudgetTitle: string;
+  briefBudgetScopeMaterials: string;
+  briefBudgetScopeConstruction: string;
+  briefBudgetScopeCustom: string;
+  briefAddRequirementBtn: string;
+  briefStatusMet: string;
+  briefStatusUnmet: string;
+  briefStatusReview: string;
+  briefStatusNA: string;
+  briefRoomTypeLabel: string;
+  briefUnassignedRoomsTitle: string;
+  briefFocusBtn: string;
+
+  // System 2: Construction Materials & Cost Estimator
+  constMatSectionTitle: string;
+  constMatSeparatedHint: string;
+  constMatStructLabel: string;
+  constMatExtFinishLabel: string;
+  constMatIntFinishLabel: string;
+  constMatFloorLabel: string;
+  constMatRoofLabel: string;
+  constMatOpeningLabel: string;
+  constMatStairLabel: string;
+  constMatObjectLabel: string;
+  constMatUnassignedOption: string;
+  constMatAutoAssignBtn: string;
+  constMatAutoAssignedToast: string;
+  takeoffTotalEstLabel: string;
+  takeoffMaterialOnlyBadge: string;
+  takeoffScopeMismatchWarn: string;
+  takeoffMissingAssignTitle: string;
+  takeoffUnpricedTitle: string;
+  takeoffEditCatalogTitle: string;
+  takeoffAddCustomMatBtn: string;
+  takeoffUnitPriceLabel: string;
+  takeoffWastePctLabel: string;
+  takeoffByFloorTitle: string;
+
+  // System 3: Design Alternatives & Versioning
+  altSaveNewBtn: string;
+  altNamePlaceholder: string;
+  altDescPlaceholder: string;
+  altEmptyHint: string;
+  altInspectBtn: string;
+  altInspectingBanner: string;
+  altCloseInspectBtn: string;
+  altRestoreBtn: string;
+  altRestoreConfirmMsg: string;
+  altRestoredToast: string;
+  altDuplicateProjectBtn: string;
+  altCompareTitle: string;
+  altActiveWorkingLabel: string;
+
+  // System 4: Spatial & Design Validation
+  valAllCategories: string;
+  valCatGeometry: string;
+  valCatOpening: string;
+  valCatSpatial: string;
+  valCatBrief: string;
+  valCatSite: string;
+  valSevError: string;
+  valSevWarning: string;
+  valSevInfo: string;
+  valHealthyMsg: string;
+  valAutoFixBtn: string;
+  valAutoFixedToast: string;
+  valRerunBtn: string;
+
+  // System 5: Site & Terrain Planning
+  siteEnableToggle: string;
+  siteDimensionsLabel: string;
+  siteSetbacksTitle: string;
+  siteSetbackDisclaimer: string;
+  siteFrontLabel: string;
+  siteRearLabel: string;
+  siteLeftLabel: string;
+  siteRightLabel: string;
+  siteEntranceLabel: string;
+  siteNudgeBuildingTitle: string;
+  siteRotate90Btn: string;
+  siteCenterOnPlotBtn: string;
+  siteOutdoorZonesTitle: string;
+  siteAddZoneBtn: string;
+  siteAreaSummaryLabel: string;
+  siteFootprintLabel: string;
+  siteOpenAreaLabel: string;
+
+  // System 6: Live Design Documentation
+  docSourceLabel: string;
+  docKindFloorPlan: string;
+  docKindSitePlan: string;
+  docKindElevation: string;
+  docKindSchedule: string;
+  docKindMaterialReport: string;
+  docKindValidationReport: string;
+  docThemeDark: string;
+  docThemeWhite: string;
+  docExportPngBtn: string;
+  docExportHtmlBtn: string;
+  docSectionLimitationNote: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -1189,6 +1312,128 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     importAssetsPackBtn: 'Impor Koleksi',
     assetsPackExportedToast: 'Paket koleksi properti berhasil diekspor',
     assetsPackImportedToast: 'Koleksi properti berhasil diimpor',
+
+    archWorkflowBtn: 'Studio Proyek',
+    archWorkflowTitle: 'Alur Proyek Arsitektur Terpadu',
+    archWorkflowUpdating: 'Memperbarui analisis...',
+    wfTabBrief: 'Brief',
+    wfTabSite: 'Tapak',
+    wfTabMaterials: 'RAB & Material',
+    wfTabValidation: 'Validasi',
+    wfTabVersions: 'Versi',
+    wfTabDocs: 'Dokumen',
+
+    briefTemplateLabel: 'Templat Awal Brief (Dapat Diedit)',
+    briefTplSingleStorey: 'Rumah 1 Lantai Kompak',
+    briefTplTwoStorey: 'Rumah Keluarga 2 Lantai',
+    briefTplMinimalist: 'Hunian Minimalis Modern',
+    briefTplGarage: 'Rumah + Garasi Terpadu',
+    briefTplBlank: 'Brief Kosong Kustom',
+    briefProjectTypeLabel: 'Tipe Proyek',
+    briefStyleLabel: 'Gaya Arsitektur',
+    briefDescLabel: 'Deskripsi Singkat',
+    briefNotesLabel: 'Catatan Perencanaan Bebas',
+    briefBudgetTitle: 'Target Anggaran Opsional',
+    briefBudgetScopeMaterials: 'Khusus Material Saja',
+    briefBudgetScopeConstruction: 'Konstruksi Penuh',
+    briefBudgetScopeCustom: 'Cakupan Kustom',
+    briefAddRequirementBtn: '+ Tambah Kebutuhan Ruang/Target',
+    briefStatusMet: 'Terpenuhi',
+    briefStatusUnmet: 'Belum Terpenuhi',
+    briefStatusReview: 'Perlu Tinjauan',
+    briefStatusNA: 'Info',
+    briefRoomTypeLabel: 'Fungsi Ruang',
+    briefUnassignedRoomsTitle: 'Ruang Belum Dikategorikan (Klik untuk Pilih Fungsi)',
+    briefFocusBtn: 'Fokus',
+
+    constMatSectionTitle: 'Material Konstruksi (Terpisah dari Warna Visual)',
+    constMatSeparatedHint:
+      'Mengubah warna cat atau motif visual TIDAK mengubah penetapan material konstruksi maupun RAB.',
+    constMatStructLabel: 'Struktur Inti Tembok',
+    constMatExtFinishLabel: 'Finishing Luar',
+    constMatIntFinishLabel: 'Finishing Dalam',
+    constMatFloorLabel: 'Material Konstruksi Lantai',
+    constMatRoofLabel: 'Material Penutup/Struktur Atap',
+    constMatOpeningLabel: 'Material Unit Kusen/Daun',
+    constMatStairLabel: 'Material Struktur Tangga',
+    constMatObjectLabel: 'Material Konstruksi Blok',
+    constMatUnassignedOption: '— Belum Dipilih (Unassigned) —',
+    constMatAutoAssignBtn: 'Isi Standar ke Elemen Kosong',
+    constMatAutoAssignedToast: 'Material konstruksi standar diterapkan pada elemen yang belum dipilih',
+    takeoffTotalEstLabel: 'Estimasi Biaya Material',
+    takeoffMaterialOnlyBadge: 'Cakupan Khusus Material (Material-Only)',
+    takeoffScopeMismatchWarn:
+      'Perhatian Cakupan: Target anggaran Anda disetel ke Konstruksi Penuh/Kustom, sedangkan hitungan ini hanya mencakup kuantitas Material Bangunan (belum termasuk upah tukang, MEP, izin, & pajak).',
+    takeoffMissingAssignTitle: 'Elemen Belum Diberi Material Konstruksi',
+    takeoffUnpricedTitle: 'Material Tanpa Harga Satuan',
+    takeoffEditCatalogTitle: 'Katalog Material & Harga Satuan (Dapat Diedit)',
+    takeoffAddCustomMatBtn: '+ Material Kustom',
+    takeoffUnitPriceLabel: 'Harga Satuan (Rp)',
+    takeoffWastePctLabel: 'Waste (%)',
+    takeoffByFloorTitle: 'Rincian per Lantai',
+
+    altSaveNewBtn: '+ Simpan Alternatif Desain',
+    altNamePlaceholder: 'Nama opsi (mis. Opsi A - Atap Pelana)',
+    altDescPlaceholder: 'Catatan perubahan opsi ini...',
+    altEmptyHint:
+      'Simpan snapshot independen dari model bangunan, material, brief, & tapak untuk membandingkan berbagai opsi desain secara berdampingan.',
+    altInspectBtn: 'Inspeksi',
+    altInspectingBanner: 'Mode Inspeksi Baca-Saja (Model Aktif Tidak Berubah)',
+    altCloseInspectBtn: 'Tutup Inspeksi',
+    altRestoreBtn: 'Pulihkan ke Aktif',
+    altRestoreConfirmMsg:
+      'Pulihkan opsi ini ke model kerja aktif? (Anda tetap dapat menekan Undo / Ctrl+Z jika berubah pikiran).',
+    altRestoredToast: 'Alternatif desain dipulihkan ke model aktif',
+    altDuplicateProjectBtn: 'Duplikat Opsi',
+    altCompareTitle: 'Komparasi Berdampingan',
+    altActiveWorkingLabel: 'Model Kerja Aktif (Live)',
+
+    valAllCategories: 'Semua',
+    valCatGeometry: 'Geometri',
+    valCatOpening: 'Bukaan & Tembok',
+    valCatSpatial: 'Kenyamanan Ruang',
+    valCatBrief: 'Target Brief',
+    valCatSite: 'Tapak & Sempadan',
+    valSevError: 'Error',
+    valSevWarning: 'Peringatan',
+    valSevInfo: 'Info',
+    valHealthyMsg: 'Tidak ada konflik geometri atau peringatan tata ruang yang terdeteksi.',
+    valAutoFixBtn: 'Sesuaikan Otomatis',
+    valAutoFixedToast: 'Penyesuaian otomatis diterapkan',
+    valRerunBtn: 'Cek Ulang',
+
+    siteEnableToggle: 'Aktifkan Batas Lahan & Garis Sempadan',
+    siteDimensionsLabel: 'Ukuran Lahan Tapak (Lebar X × Panjang Z)',
+    siteSetbacksTitle: 'Garis Sempadan Perencanaan (Meter)',
+    siteSetbackDisclaimer:
+      'Nilai sempadan ditentukan sendiri oleh pengguna sebagai panduan tata letak (bukan klaim kepatuhan hukum/GSB daerah).',
+    siteFrontLabel: 'Depan (+Z)',
+    siteRearLabel: 'Belakang (-Z)',
+    siteLeftLabel: 'Kiri (-X)',
+    siteRightLabel: 'Kanan (+X)',
+    siteEntranceLabel: 'Sisi Akses Masuk Utama',
+    siteNudgeBuildingTitle: 'Geser & Putar Posisi Bangunan di Lahan',
+    siteRotate90Btn: 'Putar Bangunan 90°',
+    siteCenterOnPlotBtn: 'Tengahkan di Lahan',
+    siteOutdoorZonesTitle: 'Zona Ruang Luar Tapak',
+    siteAddZoneBtn: '+ Tambah Zona Luar',
+    siteAreaSummaryLabel: 'Luas Lahan',
+    siteFootprintLabel: 'Jejak Bangunan',
+    siteOpenAreaLabel: 'Sisa Area Terbuka',
+
+    docSourceLabel: 'Sumber Dokumen',
+    docKindFloorPlan: 'Denah Lantai 2D',
+    docKindSitePlan: 'Rencana Tapak (Site Plan)',
+    docKindElevation: 'Tampak Bangunan (4 Sisi)',
+    docKindSchedule: 'Jadwal Pintu & Jendela',
+    docKindMaterialReport: 'Laporan Kuantitas & RAB',
+    docKindValidationReport: 'Ringkasan Validasi Desain',
+    docThemeDark: 'Cetak Biru Gelap',
+    docThemeWhite: 'Kertas Arsitek Putih',
+    docExportPngBtn: 'Unduh Gambar .PNG',
+    docExportHtmlBtn: 'Unduh Paket Laporan Cetak (.HTML/PDF)',
+    docSectionLimitationNote:
+      'Catatan Teknis: Gambar denah, rencana tapak, dan tampak ortografis 4 sisi dihasilkan langsung dari geometri model nyata. Potongan melintang penuh (Section Cut) belum disertakan agar tidak menampilkan potongan semu.',
   },
 
   en: {
@@ -1790,6 +2035,128 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     importAssetsPackBtn: 'Import Pack',
     assetsPackExportedToast: 'Custom asset pack exported',
     assetsPackImportedToast: 'Custom asset pack imported',
+
+    archWorkflowBtn: 'Project Studio',
+    archWorkflowTitle: 'Integrated Architectural Workflow',
+    archWorkflowUpdating: 'Updating analysis...',
+    wfTabBrief: 'Brief',
+    wfTabSite: 'Site',
+    wfTabMaterials: 'Takeoff & Cost',
+    wfTabValidation: 'Validation',
+    wfTabVersions: 'Versions',
+    wfTabDocs: 'Docs',
+
+    briefTemplateLabel: 'Editable Starter Brief Template',
+    briefTplSingleStorey: 'Small Single-Storey Home',
+    briefTplTwoStorey: 'Two-Storey Family Home',
+    briefTplMinimalist: 'Modern Minimalist Home',
+    briefTplGarage: 'Home with Garage',
+    briefTplBlank: 'Blank Custom Brief',
+    briefProjectTypeLabel: 'Project Type',
+    briefStyleLabel: 'Preferred Style',
+    briefDescLabel: 'Short Description',
+    briefNotesLabel: 'Freeform Planning Notes',
+    briefBudgetTitle: 'Optional Target Budget',
+    briefBudgetScopeMaterials: 'Materials Only',
+    briefBudgetScopeConstruction: 'Full Construction',
+    briefBudgetScopeCustom: 'Custom Scope',
+    briefAddRequirementBtn: '+ Add Room / Area Requirement',
+    briefStatusMet: 'Met',
+    briefStatusUnmet: 'Unmet',
+    briefStatusReview: 'Needs Review',
+    briefStatusNA: 'Info',
+    briefRoomTypeLabel: 'Room Function',
+    briefUnassignedRoomsTitle: 'Uncategorized Rooms (Assign Function)',
+    briefFocusBtn: 'Focus',
+
+    constMatSectionTitle: 'Construction Material (Separate from Visual Color)',
+    constMatSeparatedHint:
+      'Changing visual paint colors or surface patterns NEVER alters construction material assignments or cost.',
+    constMatStructLabel: 'Core Wall Structure',
+    constMatExtFinishLabel: 'Exterior Finish',
+    constMatIntFinishLabel: 'Interior Finish',
+    constMatFloorLabel: 'Floor Construction Material',
+    constMatRoofLabel: 'Roof Construction Material',
+    constMatOpeningLabel: 'Opening Unit Material',
+    constMatStairLabel: 'Stair Structure Material',
+    constMatObjectLabel: 'Block Construction Material',
+    constMatUnassignedOption: '— Unassigned —',
+    constMatAutoAssignBtn: 'Fill Defaults on Unassigned',
+    constMatAutoAssignedToast: 'Assigned baseline construction materials to unassigned elements',
+    takeoffTotalEstLabel: 'Estimated Material Cost',
+    takeoffMaterialOnlyBadge: 'Material-Only Estimate Scope',
+    takeoffScopeMismatchWarn:
+      'Scope Notice: Your target budget uses Full Construction/Custom scope, whereas this takeoff estimates Building Materials only (excluding contractor labor, MEP, permits, & taxes).',
+    takeoffMissingAssignTitle: 'Elements Missing Construction Material',
+    takeoffUnpricedTitle: 'Unpriced Material Items',
+    takeoffEditCatalogTitle: 'Editable Material Catalog & Unit Prices',
+    takeoffAddCustomMatBtn: '+ Custom Material',
+    takeoffUnitPriceLabel: 'Unit Price (IDR)',
+    takeoffWastePctLabel: 'Waste (%)',
+    takeoffByFloorTitle: 'Breakdown by Floor',
+
+    altSaveNewBtn: '+ Save Design Alternative',
+    altNamePlaceholder: 'Option name (e.g. Option A - Gable Roof)',
+    altDescPlaceholder: 'Notes on what changed in this option...',
+    altEmptyHint:
+      'Save independent snapshots of geometry, materials, brief, and site to inspect or compare design options side by side.',
+    altInspectBtn: 'Inspect',
+    altInspectingBanner: 'Read-Only Inspection (Active Working Model Unchanged)',
+    altCloseInspectBtn: 'Exit Inspect',
+    altRestoreBtn: 'Restore to Active',
+    altRestoreConfirmMsg:
+      'Restore this alternative into the active working project? (You can still press Undo / Ctrl+Z to revert).',
+    altRestoredToast: 'Design alternative restored into active project',
+    altDuplicateProjectBtn: 'Duplicate Option',
+    altCompareTitle: 'Side-by-Side Comparison',
+    altActiveWorkingLabel: 'Active Working Model (Live)',
+
+    valAllCategories: 'All',
+    valCatGeometry: 'Geometry',
+    valCatOpening: 'Openings & Walls',
+    valCatSpatial: 'Spatial Usability',
+    valCatBrief: 'Brief Targets',
+    valCatSite: 'Site & Setbacks',
+    valSevError: 'Error',
+    valSevWarning: 'Warning',
+    valSevInfo: 'Info',
+    valHealthyMsg: 'No geometry conflicts or spatial planning warnings detected.',
+    valAutoFixBtn: 'Auto-Clamp',
+    valAutoFixedToast: 'Applied safe automatic adjustment',
+    valRerunBtn: 'Re-Validate',
+
+    siteEnableToggle: 'Enable Site Boundary & Setback Lines',
+    siteDimensionsLabel: 'Site Plot Dimensions (Width X × Depth Z)',
+    siteSetbacksTitle: 'User-Defined Setbacks (Meters)',
+    siteSetbackDisclaimer:
+      'Setback distances are user-defined planning guides and do not claim municipal zoning or legal code compliance.',
+    siteFrontLabel: 'Front (+Z)',
+    siteRearLabel: 'Rear (-Z)',
+    siteLeftLabel: 'Left (-X)',
+    siteRightLabel: 'Right (+X)',
+    siteEntranceLabel: 'Primary Site Entrance Edge',
+    siteNudgeBuildingTitle: 'Shift & Rotate Building on Site',
+    siteRotate90Btn: 'Rotate Building 90°',
+    siteCenterOnPlotBtn: 'Center on Plot',
+    siteOutdoorZonesTitle: 'Outdoor Site Zones',
+    siteAddZoneBtn: '+ Add Outdoor Zone',
+    siteAreaSummaryLabel: 'Site Area',
+    siteFootprintLabel: 'Building Footprint',
+    siteOpenAreaLabel: 'Remaining Open Area',
+
+    docSourceLabel: 'Document Source',
+    docKindFloorPlan: '2D Floor Plan',
+    docKindSitePlan: 'Site Plan',
+    docKindElevation: 'Building Elevations (4 Sides)',
+    docKindSchedule: 'Door & Window Schedule',
+    docKindMaterialReport: 'Material Takeoff & Cost Report',
+    docKindValidationReport: 'Validation Summary',
+    docThemeDark: 'Dark Blueprint',
+    docThemeWhite: 'Architect White',
+    docExportPngBtn: 'Download .PNG Sheet',
+    docExportHtmlBtn: 'Download Printable Report Package (.HTML/PDF)',
+    docSectionLimitationNote:
+      'Technical Note: Floor plans, site plans, and 4-side orthographic elevations are generated directly from live model geometry. True plane-cut building sections are omitted rather than approximated.',
   },
 
   ja: {
@@ -2382,6 +2749,128 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     importAssetsPackBtn: 'パック読み込み',
     assetsPackExportedToast: 'コレクションパックを書き出しました',
     assetsPackImportedToast: 'コレクションパックを読み込みました',
+
+    archWorkflowBtn: '設計ワークフロー',
+    archWorkflowTitle: '統合建築プロジェクト・ワークフロー',
+    archWorkflowUpdating: '解析を更新中...',
+    wfTabBrief: '要件',
+    wfTabSite: '敷地',
+    wfTabMaterials: '積算・材料',
+    wfTabValidation: '検証',
+    wfTabVersions: '案・比較',
+    wfTabDocs: '図面・帳票',
+
+    briefTemplateLabel: '編集可能な初期ブリーフテンプレート',
+    briefTplSingleStorey: 'コンパクト平屋住宅',
+    briefTplTwoStorey: '2階建てファミリー住宅',
+    briefTplMinimalist: 'モダン・ミニマリスト住宅',
+    briefTplGarage: 'ガレージ付き住宅',
+    briefTplBlank: '白紙カスタムブリーフ',
+    briefProjectTypeLabel: '建物タイプ',
+    briefStyleLabel: '希望スタイル',
+    briefDescLabel: 'プロジェクト概要',
+    briefNotesLabel: '自由設計メモ',
+    briefBudgetTitle: '目標予算（任意）',
+    briefBudgetScopeMaterials: '建築資材のみ',
+    briefBudgetScopeConstruction: '総工事費目安',
+    briefBudgetScopeCustom: 'カスタム範囲',
+    briefAddRequirementBtn: '+ 部屋・面積要件を追加',
+    briefStatusMet: '達成',
+    briefStatusUnmet: '未達',
+    briefStatusReview: '要確認',
+    briefStatusNA: '情報',
+    briefRoomTypeLabel: '部屋の用途',
+    briefUnassignedRoomsTitle: '用途未設定の部屋（クリックで分類）',
+    briefFocusBtn: '表示',
+
+    constMatSectionTitle: '建築構造・仕上げ材（表示色とは独立）',
+    constMatSeparatedHint:
+      'ペイント色や見た目パターンを変更しても、建築材料の割り当てや積算コストは勝手に変わりません。',
+    constMatStructLabel: '壁の構造躯体材',
+    constMatExtFinishLabel: '外装仕上げ材',
+    constMatIntFinishLabel: '内装仕上げ材',
+    constMatFloorLabel: '床の構成材',
+    constMatRoofLabel: '屋根の構成材',
+    constMatOpeningLabel: '建具ユニット材',
+    constMatStairLabel: '階段の構造材',
+    constMatObjectLabel: 'ブロック構造材',
+    constMatUnassignedOption: '— 未設定 (Unassigned) —',
+    constMatAutoAssignBtn: '未設定箇所に標準材を一括設定',
+    constMatAutoAssignedToast: '未設定の要素に標準建築材料を割り当てました',
+    takeoffTotalEstLabel: '概算資材コスト',
+    takeoffMaterialOnlyBadge: '資材単体積算（Material-Only）',
+    takeoffScopeMismatchWarn:
+      '範囲の注意：目標予算が「総工事費／カスタム」ですが、本積算は建築資材費のみです（労務費・設備工事・許認可・税金は含みません）。',
+    takeoffMissingAssignTitle: '建築材料が未設定の要素',
+    takeoffUnpricedTitle: '単価未入力の材料',
+    takeoffEditCatalogTitle: '材料カタログ＆単価編集',
+    takeoffAddCustomMatBtn: '+ カスタム材料を追加',
+    takeoffUnitPriceLabel: '単価 (IDR)',
+    takeoffWastePctLabel: 'ロス率 (%)',
+    takeoffByFloorTitle: '階別コスト内訳',
+
+    altSaveNewBtn: '+ 現在の設計案を保存',
+    altNamePlaceholder: '案の名称（例：A案 切妻屋根）',
+    altDescPlaceholder: '変更点メモ...',
+    altEmptyHint:
+      '建物形状・材料・ブリーフ・敷地の独立スナップショットを保存し、設計案の比較や復元を行えます。',
+    altInspectBtn: '確認',
+    altInspectingBanner: '読み取り専用プレビュー中（作業中のモデルは変更されません）',
+    altCloseInspectBtn: '確認を閉じる',
+    altRestoreBtn: '作業モデルに復元',
+    altRestoreConfirmMsg:
+      'この設計案を現在の作業モデルに復元しますか？（復元後も元に戻す／Ctrl+Zが可能です）',
+    altRestoredToast: '設計案を作業モデルに復元しました',
+    altDuplicateProjectBtn: '案を複製',
+    altCompareTitle: '並列メトリクス比較',
+    altActiveWorkingLabel: '現在の作業モデル (Live)',
+
+    valAllCategories: 'すべて',
+    valCatGeometry: '形状エラー',
+    valCatOpening: '建具・壁干渉',
+    valCatSpatial: '空間使い勝手',
+    valCatBrief: 'ブリーフ目標',
+    valCatSite: '敷地・後退線',
+    valSevError: 'エラー',
+    valSevWarning: '警告',
+    valSevInfo: '情報',
+    valHealthyMsg: '形状の不整合や空間計画の警告は検出されませんでした。',
+    valAutoFixBtn: '自動調整',
+    valAutoFixedToast: '安全な自動調整を適用しました',
+    valRerunBtn: '再検証',
+
+    siteEnableToggle: '敷地境界線とセットバック表示を有効化',
+    siteDimensionsLabel: '敷地寸法（幅 X × 奥行 Z m）',
+    siteSetbacksTitle: 'ユーザー設定セットバック（m）',
+    siteSetbackDisclaimer:
+      'セットバック値は計画目安としてユーザーが任意に設定するものであり、法規制への適合を保証するものではありません。',
+    siteFrontLabel: '前面 (+Z)',
+    siteRearLabel: '背面 (-Z)',
+    siteLeftLabel: '左側 (-X)',
+    siteRightLabel: '右側 (+X)',
+    siteEntranceLabel: '主な敷地アプローチ辺',
+    siteNudgeBuildingTitle: '敷地内での建物移動・回転',
+    siteRotate90Btn: '建物を90°回転',
+    siteCenterOnPlotBtn: '敷地中央に配置',
+    siteOutdoorZonesTitle: '屋外ゾーニング計画',
+    siteAddZoneBtn: '+ 屋外ゾーン追加',
+    siteAreaSummaryLabel: '敷地面積',
+    siteFootprintLabel: '建築面積（フットプリント）',
+    siteOpenAreaLabel: '残余空地面積',
+
+    docSourceLabel: '図面の出力元',
+    docKindFloorPlan: '2D 平面図',
+    docKindSitePlan: '敷地配置図 (Site Plan)',
+    docKindElevation: '立面図（4面正投影）',
+    docKindSchedule: '建具表（ドア・窓）',
+    docKindMaterialReport: '数量拾い出し＆概算見積書',
+    docKindValidationReport: '設計検証サマリー',
+    docThemeDark: 'ブループリント濃紺',
+    docThemeWhite: '建築白紙シート',
+    docExportPngBtn: '.PNG 図面を保存',
+    docExportHtmlBtn: '印刷用レポート一式を保存 (.HTML/PDF)',
+    docSectionLimitationNote:
+      '技術注記：平面図・配置図・4面立面図は実モデル形状から直接正投影生成されます。擬似的な断面表示を避けるため、切断断面図（Section）は今後の拡張対象としています。',
   },
 };
 

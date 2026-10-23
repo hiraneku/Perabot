@@ -21,6 +21,11 @@ import {
   WallDrawDefaults,
 } from '../types/studio';
 import { applyProceduralPatternToMaterial } from './proceduralTextures';
+import {
+  computeSitePlacementMetrics,
+  resolveSemanticRoomType,
+} from './archAnalysis/geometryMetrics';
+import { cloneArchHouseData } from './archAnalysis/schemaMigration';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
@@ -139,7 +144,7 @@ function disposeObjectTree(root: THREE.Object3D): void {
   });
 }
 
-function sampleWallCurvePoint(
+export function sampleWallCurvePoint(
   wall: ArchWallSegment,
   t: number
 ): { x: number; z: number; tx: number; tz: number } {
@@ -193,7 +198,7 @@ export function computeWallLength(wall: ArchWallSegment): number {
 /**
  * Planar Half-Edge Closed-Room Detection with T-Junction & Crossing Splitting
  */
-function detectClosedRoomsOnFloor(
+export function detectClosedRoomsOnFloor(
   walls: ArchWallSegment[],
   floorId: string,
   roomMetas: ArchRoomMeta[],
@@ -457,21 +462,46 @@ function detectClosedRoomsOnFloor(
     }
     if (matched) usedMetaIds.add(matched.id);
 
+    const resolvedName = matched?.name ?? `${defaultNamePrefix} ${idx + 1}`;
+    const sem = resolveSemanticRoomType(matched?.roomType, resolvedName);
+
     rooms.push({
       id: matched?.id ?? `room_${floorId}_${idx + 1}`,
       floorId,
-      name: matched?.name ?? `${defaultNamePrefix} ${idx + 1}`,
+      name: resolvedName,
+      roomType: sem.roomType,
+      roomTypeExplicit: sem.explicit,
       polygon: poly,
       centroid: { x: round3(cx), z: round3(cz) },
       areaSqm: Math.round(area * 100) / 100,
       perimeterM: Math.round(perimeter * 100) / 100,
       floorColor: matched?.floorColor ?? '#d6c7b2',
       floorPattern: matched?.floorPattern ?? 'wood',
+      floorMaterialId: matched?.floorMaterialId,
       ceilingVisible: matched?.ceilingVisible !== false,
     });
   });
 
   return rooms;
+}
+
+export function detectAllRoomsAcrossFloors(
+  archData: ArchHouseData,
+  floors: BuildingFloorLayer[],
+  defaultNamePrefix = 'Ruang'
+): ArchDetectedRoom[] {
+  const all: ArchDetectedRoom[] = [];
+  for (const fl of floors) {
+    all.push(
+      ...detectClosedRoomsOnFloor(
+        archData.walls,
+        fl.id,
+        archData.roomMetas,
+        defaultNamePrefix
+      )
+    );
+  }
+  return all;
 }
 
 /**
@@ -1096,51 +1126,11 @@ export class ArchBuilderEngine {
   }
 
   public getData(): ArchHouseData {
-    return {
-      walls: this.data.walls.map((w) => ({
-        ...w,
-        start: { ...w.start },
-        end: { ...w.end },
-      })),
-      openings: this.data.openings.map((o) => ({ ...o })),
-      roomMetas: this.data.roomMetas.map((r) => ({
-        ...r,
-        centroid: { ...r.centroid },
-      })),
-      stairs: this.data.stairs.map((s) => ({
-        ...s,
-        position: { ...s.position },
-      })),
-      roofs: this.data.roofs.map((rf) => ({
-        ...rf,
-        center: { ...rf.center },
-      })),
-      sun: { ...this.data.sun },
-    };
+    return cloneArchHouseData(this.data);
   }
 
   public setData(next: ArchHouseData): void {
-    this.data = {
-      walls: (next.walls ?? []).map((w) => ({
-        ...w,
-        start: { ...w.start },
-        end: { ...w.end },
-      })),
-      openings: (next.openings ?? []).map((o) => ({ ...o })),
-      roomMetas: (next.roomMetas ?? []).map((r) => ({
-        ...r,
-        centroid: { ...r.centroid },
-      })),
-      stairs: (next.stairs ?? []).map((s) => ({
-        ...s,
-        position: { ...s.position },
-      })),
-      roofs: (next.roofs ?? []).map((rf) => ({
-        ...rf,
-        center: { ...rf.center },
-      })),
-      sun: { ...next.sun },
-    };
+    this.data = cloneArchHouseData(next);
   }
 
   public getDetectedRooms(): ArchDetectedRoom[] {
@@ -1573,6 +1563,12 @@ export class ArchBuilderEngine {
       interiorPattern: defaults.interiorPattern,
       roughness: 0.78,
       hasBaseboard: defaults.hasBaseboard,
+      structuralMaterialId:
+        defaults.style === 'railing' ? undefined : 'mat_brick_masonry',
+      exteriorFinishMaterialId:
+        defaults.style === 'railing' ? undefined : 'mat_paint_exterior',
+      interiorFinishMaterialId:
+        defaults.style === 'railing' ? undefined : 'mat_paint_interior',
     };
     this.data.walls.push(wall);
     this.selection = { kind: 'wall', id: wall.id };
@@ -1853,6 +1849,12 @@ export class ArchBuilderEngine {
       sillHeight: round3(sill),
       frameColor: '#334155',
       flipSwing: false,
+      openingMaterialId:
+        kind === 'archway'
+          ? undefined
+          : kind.startsWith('door')
+          ? 'mat_door_wood'
+          : 'mat_window_alu_glass',
     };
     this.data.openings.push(item);
     this.selection = { kind: 'opening', id: item.id };
@@ -1869,7 +1871,15 @@ export class ArchBuilderEngine {
   public updateRoomMeta(
     roomId: string,
     patch: Partial<
-      Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+      Pick<
+        ArchRoomMeta,
+        | 'name'
+        | 'roomType'
+        | 'floorColor'
+        | 'floorPattern'
+        | 'floorMaterialId'
+        | 'ceilingVisible'
+      >
     >
   ): boolean {
     const detected = this.detectedRooms.find((r) => r.id === roomId);
@@ -1882,8 +1892,10 @@ export class ArchBuilderEngine {
         floorId: detected.floorId,
         centroid: { ...detected.centroid },
         name: detected.name,
+        roomType: detected.roomTypeExplicit ? detected.roomType : undefined,
         floorColor: detected.floorColor,
         floorPattern: detected.floorPattern ?? 'wood',
+        floorMaterialId: detected.floorMaterialId,
         ceilingVisible: detected.ceilingVisible,
       };
       this.data.roomMetas.push(meta);
@@ -1891,6 +1903,68 @@ export class ArchBuilderEngine {
     Object.assign(meta, patch);
     meta.centroid = { ...detected.centroid };
     return true;
+  }
+
+  /**
+   * Translates all architectural building elements (`walls`, `roomMetas`, `stairs`, `roofs`)
+   * in World XZ by `(dx, dz)` so the building can be explicitly positioned on the Site without
+   * mutating the site boundary itself!
+   */
+  public translateAllArchElements(dx: number, dz: number): void {
+    if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) return;
+    for (const w of this.data.walls) {
+      w.start = { x: round3(w.start.x + dx), z: round3(w.start.z + dz) };
+      w.end = { x: round3(w.end.x + dx), z: round3(w.end.z + dz) };
+    }
+    for (const rm of this.data.roomMetas) {
+      rm.centroid = {
+        x: round3(rm.centroid.x + dx),
+        z: round3(rm.centroid.z + dz),
+      };
+    }
+    for (const st of this.data.stairs) {
+      st.position = {
+        ...st.position,
+        x: round3(st.position.x + dx),
+        z: round3(st.position.z + dz),
+      };
+    }
+    for (const rf of this.data.roofs) {
+      rf.center = {
+        x: round3(rf.center.x + dx),
+        z: round3(rf.center.z + dz),
+      };
+    }
+  }
+
+  /**
+   * Rotates all architectural building elements 90° clockwise in World XZ around `pivot`.
+   */
+  public rotateAllArchElements90(pivot: Vec2XZ): void {
+    const rotPt = (pt: Vec2XZ): Vec2XZ => {
+      const rx = pt.x - pivot.x;
+      const rz = pt.z - pivot.z;
+      return {
+        x: round3(pivot.x - rz),
+        z: round3(pivot.z + rx),
+      };
+    };
+    for (const w of this.data.walls) {
+      w.start = rotPt(w.start);
+      w.end = rotPt(w.end);
+    }
+    for (const rm of this.data.roomMetas) {
+      rm.centroid = rotPt(rm.centroid);
+    }
+    for (const st of this.data.stairs) {
+      const np = rotPt({ x: st.position.x, z: st.position.z });
+      st.position = { ...st.position, x: np.x, z: np.z };
+      st.rotationY = (st.rotationY - 90 + 360) % 360;
+    }
+    for (const rf of this.data.roofs) {
+      rf.center = rotPt(rf.center);
+      rf.rotationY = (rf.rotationY - 90 + 360) % 360;
+    }
   }
 
   public addStaircase(
@@ -1910,6 +1984,7 @@ export class ArchBuilderEngine {
       runLength: 2.85,
       color: '#b77946',
       autoCutoutUpper: true,
+      stairMaterialId: 'mat_concrete_struct',
     };
     this.data.stairs.push(stair);
     this.selection = { kind: 'stair', id: stair.id };
@@ -1994,6 +2069,8 @@ export class ArchBuilderEngine {
       color: '#b85d3b',
       fasciaColor: '#e2e8f0',
       rotationY: 0,
+      roofMaterialId:
+        style === 'flat' ? 'mat_roof_slab' : 'mat_roof_terracotta',
     };
     this.data.roofs.push(roof);
     this.selection = { kind: 'roof', id: roof.id };
@@ -2031,6 +2108,8 @@ export class ArchBuilderEngine {
       hasSkylight: false,
       skylightWidth: 1.8,
       skylightDepth: 1.4,
+      roofMaterialId:
+        style === 'flat' ? 'mat_roof_slab' : 'mat_roof_terracotta',
     };
     this.data.roofs.push(roof);
     this.selection = { kind: 'roof', id: roof.id };
@@ -2777,7 +2856,247 @@ export class ArchBuilderEngine {
       }
     }
 
+    // 6. Build Site Boundary, User-Defined Setbacks, Outdoor Zones & Clearance Callouts (System 5)
+    if (this.data.site?.enabled) {
+      this.buildSitePlanningOverlay(allRooms);
+    }
+
     return allRooms;
+  }
+
+  private buildSitePlanningOverlay(allRooms: ArchDetectedRoom[]): void {
+    const site = this.data.site;
+    if (!site || !site.enabled) return;
+
+    const sw = Math.max(2, site.width);
+    const sd = Math.max(2, site.depth);
+    const cx = site.center.x;
+    const cz = site.center.z;
+    const minX = cx - sw * 0.5;
+    const maxX = cx + sw * 0.5;
+    const minZ = cz - sd * 0.5; // Rear (-Z)
+    const maxZ = cz + sd * 0.5; // Front (+Z)
+    const ySite = 0.024;
+
+    const siteMetrics = computeSitePlacementMetrics(
+      this.data,
+      [],
+      allRooms,
+      site
+    );
+
+    // 1. Survey Site Boundary Loop
+    const boundaryPts = [
+      new THREE.Vector3(minX, ySite, minZ),
+      new THREE.Vector3(maxX, ySite, minZ),
+      new THREE.Vector3(maxX, ySite, maxZ),
+      new THREE.Vector3(minX, ySite, maxZ),
+      new THREE.Vector3(minX, ySite, minZ),
+    ];
+    const boundaryColor = siteMetrics.withinSiteBoundary ? '#f59e0b' : '#ef4444';
+    const bLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(boundaryPts),
+      new THREE.LineBasicMaterial({
+        color: boundaryColor,
+        transparent: true,
+        opacity: 0.92,
+      })
+    );
+    bLine.raycast = () => {};
+    this.labelsGroup.add(bLine);
+
+    // Corner survey markers
+    const pinGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.14, 12);
+    const pinMat = new THREE.MeshBasicMaterial({ color: boundaryColor });
+    for (const [px, pz] of [
+      [minX, minZ],
+      [maxX, minZ],
+      [maxX, maxZ],
+      [minX, maxZ],
+    ]) {
+      const pin = new THREE.Mesh(pinGeo, pinMat);
+      pin.position.set(px, 0.07, pz);
+      pin.raycast = () => {};
+      this.labelsGroup.add(pin);
+    }
+
+    // Site Dimensions Badge at Rear Edge
+    const siteBadge = makeLabelSprite(
+      `SITE ${sw.toFixed(1)} × ${sd.toFixed(1)} m`,
+      `${(sw * sd).toFixed(0)} m²`,
+      {
+        bg: 'rgba(69, 26, 3, 0.90)',
+        border: boundaryColor,
+        titleColor: '#fef3c7',
+        subColor: '#fcd34d',
+        scale: 0.85,
+      }
+    );
+    siteBadge.position.set(cx, 0.42, minZ - 0.55);
+    this.labelsGroup.add(siteBadge);
+
+    // 2. Entrance Marker Arrow on Chosen Edge
+    let entX = cx;
+    let entZ = maxZ;
+    let entRotY = 0;
+    if (site.entranceSide === 'rear') {
+      entZ = minZ;
+      entRotY = Math.PI;
+    } else if (site.entranceSide === 'left') {
+      entX = minX;
+      entZ = cz;
+      entRotY = -Math.PI * 0.5;
+    } else if (site.entranceSide === 'right') {
+      entX = maxX;
+      entZ = cz;
+      entRotY = Math.PI * 0.5;
+    }
+    const cone = new THREE.Mesh(
+      new THREE.ConeGeometry(0.32, 0.65, 4),
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.88,
+      })
+    );
+    cone.rotation.x = -Math.PI * 0.5;
+    cone.rotation.z = entRotY;
+    cone.position.set(entX, 0.1, entZ);
+    cone.raycast = () => {};
+    this.labelsGroup.add(cone);
+
+    // 3. User-Defined Setbacks Envelope (Dashed Line)
+    if (site.setbacksEnabled) {
+      const sbMinX = minX + site.setbacks.left;
+      const sbMaxX = maxX - site.setbacks.right;
+      const sbMinZ = minZ + site.setbacks.rear;
+      const sbMaxZ = maxZ - site.setbacks.front;
+
+      if (sbMaxX - sbMinX > 0.4 && sbMaxZ - sbMinZ > 0.4) {
+        const sbOk = siteMetrics.setbacksSatisfied.all;
+        const sbPts = [
+          new THREE.Vector3(sbMinX, ySite + 0.008, sbMinZ),
+          new THREE.Vector3(sbMaxX, ySite + 0.008, sbMinZ),
+          new THREE.Vector3(sbMaxX, ySite + 0.008, sbMaxZ),
+          new THREE.Vector3(sbMinX, ySite + 0.008, sbMaxZ),
+          new THREE.Vector3(sbMinX, ySite + 0.008, sbMinZ),
+        ];
+        const sbGeo = new THREE.BufferGeometry().setFromPoints(sbPts);
+        const sbLine = new THREE.Line(
+          sbGeo,
+          new THREE.LineDashedMaterial({
+            color: sbOk ? '#10b981' : '#fb7185',
+            dashSize: 0.42,
+            gapSize: 0.24,
+            transparent: true,
+            opacity: 0.9,
+          })
+        );
+        sbLine.computeLineDistances();
+        sbLine.raycast = () => {};
+        this.labelsGroup.add(sbLine);
+      }
+    }
+
+    // 4. Outdoor Site Zones (Garden, Driveway, Patio, Walkway, Parking, Recreation)
+    for (const z of site.outdoorZones) {
+      const zw = Math.max(0.5, z.width);
+      const zd = Math.max(0.5, z.depth);
+      const zPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(zw, zd),
+        new THREE.MeshStandardMaterial({
+          color: new THREE.Color(z.color || '#4ade80'),
+          roughness: 0.88,
+          metalness: 0.02,
+          transparent: true,
+          opacity: 0.56,
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+        })
+      );
+      zPlane.rotation.x = -Math.PI * 0.5;
+      zPlane.position.set(z.center.x, 0.014, z.center.z);
+      zPlane.receiveShadow = true;
+      zPlane.raycast = () => {};
+      this.labelsGroup.add(zPlane);
+
+      const zBadge = makeLabelSprite(
+        z.name,
+        `${(zw * zd).toFixed(1)} m²`,
+        {
+          bg: 'rgba(15, 23, 42, 0.82)',
+          border: z.color || '#4ade80',
+          scale: 0.72,
+        }
+      );
+      zBadge.position.set(z.center.x, 0.26, z.center.z);
+      this.labelsGroup.add(zBadge);
+    }
+
+    // 5. Building-to-Boundary Clearance Callout Lines (Front / Rear / Left / Right)
+    if (siteMetrics.footprint.hasBuilding) {
+      const fp = siteMetrics.footprint;
+      const d = siteMetrics.distancesToBoundary;
+      const callouts: Array<{
+        a: Vec2XZ;
+        b: Vec2XZ;
+        dist: number | null;
+        ok: boolean;
+      }> = [
+        {
+          a: { x: fp.center.x, z: fp.maxZ },
+          b: { x: fp.center.x, z: maxZ },
+          dist: d.front,
+          ok: siteMetrics.setbacksSatisfied.front && (d.front ?? 0) >= 0,
+        },
+        {
+          a: { x: fp.center.x, z: fp.minZ },
+          b: { x: fp.center.x, z: minZ },
+          dist: d.rear,
+          ok: siteMetrics.setbacksSatisfied.rear && (d.rear ?? 0) >= 0,
+        },
+        {
+          a: { x: fp.minX, z: fp.center.z },
+          b: { x: minX, z: fp.center.z },
+          dist: d.left,
+          ok: siteMetrics.setbacksSatisfied.left && (d.left ?? 0) >= 0,
+        },
+        {
+          a: { x: fp.maxX, z: fp.center.z },
+          b: { x: maxX, z: fp.center.z },
+          dist: d.right,
+          ok: siteMetrics.setbacksSatisfied.right && (d.right ?? 0) >= 0,
+        },
+      ];
+
+      for (const c of callouts) {
+        if (c.dist === null || Math.abs(c.dist) < 0.08) continue;
+        const col = c.ok ? '#38bdf8' : '#fb7185';
+        const seg = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(c.a.x, ySite + 0.02, c.a.z),
+            new THREE.Vector3(c.b.x, ySite + 0.02, c.b.z),
+          ]),
+          new THREE.LineBasicMaterial({
+            color: col,
+            transparent: true,
+            opacity: 0.78,
+          })
+        );
+        seg.raycast = () => {};
+        this.labelsGroup.add(seg);
+
+        const midX = (c.a.x + c.b.x) * 0.5;
+        const midZ = (c.a.z + c.b.z) * 0.5;
+        const lbl = makeLabelSprite(`${c.dist.toFixed(2)}m`, undefined, {
+          bg: c.ok ? 'rgba(15, 23, 42, 0.85)' : 'rgba(127, 29, 29, 0.92)',
+          border: col,
+          scale: 0.68,
+        });
+        lbl.position.set(midX, 0.24, midZ);
+        this.labelsGroup.add(lbl);
+      }
+    }
   }
 
   /**

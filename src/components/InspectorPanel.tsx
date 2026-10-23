@@ -35,6 +35,7 @@ import {
   AlignDistributeAction,
   AppLanguage,
   BuildingFloorLayer,
+  ConstructionMaterialDef,
   DEFAULT_MODIFIER_SETTINGS,
   DEFAULT_SUBDIVISION_SETTINGS,
   isModifierActive,
@@ -59,6 +60,7 @@ import {
   ColorWheelPicker,
 } from './ColorWheelPicker';
 import { PaintBrushPayload } from '../engine/StudioEngine';
+import { getMaterialDisplayName } from '../engine/archAnalysis/materialTakeoff';
 
 export type InspectorSubTab = 'transform' | 'color' | 'subdiv';
 
@@ -204,6 +206,11 @@ interface InspectorPanelProps {
     proportional: boolean,
     changedAxis?: 0 | 1 | 2
   ) => void;
+  materialCatalog?: ConstructionMaterialDef[];
+  onUpdateConstructionMaterial?: (
+    objectId: string,
+    materialId: string | undefined
+  ) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -248,6 +255,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onAlignDistribute,
   selectedExactDimensions,
   onSetExactDimensions,
+  materialCatalog,
+  onUpdateConstructionMaterial,
 }) => {
   const t = TRANSLATIONS[language];
   const [mobileSection, setMobileSection] = useState<'inspector' | 'outliner'>(
@@ -1090,6 +1099,37 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                           </div>
                         </>
                       )}
+
+                      {onUpdateConstructionMaterial &&
+                        materialCatalog &&
+                        materialCatalog.length > 0 && (
+                          <div
+                            className="arch-const-mat-box"
+                            style={{ marginTop: 10 }}
+                          >
+                            <label className="arch-const-mat-row">
+                              <span>{t.constMatObjectLabel}</span>
+                              <select
+                                value={selected.constructionMaterialId ?? ''}
+                                onChange={(e) =>
+                                  onUpdateConstructionMaterial(
+                                    selected.id,
+                                    e.target.value || undefined
+                                  )
+                                }
+                              >
+                                <option value="">
+                                  {t.constMatUnassignedOption}
+                                </option>
+                                {materialCatalog.map((m) => (
+                                  <option key={m.id} value={m.id}>
+                                    {getMaterialDisplayName(m, language)}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                        )}
                     </div>
                   )}
                 </div>

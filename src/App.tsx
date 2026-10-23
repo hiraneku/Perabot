@@ -60,8 +60,10 @@ import {
   ArchStairKind,
   ArchSubTool,
   ArchWallSegment,
+  ArchWorkflowTab,
   AxisLockMode,
   BuildingFloorLayer,
+  ConstructionMaterialDef,
   createEmptyArchHouseData,
   CustomAssetCategory,
   CustomAssetRecord,
@@ -71,6 +73,9 @@ import {
   DEFAULT_SURFACE_SETTINGS,
   DEFAULT_TERRAIN_SCULPT_SETTINGS,
   DEFAULT_WALL_DRAW,
+  DesignAlternativeRecord,
+  DesignAlternativeSnapshot,
+  DocumentationExportSettings,
   DragFeedback,
   FloorViewMode,
   GlobalAppSettings,
@@ -84,11 +89,14 @@ import {
   PlacementValidationStatus,
   PrimitiveKind,
   ProceduralPatternKind,
+  ProjectBriefData,
   RepeatArrayConfig,
+  RoomSemanticType,
   RotationSnapStep,
   SavedProjectRecord,
   SceneObjectData,
   SelectionSubMode,
+  SitePlanningData,
   SnapSettings,
   StudioMode,
   StudioSnapshotOptions,
@@ -100,6 +108,7 @@ import {
   TerrainSculptSettings,
   TransformMode,
   TransformSpace,
+  ValidationAutoFixAction,
   Vec3,
   WallDrawDefaults,
 } from './types/studio';
@@ -117,7 +126,13 @@ import { TerrainSculptBar } from './components/TerrainSculptBar';
 import { FloorLayerWidget } from './components/FloorLayerWidget';
 import { ArchStudioBar } from './components/ArchStudioBar';
 import { ArchContextPanel } from './components/ArchContextPanel';
+import { ArchProjectDrawer } from './components/ArchProjectDrawer';
 import { StudioPhotoModal } from './components/StudioPhotoModal';
+import {
+  IntegratedProjectAnalysisBundle,
+  runIntegratedProjectAnalysis,
+} from './engine/archAnalysis/alternativesService';
+import { createDefaultConstructionMaterialCatalog } from './engine/archAnalysis/materialTakeoff';
 import { exportFloorBlueprintPNG } from './engine/blueprintExporter';
 import { AdvancedColorMaterialPatch } from './components/ColorWheelPicker';
 
@@ -138,7 +153,8 @@ function computeProjectContentSignature(
   mood: LightingMood,
   sculptedHeightsB64?: string | null,
   floors?: BuildingFloorLayer[],
-  archData?: ArchHouseData
+  archData?: ArchHouseData,
+  designAlternatives?: DesignAlternativeRecord[]
 ): string {
   const objSig = objects
     .map((o) => {
@@ -165,6 +181,7 @@ function computeProjectContentSignature(
         o.locked ? 1 : 0,
         o.groupId || '',
         o.floorId || '',
+        o.constructionMaterialId || '',
         o.surfaceRule || '',
         o.modelAssetId || '',
         o.useCustomMaterial ? 1 : 0,
@@ -249,10 +266,13 @@ function computeProjectContentSignature(
   const archSig = archData
     ? JSON.stringify(archData)
     : '';
+  const altSig = (designAlternatives ?? [])
+    .map((a) => `${a.id}:${a.name}:${a.description}`)
+    .join('|');
 
   return `${projectName}##${mood}##${gridSig}##${snapSig}##${surfSig}##${floorSig}##${
     sculptedHeightsB64 ?? ''
-  }##${archSig}##${objSig}`;
+  }##${archSig}##${altSig}##${objSig}`;
 }
 
 function buildEmptyProjectRecord(
@@ -418,6 +438,18 @@ export const App: React.FC = () => {
   const [isArchActivelyDrawing, setIsArchActivelyDrawing] = useState(false);
   const [pendingArchCommit, setPendingArchCommit] =
     useState<PendingArchCommit | null>(null);
+
+  // Integrated 6-System Architectural Project Workflow States (`Buat Rumah` only)
+  const [archWorkflowOpen, setArchWorkflowOpen] = useState(false);
+  const [archWorkflowTab, setArchWorkflowTab] =
+    useState<ArchWorkflowTab>('brief');
+  const [designAlternatives, setDesignAlternatives] = useState<
+    DesignAlternativeRecord[]
+  >([]);
+  const designAlternativesRef = useRef<DesignAlternativeRecord[]>([]);
+  designAlternativesRef.current = designAlternatives;
+  const [validationRerunTick, setValidationRerunTick] = useState(0);
+  const [isUpdatingAnalysis, setIsUpdatingAnalysis] = useState(false);
 
   // Collapsible sidebars + Fullscreen state
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
@@ -614,6 +646,8 @@ export const App: React.FC = () => {
       const curFloorState = engine.getFloorSystemState();
       const curArchData =
         proj.mode === 'house' ? engine.getArchData() : undefined;
+      const curAlts =
+        proj.mode === 'house' ? designAlternativesRef.current : undefined;
       const nextName = options?.overrideName ?? proj.name;
 
       const nextSig = computeProjectContentSignature(
@@ -625,7 +659,8 @@ export const App: React.FC = () => {
         curMood,
         curSculptB64,
         proj.mode === 'house' ? curFloorState.floors : undefined,
-        curArchData
+        curArchData,
+        curAlts
       );
 
       if (!options?.force && nextSig === lastSavedSigRef.current) {
@@ -680,6 +715,7 @@ export const App: React.FC = () => {
           floorViewMode:
             proj.mode === 'house' ? curFloorState.floorViewMode : undefined,
           archData: curArchData,
+          designAlternatives: curAlts,
         },
       };
 
@@ -783,6 +819,13 @@ export const App: React.FC = () => {
     const initSculptB64 = engine.exportSculptedHeightsBase64();
     const initArchData =
       activeProject.mode === 'house' ? engine.getArchData() : undefined;
+    const initAlts =
+      activeProject.mode === 'house'
+        ? activeProject.scene.designAlternatives ?? []
+        : [];
+    setDesignAlternatives(initAlts);
+    designAlternativesRef.current = initAlts;
+    setArchWorkflowOpen(false);
 
     // Record baseline content signature on open so opening a project triggers 0 redundant saves
     lastSavedSigRef.current = computeProjectContentSignature(
@@ -794,7 +837,8 @@ export const App: React.FC = () => {
       projMood,
       initSculptB64,
       activeProject.mode === 'house' ? initFloors : undefined,
-      initArchData
+      initArchData,
+      initAlts
     );
     dirtySinceRef.current = null;
     setSaveState('saved');
@@ -842,7 +886,10 @@ export const App: React.FC = () => {
             activeProject.mode === 'house'
               ? engine.getFloorSystemState().floors
               : undefined,
-            activeProject.mode === 'house' ? engine.getArchData() : undefined
+            activeProject.mode === 'house' ? engine.getArchData() : undefined,
+            activeProject.mode === 'house'
+              ? designAlternativesRef.current
+              : undefined
           );
           dirtySinceRef.current = null;
           setSaveState('saved');
@@ -874,7 +921,8 @@ export const App: React.FC = () => {
       lightingMood,
       sculptedHeightsB64,
       activeProject.mode === 'house' ? floors : undefined,
-      activeProject.mode === 'house' ? archData : undefined
+      activeProject.mode === 'house' ? archData : undefined,
+      activeProject.mode === 'house' ? designAlternatives : undefined
     );
   }, [
     activeScreen,
@@ -888,7 +936,52 @@ export const App: React.FC = () => {
     sculptedHeightsB64,
     floors,
     archData,
+    designAlternatives,
   ]);
+
+  // Debounced Integrated Architectural Analysis (`Buat Rumah` only — never lags 60fps pointer drags!)
+  const [debouncedAnalysisInput, setDebouncedAnalysisInput] = useState(() => ({
+    archData,
+    floors,
+    objects,
+    detectedRooms,
+  }));
+
+  useEffect(() => {
+    if (activeScreen !== 'editor' || activeProject?.mode !== 'house') return;
+    const isBusyDragging = dragFeedback.active || isArchActivelyDrawing;
+    if (!isBusyDragging) {
+      setDebouncedAnalysisInput({ archData, floors, objects, detectedRooms });
+      setIsUpdatingAnalysis(false);
+      return;
+    }
+    setIsUpdatingAnalysis(true);
+    const timer = window.setTimeout(() => {
+      setDebouncedAnalysisInput({ archData, floors, objects, detectedRooms });
+      setIsUpdatingAnalysis(false);
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [
+    activeScreen,
+    activeProject?.mode,
+    archData,
+    floors,
+    objects,
+    detectedRooms,
+    dragFeedback.active,
+    isArchActivelyDrawing,
+    validationRerunTick,
+  ]);
+
+  const liveArchAnalysis = useMemo<IntegratedProjectAnalysisBundle>(() => {
+    return runIntegratedProjectAnalysis({
+      archData: debouncedAnalysisInput.archData,
+      floors: debouncedAnalysisInput.floors,
+      objects: debouncedAnalysisInput.objects,
+      detectedRoomsOverride: debouncedAnalysisInput.detectedRooms,
+      lang: globalSettings.language,
+    });
+  }, [debouncedAnalysisInput, globalSettings.language, validationRerunTick]);
 
   // Smart Auto-Save scheduler:
   // - Never runs when nothing changed (`currentSceneSignature === lastSavedSigRef.current`)
@@ -1787,13 +1880,113 @@ export const App: React.FC = () => {
     (
       roomId: string,
       patch: Partial<
-        Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+        Pick<
+          ArchRoomMeta,
+          | 'name'
+          | 'roomType'
+          | 'floorColor'
+          | 'floorPattern'
+          | 'floorMaterialId'
+          | 'ceilingVisible'
+        >
       >,
       commit = true
     ) => {
       engineRef.current?.updateArchRoomMeta(roomId, patch, commit);
     },
     []
+  );
+
+  const handleUpdateArchBrief = useCallback((nextBrief: ProjectBriefData) => {
+    engineRef.current?.updateArchBrief(nextBrief, true);
+  }, []);
+
+  const handleUpdateArchMaterialCatalog = useCallback(
+    (nextCatalog: ConstructionMaterialDef[]) => {
+      engineRef.current?.updateArchMaterialCatalog(nextCatalog, true);
+    },
+    []
+  );
+
+  const handleUpdateArchSite = useCallback((nextSite: SitePlanningData) => {
+    engineRef.current?.updateArchSitePlanning(nextSite, true);
+  }, []);
+
+  const handleUpdateArchDocSettings = useCallback(
+    (nextDocSettings: DocumentationExportSettings) => {
+      engineRef.current?.updateArchDocSettings(nextDocSettings);
+    },
+    []
+  );
+
+  const handleAutoAssignDefaultMaterials = useCallback(() => {
+    const count = engineRef.current?.assignDefaultMaterialsToUnassigned() ?? 0;
+    if (count > 0) {
+      showToast(t.constMatAutoAssignedToast);
+    }
+  }, [showToast, t.constMatAutoAssignedToast]);
+
+  const handleShiftBuildingOnSite = useCallback((dx: number, dz: number) => {
+    engineRef.current?.translateBuildingWithinSite(dx, dz);
+  }, []);
+
+  const handleRotateBuilding90 = useCallback(() => {
+    engineRef.current?.rotateBuildingWithinSite90();
+  }, []);
+
+  const handleApplyValidationAutoFix = useCallback(
+    (action: ValidationAutoFixAction) => {
+      const ok = engineRef.current?.applyValidationAutoFix(action);
+      if (ok) {
+        showToast(t.valAutoFixedToast);
+      }
+    },
+    [showToast, t.valAutoFixedToast]
+  );
+
+  const handleFocusArchitecturalElement = useCallback(
+    (
+      domain:
+        | 'wall'
+        | 'opening'
+        | 'room'
+        | 'stair'
+        | 'roof'
+        | 'object'
+        | 'site'
+        | 'brief',
+      id: string
+    ) => {
+      engineRef.current?.focusArchitecturalElement(domain, id);
+    },
+    []
+  );
+
+  const handleRestoreDesignAlternative = useCallback(
+    (snapshot: DesignAlternativeSnapshot) => {
+      engineRef.current?.restoreDesignAlternativeSnapshot(snapshot);
+      showToast(t.altRestoredToast);
+    },
+    [showToast, t.altRestoredToast]
+  );
+
+  const handleUpdateObjectConstructionMaterial = useCallback(
+    (objectId: string, materialId: string | undefined) => {
+      engineRef.current?.updateObjectConstructionMaterial(
+        objectId,
+        materialId,
+        true
+      );
+    },
+    []
+  );
+
+  const activeMaterialCatalog = useMemo(
+    () =>
+      archData.materialCatalog && archData.materialCatalog.length > 0
+        ? archData.materialCatalog
+        : createDefaultConstructionMaterialCatalog(),
+    [archData.materialCatalog]
   );
 
   const handleApplyAllWallsColor = useCallback(
@@ -2390,7 +2583,10 @@ export const App: React.FC = () => {
               <ArchStudioBar
                 t={t}
                 activePhase={activeArchPhase}
-                onSelectPhase={handleSelectArchPhase}
+                onSelectPhase={(ph) => {
+                  if (ph) setArchWorkflowOpen(false);
+                  handleSelectArchPhase(ph);
+                }}
                 isBlueprint2D={isBlueprint2D}
                 onToggleBlueprint2D={handleToggleBlueprint2D}
                 archTool={archTool}
@@ -2405,10 +2601,23 @@ export const App: React.FC = () => {
                 onRotateSelectedArch={handleRotateSelectedArch90}
                 onDeleteSelectedArch={handleDeleteSelectedArch}
                 onOpenSelectedArchProps={handleOpenSelectedArchProps}
+                workflowOpen={archWorkflowOpen}
+                onToggleWorkflow={() => {
+                  setArchWorkflowOpen((v) => {
+                    const next = !v;
+                    if (next) setActiveArchPhase(null);
+                    return next;
+                  });
+                }}
+                workflowAlertCount={
+                  liveArchAnalysis.validation.errorCount +
+                  liveArchAnalysis.validation.warningCount
+                }
               />
 
               {activeArchPhase && (
                 <ArchContextPanel
+                  lang={globalSettings.language}
                   t={t}
                   phase={activeArchPhase}
                   onClose={() => setActiveArchPhase(null)}
@@ -2442,6 +2651,44 @@ export const App: React.FC = () => {
                   isActivelyDrawing={isArchActivelyDrawing}
                 />
               )}
+
+              <ArchProjectDrawer
+                open={archWorkflowOpen}
+                activeTab={archWorkflowTab}
+                onSelectTab={setArchWorkflowTab}
+                onClose={() => setArchWorkflowOpen(false)}
+                lang={globalSettings.language}
+                t={t}
+                projectName={activeProject.name}
+                archData={archData}
+                floors={floors}
+                activeFloorId={activeFloorId}
+                floorViewMode={floorViewMode}
+                objects={objects}
+                gridSettings={gridSettings}
+                sculptedHeightsB64={sculptedHeightsB64}
+                liveAnalysis={liveArchAnalysis}
+                isUpdatingAnalysis={isUpdatingAnalysis}
+                alternatives={designAlternatives}
+                onChangeAlternatives={setDesignAlternatives}
+                onCaptureThumbnail={() =>
+                  engineRef.current?.captureThumbnailDataUrl()
+                }
+                onUpdateBrief={handleUpdateArchBrief}
+                onUpdateCatalog={handleUpdateArchMaterialCatalog}
+                onUpdateSite={handleUpdateArchSite}
+                onUpdateDocSettings={handleUpdateArchDocSettings}
+                onUpdateRoomType={(roomId: string, roomType: RoomSemanticType) =>
+                  handleUpdateArchRoomMeta(roomId, { roomType }, true)
+                }
+                onAutoAssignDefaultMaterials={handleAutoAssignDefaultMaterials}
+                onShiftBuildingOnSite={handleShiftBuildingOnSite}
+                onRotateBuilding90={handleRotateBuilding90}
+                onApplyAutoFix={handleApplyValidationAutoFix}
+                onFocusElement={handleFocusArchitecturalElement}
+                onRestoreAlternative={handleRestoreDesignAlternative}
+                onRerunValidation={() => setValidationRerunTick((n) => n + 1)}
+              />
             </>
           )}
 
@@ -2743,6 +2990,14 @@ export const App: React.FC = () => {
             onAlignDistribute={handleAlignDistribute}
             selectedExactDimensions={selectedExactDimensions}
             onSetExactDimensions={handleSetExactDimensions}
+            materialCatalog={
+              activeProject.mode === 'house' ? activeMaterialCatalog : undefined
+            }
+            onUpdateConstructionMaterial={
+              activeProject.mode === 'house'
+                ? handleUpdateObjectConstructionMaterial
+                : undefined
+            }
           />
         )}
 
@@ -2788,6 +3043,14 @@ export const App: React.FC = () => {
             onAlignDistribute={handleAlignDistribute}
             selectedExactDimensions={selectedExactDimensions}
             onSetExactDimensions={handleSetExactDimensions}
+            materialCatalog={
+              activeProject.mode === 'house' ? activeMaterialCatalog : undefined
+            }
+            onUpdateConstructionMaterial={
+              activeProject.mode === 'house'
+                ? handleUpdateObjectConstructionMaterial
+                : undefined
+            }
           />
         )}
       </main>

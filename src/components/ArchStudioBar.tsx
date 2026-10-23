@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   BrickWall,
   Check,
+  ClipboardList,
   DoorOpen,
   Eraser,
   Home,
@@ -42,6 +43,9 @@ interface ArchStudioBarProps {
   onRotateSelectedArch?: () => void;
   onDeleteSelectedArch?: () => void;
   onOpenSelectedArchProps?: () => void;
+  workflowOpen?: boolean;
+  onToggleWorkflow?: () => void;
+  workflowAlertCount?: number;
 }
 
 export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
@@ -62,6 +66,9 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
   onRotateSelectedArch,
   onDeleteSelectedArch,
   onOpenSelectedArchProps,
+  workflowOpen,
+  onToggleWorkflow,
+  workflowAlertCount,
 }) => {
   const [exactLenDraft, setExactLenDraft] = useState('3.0');
 
@@ -188,6 +195,29 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
           <Eraser size={14} />
           <span>{t.archToolQuickErase}</span>
         </button>
+
+        {/* Integrated 6-System Architectural Project Workflow Drawer Trigger */}
+        {onToggleWorkflow && (
+          <>
+            <span className="arch-strip-divider" />
+            <button
+              type="button"
+              className={`arch-phase-btn is-workflow ${
+                workflowOpen ? 'active' : ''
+              }`}
+              onClick={onToggleWorkflow}
+              title={t.archWorkflowTitle}
+            >
+              <ClipboardList size={14} />
+              <span>{t.archWorkflowBtn}</span>
+              {workflowAlertCount !== undefined && workflowAlertCount > 0 && (
+                <span className="arch-phase-badge warn">
+                  {workflowAlertCount}
+                </span>
+              )}
+            </button>
+          </>
+        )}
       </div>
 
       {/* #2 Optional Confirm Before Commit Floating Bar */}

@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "build:pages": "npm run build && rm -rf docs && cp -r dist docs && touch docs/.nojekyll",
+    "test": "mkdir -p build/test-dist && printf '{\"type\":\"commonjs\"}' > build/test-dist/package.json && ./node_modules/.bin/tsc -p tsconfig.test.json && node --test build/test-dist/tests/archWorkflow.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

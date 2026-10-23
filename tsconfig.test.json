@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./build/test-dist",
+    "rootDir": ".",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "allowImportingTsExtensions": false,
+    "esModuleInterop": true
+  },
+  "include": [
+    "src/types/**/*.ts",
+    "src/i18n/**/*.ts",
+    "src/engine/proceduralTextures.ts",
+    "src/engine/ArchBuilderEngine.ts",
+    "src/engine/blueprintExporter.ts",
+    "src/engine/archAnalysis/**/*.ts",
+    "tests/**/*.d.ts",
+    "tests/**/*.test.ts"
+  ]
+}

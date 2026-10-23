@@ -48,6 +48,7 @@ import {
   ArchitecturalRole,
   AxisLockMode,
   BuildingFloorLayer,
+  ConstructionMaterialDef,
   createEmptyArchHouseData,
   CustomAssetPart,
   DEFAULT_BUILDING_FLOORS,
@@ -58,6 +59,8 @@ import {
   DEFAULT_SURFACE_SETTINGS,
   DEFAULT_TERRAIN_SCULPT_SETTINGS,
   DEFAULT_WALL_DRAW,
+  DesignAlternativeSnapshot,
+  DocumentationExportSettings,
   DragFeedback,
   FloorViewMode,
   GraphicsQuality,
@@ -73,9 +76,11 @@ import {
   PlacementValidationStatus,
   PrimitiveKind,
   ProceduralPatternKind,
+  ProjectBriefData,
   RepeatArrayConfig,
   SceneObjectData,
   SelectionSubMode,
+  SitePlanningData,
   SnapSettings,
   StudioMode,
   StudioSnapshotOptions,
@@ -86,6 +91,7 @@ import {
   TerrainSculptSettings,
   TransformMode,
   TransformSpace,
+  ValidationAutoFixAction,
   Vec2XZ,
   Vec3,
   WallDrawDefaults,
@@ -1442,13 +1448,387 @@ export class StudioEngine {
   public updateArchRoomMeta(
     roomId: string,
     patch: Partial<
-      Pick<ArchRoomMeta, 'name' | 'floorColor' | 'floorPattern' | 'ceilingVisible'>
+      Pick<
+        ArchRoomMeta,
+        | 'name'
+        | 'roomType'
+        | 'floorColor'
+        | 'floorPattern'
+        | 'floorMaterialId'
+        | 'ceilingVisible'
+      >
     >,
     commitHistory = true
   ): void {
     if (!this.archEngine.updateRoomMeta(roomId, patch)) return;
     this.rebuildArchitecture();
     if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  /* =========================================================
+     6-System Integrated Architectural Project Workflow Methods
+     ========================================================= */
+
+  public updateArchBrief(
+    nextBrief: ProjectBriefData,
+    commitHistory = true
+  ): void {
+    const cur = this.archEngine.getData();
+    cur.brief = nextBrief;
+    this.archEngine.setData(cur);
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public updateArchMaterialCatalog(
+    nextCatalog: ConstructionMaterialDef[],
+    commitHistory = true
+  ): void {
+    const cur = this.archEngine.getData();
+    cur.materialCatalog = nextCatalog;
+    this.archEngine.setData(cur);
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public updateArchSitePlanning(
+    nextSite: SitePlanningData,
+    commitHistory = true
+  ): void {
+    const cur = this.archEngine.getData();
+    cur.site = nextSite;
+    this.archEngine.setData(cur);
+    this.rebuildArchitecture();
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  public updateArchDocSettings(nextDocSettings: DocumentationExportSettings): void {
+    const cur = this.archEngine.getData();
+    cur.docSettings = nextDocSettings;
+    this.archEngine.setData(cur);
+    this.emitState();
+  }
+
+  public updateObjectConstructionMaterial(
+    objectId: string,
+    materialId: string | undefined,
+    commitHistory = true
+  ): void {
+    const mesh = this.meshMap.get(objectId);
+    if (!mesh) return;
+    mesh.userData.constructionMaterialId = materialId || undefined;
+    if (commitHistory) this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  /**
+   * Batch-assigns standard residential construction materials ONLY to elements that currently
+   * have no construction material assigned — never overwriting existing user assignments or visual colors!
+   */
+  public assignDefaultMaterialsToUnassigned(): number {
+    let assigned = 0;
+    const cur = this.archEngine.getData();
+    for (const w of cur.walls) {
+      if (w.style !== 'railing' && !w.structuralMaterialId) {
+        w.structuralMaterialId = 'mat_brick_masonry';
+        assigned++;
+      }
+      if (w.style !== 'railing' && !w.exteriorFinishMaterialId) {
+        w.exteriorFinishMaterialId = 'mat_paint_exterior';
+      }
+      if (w.style !== 'railing' && !w.interiorFinishMaterialId) {
+        w.interiorFinishMaterialId = 'mat_paint_interior';
+      }
+    }
+    for (const op of cur.openings) {
+      if (op.kind !== 'archway' && !op.openingMaterialId) {
+        op.openingMaterialId = op.kind.startsWith('door')
+          ? 'mat_door_wood'
+          : 'mat_window_alu_glass';
+        assigned++;
+      }
+    }
+    for (const rf of cur.roofs) {
+      if (!rf.roofMaterialId) {
+        rf.roofMaterialId =
+          rf.style === 'flat' ? 'mat_roof_slab' : 'mat_roof_terracotta';
+        assigned++;
+      }
+    }
+    for (const st of cur.stairs) {
+      if (!st.stairMaterialId) {
+        st.stairMaterialId = 'mat_concrete_struct';
+        assigned++;
+      }
+    }
+    this.archEngine.setData(cur);
+    this.rebuildArchitecture();
+
+    // Also assign Ceramic Tile floor construction material to any detected room lacking one
+    const rooms = this.archEngine.getDetectedRooms();
+    for (const rm of rooms) {
+      if (!rm.floorMaterialId) {
+        this.archEngine.updateRoomMeta(rm.id, {
+          floorMaterialId:
+            rm.roomType === 'bedroom' ? 'mat_floor_parquet' : 'mat_floor_ceramic',
+        });
+        assigned++;
+      }
+    }
+
+    // Modular structural objects
+    for (const mesh of this.meshMap.values()) {
+      if (!mesh.visible) continue;
+      if (
+        mesh.userData.modularId &&
+        (mesh.userData.archRole === 'floor' || mesh.userData.archRole === 'wall') &&
+        !mesh.userData.constructionMaterialId
+      ) {
+        mesh.userData.constructionMaterialId = 'mat_concrete_struct';
+        assigned++;
+      }
+    }
+
+    if (assigned > 0) {
+      this.rebuildArchitecture();
+      this.pushHistorySnapshot();
+      this.emitState();
+    }
+    return assigned;
+  }
+
+  /**
+   * Explicitly shifts the entire building (Smart Walls + Stairs + Roofs + House-assigned Scene Objects)
+   * on the Site without altering site boundary coordinates.
+   */
+  public translateBuildingWithinSite(dx: number, dz: number): void {
+    if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) return;
+    this.archEngine.translateAllArchElements(dx, dz);
+    for (const mesh of this.meshMap.values()) {
+      if (!mesh.visible) continue;
+      mesh.position.x = round3(mesh.position.x + dx);
+      mesh.position.z = round3(mesh.position.z + dz);
+    }
+    this.rebuildArchitecture();
+    this.updateSeamlessTouchFaces();
+    this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  /**
+   * Rotates the entire building 90° on the Site around `(0, 0)` (or site center).
+   */
+  public rotateBuildingWithinSite90(): void {
+    const siteCenter = this.archEngine.getData().site?.center ?? { x: 0, z: 0 };
+    this.archEngine.rotateAllArchElements90(siteCenter);
+    for (const mesh of this.meshMap.values()) {
+      if (!mesh.visible) continue;
+      const rx = mesh.position.x - siteCenter.x;
+      const rz = mesh.position.z - siteCenter.z;
+      mesh.position.x = round3(siteCenter.x - rz);
+      mesh.position.z = round3(siteCenter.z + rx);
+      mesh.rotation.y -= Math.PI * 0.5;
+    }
+    this.rebuildArchitecture();
+    this.updateSeamlessTouchFaces();
+    this.pushHistorySnapshot();
+    this.emitState();
+  }
+
+  /**
+   * Executes a deterministic, non-destructive Validation Auto-Fix and records Undo history.
+   */
+  public applyValidationAutoFix(action: ValidationAutoFixAction): boolean {
+    if (action.kind === 'clamp-opening-to-wall') {
+      const ok = this.archEngine.updateOpening(action.openingId, {
+        offsetRatio: action.nextOffsetRatio,
+        width: action.nextWidth,
+        height: action.nextHeight,
+        sillHeight: action.nextSillHeight,
+      });
+      if (!ok) return false;
+      this.rebuildArchitecture();
+      this.pushHistorySnapshot();
+      this.emitState();
+      return true;
+    }
+    if (action.kind === 'delete-degenerate-wall') {
+      const ok = this.archEngine.deleteArchElementByKindAndId('wall', action.wallId);
+      if (!ok) return false;
+      this.rebuildArchitecture();
+      this.pushHistorySnapshot();
+      this.emitState();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Focuses and highlights an architectural element or scene object from Validation / Brief / Takeoff.
+   */
+  public focusArchitecturalElement(
+    domain: 'wall' | 'opening' | 'room' | 'stair' | 'roof' | 'object' | 'site' | 'brief',
+    id: string
+  ): void {
+    if (domain === 'object') {
+      if (this.meshMap.has(id)) {
+        this.archEngine.setSelection(null);
+        this.rebuildArchitecture();
+        this.selectObject(id, true);
+        this.focusSelectedOrReset();
+      }
+      return;
+    }
+
+    const data = this.archEngine.getData();
+    const getFloorElev = (fid: string) =>
+      this.floors.find((f) => f.id === fid)?.elevation ?? 0;
+
+    if (domain === 'wall') {
+      const w = data.walls.find((x) => x.id === id);
+      if (!w) return;
+      this.selectObject(null, false);
+      this.setActiveFloor(w.floorId);
+      this.archEngine.setSelection({ kind: 'wall', id: w.id });
+      this.rebuildArchitecture();
+      this.emitState();
+      const target = new THREE.Vector3(
+        (w.start.x + w.end.x) * 0.5,
+        getFloorElev(w.floorId) + w.height * 0.5,
+        (w.start.z + w.end.z) * 0.5
+      );
+      this.animateCameraTo(
+        target.clone().add(new THREE.Vector3(4.2, 3.6, 4.8)),
+        target
+      );
+      return;
+    }
+
+    if (domain === 'opening') {
+      const op = data.openings.find((x) => x.id === id);
+      if (!op) return;
+      const w = data.walls.find((x) => x.id === op.wallId);
+      this.selectObject(null, false);
+      this.setActiveFloor(op.floorId);
+      this.archEngine.setSelection({ kind: 'opening', id: op.id });
+      this.rebuildArchitecture();
+      this.emitState();
+      if (w) {
+        const tx = w.start.x + (w.end.x - w.start.x) * op.offsetRatio;
+        const tz = w.start.z + (w.end.z - w.start.z) * op.offsetRatio;
+        const target = new THREE.Vector3(
+          tx,
+          getFloorElev(op.floorId) + op.sillHeight + op.height * 0.5,
+          tz
+        );
+        this.animateCameraTo(
+          target.clone().add(new THREE.Vector3(3.2, 2.4, 3.6)),
+          target
+        );
+      }
+      return;
+    }
+
+    if (domain === 'room') {
+      const rm = this.archEngine.getDetectedRooms().find((r) => r.id === id);
+      if (!rm) return;
+      this.selectObject(null, false);
+      this.setActiveFloor(rm.floorId);
+      this.archEngine.setSelection({ kind: 'room', id: rm.id });
+      this.rebuildArchitecture();
+      this.emitState();
+      const target = new THREE.Vector3(
+        rm.centroid.x,
+        getFloorElev(rm.floorId) + 0.8,
+        rm.centroid.z
+      );
+      this.animateCameraTo(
+        target.clone().add(new THREE.Vector3(4.5, 5.2, 4.8)),
+        target
+      );
+      return;
+    }
+
+    if (domain === 'stair') {
+      const st = data.stairs.find((s) => s.id === id);
+      if (!st) return;
+      this.selectObject(null, false);
+      this.setActiveFloor(st.floorId);
+      this.archEngine.setSelection({ kind: 'stair', id: st.id });
+      this.rebuildArchitecture();
+      this.emitState();
+      const target = new THREE.Vector3(
+        st.position.x,
+        st.position.y + st.height * 0.5,
+        st.position.z
+      );
+      this.animateCameraTo(
+        target.clone().add(new THREE.Vector3(4.0, 3.4, 4.2)),
+        target
+      );
+      return;
+    }
+
+    if (domain === 'roof') {
+      const rf = data.roofs.find((r) => r.id === id);
+      if (!rf) return;
+      this.selectObject(null, false);
+      this.archEngine.setSelection({ kind: 'roof', id: rf.id });
+      this.rebuildArchitecture();
+      this.emitState();
+      const target = new THREE.Vector3(rf.center.x, rf.baseY + 0.8, rf.center.z);
+      this.animateCameraTo(
+        target.clone().add(new THREE.Vector3(6.5, 5.5, 7.2)),
+        target
+      );
+      return;
+    }
+
+    if (domain === 'site' && data.site) {
+      const target = new THREE.Vector3(data.site.center.x, 0.5, data.site.center.z);
+      const span = Math.max(data.site.width, data.site.depth, 12);
+      this.animateCameraTo(
+        target.clone().add(new THREE.Vector3(span * 0.7, span * 0.9, span * 0.8)),
+        target
+      );
+    }
+  }
+
+  /**
+   * Restores a saved Design Alternative snapshot into the active working project while pushing an
+   * Undo snapshot so the user can even press Undo (`Ctrl+Z`) to revert a restore!
+   */
+  public restoreDesignAlternativeSnapshot(
+    snapshot: DesignAlternativeSnapshot
+  ): void {
+    this.restoreSnapshot({
+      objects: snapshot.objects.map((o) => ({
+        ...o,
+        position: { ...o.position },
+        rotation: { ...o.rotation },
+        scale: { ...o.scale },
+        subdivision: { ...o.subdivision },
+        modifiers: o.modifiers ? { ...o.modifiers } : undefined,
+        pointLight: o.pointLight ? { ...o.pointLight } : undefined,
+      })),
+      selectedId: null,
+      selectedIds: [],
+      sculptedHeightsB64: snapshot.sculptedHeightsB64 ?? null,
+      floors: snapshot.floors.map((f) => ({ ...f })),
+      activeFloorId: snapshot.activeFloorId,
+      archData: snapshot.archData,
+      archSelection: null,
+    });
+    if (snapshot.floorViewMode) {
+      this.floorViewMode = snapshot.floorViewMode;
+      this.applyFloorVisibilityAndGhosting();
+    }
+    if (snapshot.gridSettings) {
+      this.updateGridSettings(snapshot.gridSettings);
+    }
+    this.pushHistorySnapshot();
     this.emitState();
   }
 
@@ -5213,8 +5593,10 @@ export class StudioEngine {
       groupId: data.groupId ?? null,
       groupName: data.groupName,
       archRole: data.archRole,
+      modularId: data.modularId,
       surfaceRule: data.surfaceRule,
       floorId: data.floorId,
+      constructionMaterialId: data.constructionMaterialId,
       modelAssetId: data.modelAssetId,
       modelFormat: data.modelFormat ?? importedEntry?.format,
       modelThumbUrl: data.modelThumbUrl ?? importedEntry?.thumbDataUrl,
@@ -6790,8 +7172,12 @@ export class StudioEngine {
       groupId: (mesh.userData.groupId as string | null | undefined) ?? null,
       groupName: mesh.userData.groupName as string | undefined,
       archRole: mesh.userData.archRole as ArchitecturalRole | undefined,
+      modularId: mesh.userData.modularId as string | undefined,
       surfaceRule: mesh.userData.surfaceRule as SurfacePlacementRule | undefined,
       floorId: mesh.userData.floorId as string | undefined,
+      constructionMaterialId: mesh.userData.constructionMaterialId as
+        | string
+        | undefined,
       modelAssetId: mesh.userData.modelAssetId as string | undefined,
       modelFormat: mesh.userData.modelFormat as string | undefined,
       modelThumbUrl: mesh.userData.modelThumbUrl as string | undefined,
