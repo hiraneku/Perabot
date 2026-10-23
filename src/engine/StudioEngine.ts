@@ -37,6 +37,14 @@ import {
 } from './proceduralTextures';
 import { performBooleanCSG } from './BooleanCSGEngine';
 import {
+  cloneEditableMesh,
+  editableMeshFromGeometry,
+  extrudeMeshFaces,
+  geometryFromEditableMesh,
+  insetMeshFace,
+  transformMeshVertices,
+} from './meshTopology';
+import {
   buildCustomProfileGeometry,
   cloneCustomProfileData,
 } from './CustomProfileEngine';
@@ -76,6 +84,7 @@ import {
   DEFAULT_WALL_DRAW,
   DesignAlternativeSnapshot,
   DocumentationExportSettings,
+  EditableMeshData,
   DragFeedback,
   FloorViewMode,
   GraphicsQuality,
@@ -2225,6 +2234,7 @@ export class StudioEngine {
         scale: { ...o.scale },
         subdivision: { ...o.subdivision },
         modifiers: o.modifiers ? { ...o.modifiers } : undefined,
+        editableMesh: o.editableMesh ? cloneEditableMesh(o.editableMesh) : undefined,
         pointLight: o.pointLight ? { ...o.pointLight } : undefined,
       })),
       selectedId: null,
@@ -7334,6 +7344,13 @@ export class StudioEngine {
       customProfile: data.customProfile
         ? cloneCustomProfileData(data.customProfile)
         : undefined,
+      editableMesh: data.editableMesh
+        ? {
+            version: 1,
+            vertices: data.editableMesh.vertices.map((v) => ({ ...v })),
+            faces: data.editableMesh.faces.map((f) => [...f]),
+          }
+        : undefined,
       subdivision: { ...subdiv },
       subdivStats: stats,
       groupId: data.groupId ?? null,
@@ -7922,6 +7939,69 @@ export class StudioEngine {
     }
     this.emitState();
     return (mesh.userData.subdivStats as SubdivisionStats) ?? null;
+  }
+
+  /** Creates persisted editable polygon topology from the selected object's current visible geometry. */
+  public beginSelectedMeshEdit(): EditableMeshData | null {
+    if (!this.selectedId) return null;
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh || mesh.userData.modelAssetId || mesh.userData.archRole) return null;
+    const existing = mesh.userData.editableMesh as EditableMeshData | undefined;
+    if (existing) return cloneEditableMesh(existing);
+    const editable = editableMeshFromGeometry(mesh.geometry);
+    if (!editable.faces.length || editable.vertices.length > 100_000) return null;
+    mesh.userData.editableMesh = editable;
+    // Existing procedural geometry is baked at this explicit transition to topology editing.
+    mesh.userData.customProfile = undefined;
+    mesh.userData.csgOperations = undefined;
+    mesh.userData.subdivision = { ...DEFAULT_SUBDIVISION_SETTINGS };
+    mesh.userData.modifiers = { ...DEFAULT_MODIFIER_SETTINGS };
+    mesh.geometry.dispose();
+    mesh.geometry = geometryFromEditableMesh(editable);
+    this.syncSubdivisionGridLines(mesh, null, false);
+    this.updateSelectionHighlight();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return cloneEditableMesh(editable);
+  }
+
+  public getSelectedEditableMesh(): EditableMeshData | null {
+    if (!this.selectedId) return null;
+    const data = this.meshMap.get(this.selectedId)?.userData.editableMesh as EditableMeshData | undefined;
+    return data ? cloneEditableMesh(data) : null;
+  }
+
+  public updateSelectedEditableMesh(next: EditableMeshData, recordHistory = true): boolean {
+    if (!this.selectedId) return false;
+    const mesh = this.meshMap.get(this.selectedId);
+    if (!mesh || !mesh.userData.editableMesh || next.vertices.length > 100_000 || next.faces.length > 200_000) return false;
+    const geometry = geometryFromEditableMesh(next);
+    const old = mesh.geometry;
+    mesh.geometry = geometry;
+    old.dispose();
+    mesh.userData.editableMesh = cloneEditableMesh(next);
+    mesh.userData.subdivStats = computeGeometryStats(geometry, geometry, DEFAULT_SUBDIVISION_SETTINGS, false);
+    mesh.geometry.computeBoundingBox();
+    mesh.geometry.computeBoundingSphere();
+    this.updateSelectionHighlight();
+    if (recordHistory) this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  public transformSelectedMeshVertices(indices: number[], delta: Vec3): boolean {
+    const mesh = this.getSelectedEditableMesh();
+    return mesh ? this.updateSelectedEditableMesh(transformMeshVertices(mesh, indices, delta)) : false;
+  }
+
+  public extrudeSelectedMeshFaces(indices: number[], distance: number): boolean {
+    const mesh = this.getSelectedEditableMesh();
+    return mesh ? this.updateSelectedEditableMesh(extrudeMeshFaces(mesh, indices, distance)) : false;
+  }
+
+  public insetSelectedMeshFace(index: number, amount: number): boolean {
+    const mesh = this.getSelectedEditableMesh();
+    return mesh ? this.updateSelectedEditableMesh(insetMeshFace(mesh, index, amount)) : false;
   }
 
   /**
@@ -9543,6 +9623,13 @@ export class StudioEngine {
         : undefined,
       customProfile: mesh.userData.customProfile
         ? cloneCustomProfileData(mesh.userData.customProfile as CustomProfileData)
+        : undefined,
+      editableMesh: mesh.userData.editableMesh
+        ? {
+            version: 1,
+            vertices: (mesh.userData.editableMesh as EditableMeshData).vertices.map((v) => ({ ...v })),
+            faces: (mesh.userData.editableMesh as EditableMeshData).faces.map((f) => [...f]),
+          }
         : undefined,
       subdivision: { ...subdiv },
       visible: userVisible,

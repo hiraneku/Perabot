@@ -148,6 +148,13 @@ export function cloneSceneObjects(
     scale: { ...o.scale },
     subdivision: { ...o.subdivision },
     modifiers: o.modifiers ? { ...o.modifiers } : undefined,
+    editableMesh: o.editableMesh
+      ? {
+          version: 1,
+          vertices: o.editableMesh.vertices.map((v) => ({ ...v })),
+          faces: o.editableMesh.faces.map((face) => [...face]),
+        }
+      : undefined,
     pointLight: o.pointLight ? { ...o.pointLight } : undefined,
     csgOperations: Array.isArray(o.csgOperations)
       ? o.csgOperations.map((op) => ({

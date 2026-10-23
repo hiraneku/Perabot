@@ -43,6 +43,14 @@ import { serializeGroupToOBJString } from '../src/engine/modelExporter';
 import { applyTriplanarWorldSpaceUVs } from '../src/engine/proceduralTextures';
 import { constrainTranslationPosition } from '../src/engine/transformConstraints';
 import {
+  editableMeshFromGeometry,
+  extrudeMeshFaces,
+  geometryFromEditableMesh,
+  insetMeshFace,
+  meshEdges,
+  transformMeshVertices,
+} from '../src/engine/meshTopology';
+import {
   calcWallCenterlineLength,
   computePolygonAreaXZ,
   computeSingleRoofQuantities,
@@ -65,7 +73,7 @@ import {
   duplicateDesignAlternative,
   runIntegratedProjectAnalysis,
 } from '../src/engine/archAnalysis/alternativesService';
-import { cloneArchHouseData, migrateSerializedProjectFile } from '../src/engine/archAnalysis/schemaMigration';
+import { cloneArchHouseData, cloneSceneObjects, migrateSerializedProjectFile } from '../src/engine/archAnalysis/schemaMigration';
 import {
   exportPrintableArchitecturalReportHTML,
   generateDoorWindowSchedule,
@@ -1504,3 +1512,46 @@ describe('Phase 1 Smart Wall Templates (38) & Watertight Corner/Curve Engine', (
 
 
 
+
+describe('General Mesh Edit Mode foundations', () => {
+  it('welds primitive triangle soup into editable topology and round-trips manifold index references', () => {
+    const source = new THREE.BoxGeometry(2, 2, 2);
+    const editable = editableMeshFromGeometry(source);
+    assert.equal(editable.vertices.length, 8);
+    assert.equal(editable.faces.length, 12);
+    assert.equal(meshEdges(editable).length, 18);
+    const rendered = geometryFromEditableMesh(editable);
+    assert.equal(rendered.getAttribute('position').count, 8);
+    assert.equal(rendered.index?.count, 36);
+    rendered.dispose();
+    source.dispose();
+  });
+
+  it('supports non-destructive component translation, face inset and face extrusion with valid topology', () => {
+    const base = editableMeshFromGeometry(new THREE.BoxGeometry(2, 2, 2));
+    const originalX = base.vertices[0].x;
+    const moved = transformMeshVertices(base, [0], { x: 0.25, y: 0, z: 0 });
+    assert.equal(moved.vertices[0].x, originalX + 0.25);
+    assert.equal(base.vertices[0].x, originalX);
+
+    const inset = insetMeshFace(base, 0, 0.2);
+    assert.equal(inset.faces.length, base.faces.length + 3);
+    assert.equal(inset.vertices.length, base.vertices.length + 3);
+    const extruded = extrudeMeshFaces(base, [0], 0.5);
+    assert.equal(extruded.faces.length, base.faces.length + 3);
+    assert.equal(extruded.vertices.length, base.vertices.length + 3);
+    const output = geometryFromEditableMesh(extruded);
+    assert.ok(output.getAttribute('position').count > 0);
+    output.dispose();
+
+    const saved = cloneSceneObjects([{
+      id: 'editable', name: 'Editable', kind: 'cube',
+      position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 },
+      color: '#ffffff', roughness: 0.5, metalness: 0, opacity: 1, emissive: '#000000',
+      emissiveIntensity: 0, flatShading: false, subdivision: { ...DEFAULT_SUBDIVISION_SETTINGS },
+      visible: true, editableMesh: extruded,
+    }]);
+    saved[0].editableMesh!.vertices[0].x += 10;
+    assert.notEqual(saved[0].editableMesh!.vertices[0].x, extruded.vertices[0].x);
+  });
+});

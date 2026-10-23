@@ -977,6 +977,14 @@ export interface WallDrawDefaults {
   activeTemplateId?: WallTemplateId;
 }
 
+export interface EditableMeshData {
+  version: 1;
+  vertices: Vec3[];
+  faces: number[][];
+}
+
+export type MeshComponentMode = 'vertex' | 'edge' | 'face';
+
 export interface SceneObjectData {
   id: string;
   name: string;
@@ -999,6 +1007,8 @@ export interface SceneObjectData {
   modifiers?: ObjectModifierSettings;
   csgOperations?: CsgOperandData[];
   customProfile?: CustomProfileData;
+  /** Persisted polygon topology when an object has entered general mesh editing. */
+  editableMesh?: EditableMeshData;
   visible: boolean;
   locked?: boolean;
   groupId?: string | null;
