@@ -420,7 +420,9 @@ export const TransformToolbar: React.FC<TransformToolbarProps> = ({
               { id: 'x', label: 'X', cls: 'x' },
               { id: 'y', label: 'Y', cls: 'y' },
               { id: 'z', label: 'Z', cls: 'z' },
+              { id: 'xy', label: 'XY', cls: 'xy' },
               { id: 'xz', label: 'XZ', cls: 'xz' },
+              { id: 'yz', label: 'YZ', cls: 'yz' },
             ] as Array<{ id: AxisLockMode; label: string; cls: string }>
           ).map((ax) => (
             <button

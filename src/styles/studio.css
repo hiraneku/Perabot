@@ -7248,6 +7248,52 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   cursor: pointer;
 }
 
+.arch-bezier-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
+}
+
+.arch-advanced-row,
+.arch-advanced-number-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.arch-settings-select,
+.arch-advanced-number-row input[type='number'],
+.arch-advanced-row input[type='number'] {
+  min-width: 0;
+  max-width: 52%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.arch-settings-select:focus,
+.arch-advanced-number-row input:focus,
+.arch-advanced-row input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent-blue) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.arch-advanced-number-row input[type='number'] {
+  width: 92px;
+}
+
 .arch-highlight-toggle {
   padding: 8px 10px;
   border-radius: 10px;

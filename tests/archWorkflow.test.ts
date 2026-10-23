@@ -39,6 +39,7 @@ import {
 } from '../src/engine/CustomProfileEngine';
 import { serializeGroupToOBJString } from '../src/engine/modelExporter';
 import { applyTriplanarWorldSpaceUVs } from '../src/engine/proceduralTextures';
+import { constrainTranslationPosition } from '../src/engine/transformConstraints';
 import {
   calcWallCenterlineLength,
   computePolygonAreaXZ,
@@ -760,7 +761,7 @@ describe('System 7: Architect Life × Blender Unification & Existing-Wall Angle 
     assert.equal(locked.point.z, 0);
     assert.equal(locked.angleDeg, 0);
 
-    // With angleLock = false -> preserves off-axis freeform z = 0.35 (snapped to 0.1m grid -> 0.4)!
+    // With angleLock = false, freeform preserves the continuous raw coordinate (no grid quantization).
     const freeform = eng.snapExistingWallVertexDrag(
       'floor_1',
       { x: 4, z: 0 },
@@ -768,7 +769,7 @@ describe('System 7: Architect Life × Blender Unification & Existing-Wall Angle 
       false,
       0.1
     );
-    assert.equal(freeform.point.z, 0.4);
+    assert.equal(freeform.point.z, 0.38);
     assert.notEqual(freeform.angleDeg, 0);
   });
 
@@ -927,6 +928,55 @@ describe('Wave 1 & Wave 2 Precision Architecture Mechanics', () => {
     const clampedOp = eng.getData().openings.find((o) => o.id === op1!.id)!;
     assert.ok(clampedOp.width <= 1.28);
     assert.ok(clampedOp.offsetRatio >= 0.3 && clampedOp.offsetRatio <= 0.7);
+  });
+});
+
+describe('Advanced Wall Editing & Transform Constraints', () => {
+  it('keeps locked translation coordinates pinned to the immutable drag origin on every update', () => {
+    const origin = { x: 2, y: 3, z: 4 };
+    const moved = { x: 7, y: -5, z: 9 };
+    assert.deepEqual(constrainTranslationPosition(moved, origin, 'x'), { x: 7, y: 3, z: 4 });
+    assert.deepEqual(constrainTranslationPosition(moved, origin, 'y'), { x: 2, y: -5, z: 4 });
+    assert.deepEqual(constrainTranslationPosition(moved, origin, 'z'), { x: 2, y: 3, z: 9 });
+    assert.deepEqual(constrainTranslationPosition(moved, origin, 'xy'), { x: 7, y: -5, z: 4 });
+    assert.deepEqual(constrainTranslationPosition(moved, origin, 'xz'), { x: 7, y: 3, z: 9 });
+    assert.deepEqual(constrainTranslationPosition(moved, origin, 'yz'), { x: 2, y: -5, z: 9 });
+    assert.deepEqual(constrainTranslationPosition(moved, origin, 'free'), moved);
+  });
+
+  it('provides genuinely continuous free-angle editing and configurable 15°, 30°, 45° angle increments', () => {
+    const eng = new ArchBuilderEngine(createEmptyArchHouseData());
+    const anchor = { x: 0, z: 0 };
+    const raw = { x: 2.137, z: 1.037 };
+    const free = eng.snapWallPoint(raw, 'floor_1', anchor, false, 0.1);
+    assert.ok(Math.abs(free.point.x - raw.x) < 1e-9);
+    assert.ok(Math.abs(free.point.z - raw.z) < 1e-9);
+
+    const targetAngle = 31 * Math.PI / 180;
+    const locked = eng.snapWallPoint(
+      { x: 2 * Math.cos(targetAngle), z: 2 * Math.sin(targetAngle) },
+      'floor_1', anchor, true, 0.001, null, 0, false, 30
+    );
+    assert.ok(Math.abs(locked.angleDeg - 30) <= 1);
+    assert.ok(Math.abs(locked.lengthM - 2) < 0.01);
+  });
+
+  it('supports detailed, frame-relative cubic Bézier wall curves with smooth tangents and manifold output', () => {
+    const wall = makeWall('bezier', { x: -2, z: 0 }, { x: 2, z: 0 });
+    wall.pathMode = 'cubic-bezier';
+    wall.bezierControl1Along = 0.18;
+    wall.bezierControl1Offset = 0.8;
+    wall.bezierControl2Along = 0.82;
+    wall.bezierControl2Offset = -0.65;
+    const len = computeWallLength(wall);
+    assert.ok(len > 4.05, `Cubic path length must exceed the 4.00m chord (got ${len})`);
+    const a = sampleWallCurvePoint(wall, 0);
+    const b = sampleWallCurvePoint(wall, 1);
+    assert.ok(Math.hypot(a.x - wall.start.x, a.z - wall.start.z) < 1e-6);
+    assert.ok(Math.hypot(b.x - wall.end.x, b.z - wall.end.z) < 1e-6);
+    const built = buildManifoldWallBodyGeometry(wall, []);
+    assert.ok(built.bodyGeo.getAttribute('position').count > 300);
+    built.bodyGeo.dispose();
   });
 });
 

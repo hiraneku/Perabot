@@ -421,12 +421,66 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                 type="range"
                 min={-2.5}
                 max={2.5}
-                step={0.05}
+                step={0.01}
                 value={wallDefaults.curveBulge}
                 onChange={(e) =>
                   onChangeWallDefaults({ curveBulge: parseFloat(e.target.value) })
                 }
               />
+              <label className="arch-advanced-row">
+                <span>{lang === 'id' ? 'Profil jalur' : lang === 'ja' ? 'パス形状' : 'Path profile'}</span>
+                <select
+                  className="arch-settings-select"
+                  value={wallDefaults.pathMode ?? 'line'}
+                  onChange={(e) =>
+                    onChangeWallDefaults({
+                      pathMode: e.target.value as NonNullable<WallDrawDefaults['pathMode']>,
+                      curveBulge:
+                        e.target.value === 'line'
+                          ? 0
+                          : Math.abs(wallDefaults.curveBulge) < 0.04
+                          ? 0.45
+                          : wallDefaults.curveBulge,
+                    })
+                  }
+                >
+                  <option value="line">{lang === 'id' ? 'Lurus' : lang === 'ja' ? '直線' : 'Straight'}</option>
+                  <option value="circular-arc">{lang === 'id' ? 'Busur lingkaran' : lang === 'ja' ? '円弧' : 'Circular arc'}</option>
+                  <option value="s-curve">{lang === 'id' ? 'Kurva S Bézier' : lang === 'ja' ? 'S字ベジェ曲線' : 'S Bézier curve'}</option>
+                  <option value="cubic-bezier">{lang === 'id' ? 'Bézier bebas (2 handle)' : lang === 'ja' ? '自由ベジェ (2ハンドル)' : 'Free Bézier (2 handles)'}</option>
+                </select>
+              </label>
+              {(wallDefaults.pathMode ?? 'line') === 'cubic-bezier' && (
+                <div className="arch-bezier-controls">
+                  {([
+                    ['bezierControl1Along', lang === 'id' ? 'Handle 1 · posisi' : lang === 'ja' ? 'ハンドル1 · 位置' : 'Handle 1 · along', 0.25, 0, 1],
+                    ['bezierControl1Offset', lang === 'id' ? 'Handle 1 · offset (m)' : lang === 'ja' ? 'ハンドル1 · オフセット (m)' : 'Handle 1 · offset (m)', 0, -3, 3],
+                    ['bezierControl2Along', lang === 'id' ? 'Handle 2 · posisi' : lang === 'ja' ? 'ハンドル2 · 位置' : 'Handle 2 · along', 0.75, 0, 1],
+                    ['bezierControl2Offset', lang === 'id' ? 'Handle 2 · offset (m)' : lang === 'ja' ? 'ハンドル2 · オフセット (m)' : 'Handle 2 · offset (m)', 0, -3, 3],
+                  ] as const).map(([key, label, fallback, min, max]) => (
+                    <label className="arch-advanced-number-row" key={key}>
+                      <span>{label}</span>
+                      <input type="number" min={min} max={max} step={0.01}
+                        value={wallDefaults[key] ?? fallback}
+                        onChange={(e) => onChangeWallDefaults({ [key]: Math.max(min, Math.min(max, parseFloat(e.target.value) || 0)) })}
+                      />
+                    </label>
+                  ))}
+                </div>
+              )}
+              {(wallDefaults.pathMode ?? 'line') === 's-curve' && (
+                <label className="arch-advanced-row">
+                  <span>{lang === 'id' ? 'Amplitudo gelombang' : lang === 'ja' ? '波の振幅' : 'Wave amplitude'}</span>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1.5}
+                    step={0.01}
+                    value={wallDefaults.sWaveAmp ?? 0.55}
+                    onChange={(e) => onChangeWallDefaults({ sWaveAmp: Math.max(0.01, parseFloat(e.target.value) || 0.01) })}
+                  />
+                </label>
+              )}
             </div>
 
             <div className="arch-check-grid">
@@ -473,6 +527,20 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                 <span>{t.archSafeConfirmToggle}</span>
               </label>
             </div>
+            {wallDefaults.angleSnap && (
+              <label className="arch-advanced-row">
+                <span>{lang === 'id' ? 'Interval kunci sudut' : lang === 'ja' ? '角度スナップ間隔' : 'Angle increment'}</span>
+                <select
+                  className="arch-settings-select"
+                  value={wallDefaults.angleSnapStepDeg}
+                  onChange={(e) => onChangeWallDefaults({ angleSnapStepDeg: Number(e.target.value) })}
+                >
+                  {[5, 10, 15, 22.5, 30, 45, 60, 90].map((deg) => (
+                    <option key={deg} value={deg}>{deg}°</option>
+                  ))}
+                </select>
+              </label>
+            )}
 
             {/* Active Draw Template Indicator (when drawing with a specialized template) */}
             {wallDefaults.activeTemplateId &&
@@ -581,28 +649,118 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                   />
                 </div>
 
+                <label className="arch-advanced-row">
+                  <span>{lang === 'id' ? 'Sambungan sudut' : lang === 'ja' ? 'コーナー接合' : 'Corner joint'}</span>
+                  <select
+                    className="arch-settings-select"
+                    value={selectedWall.cornerStyle ?? 'sharp'}
+                    onChange={(e) => onUpdateWall(selectedWall.id, { cornerStyle: e.target.value as NonNullable<ArchWallSegment['cornerStyle']> }, true)}
+                  >
+                    <option value="sharp">{lang === 'id' ? 'Kotak / miter' : lang === 'ja' ? '直角 / マイター' : 'Square / miter'}</option>
+                    <option value="rounded-inner">{lang === 'id' ? 'Lengkung dalam' : lang === 'ja' ? '内側を丸める' : 'Rounded inner'}</option>
+                    <option value="rounded-outer">{lang === 'id' ? 'Lengkung luar' : lang === 'ja' ? '外側を丸める' : 'Rounded outer'}</option>
+                    <option value="inner-trim">{lang === 'id' ? 'Lis sudut dalam' : lang === 'ja' ? '内側コーナーモール' : 'Inner corner trim'}</option>
+                    <option value="outer-quoin">{lang === 'id' ? 'Pilaster sudut luar' : lang === 'ja' ? '外側ピラスター' : 'Outer corner pilaster'}</option>
+                  </select>
+                </label>
+                {(selectedWall.cornerStyle === 'rounded-inner' || selectedWall.cornerStyle === 'rounded-outer') && (
+                  <div className="arch-advanced-number-row">
+                    <span>{lang === 'id' ? 'Radius sudut (m)' : lang === 'ja' ? 'コーナー半径 (m)' : 'Corner radius (m)'}</span>
+                    <input type="number" min={0.05} max={2} step={0.01} value={selectedWall.cornerRadius ?? 0.5}
+                      onChange={(e) => onUpdateWall(selectedWall.id, { cornerRadius: Math.max(0.05, Math.min(2, parseFloat(e.target.value) || 0.05)) }, false)}
+                      onBlur={() => onUpdateWall(selectedWall.id, {}, true)}
+                    />
+                  </div>
+                )}
+                <label className="arch-advanced-row">
+                  <span>{lang === 'id' ? 'Profil jalur' : lang === 'ja' ? 'パス形状' : 'Path profile'}</span>
+                  <select
+                    className="arch-settings-select"
+                    value={selectedWall.pathMode ?? (Math.abs(selectedWall.curveBulge) > 0.015 ? 'circular-arc' : 'line')}
+                    onChange={(e) =>
+                      onUpdateWall(
+                        selectedWall.id,
+                        {
+                          pathMode: e.target.value as NonNullable<ArchWallSegment['pathMode']>,
+                          curveBulge: e.target.value === 'line' ? 0 : selectedWall.curveBulge || 0.45,
+                        },
+                        true
+                      )
+                    }
+                  >
+                    <option value="line">{lang === 'id' ? 'Lurus' : lang === 'ja' ? '直線' : 'Straight'}</option>
+                    <option value="circular-arc">{lang === 'id' ? 'Busur lingkaran' : lang === 'ja' ? '円弧' : 'Circular arc'}</option>
+                    <option value="s-curve">{lang === 'id' ? 'Kurva S Bézier' : lang === 'ja' ? 'S字ベジェ曲線' : 'S Bézier curve'}</option>
+                    <option value="cubic-bezier">{lang === 'id' ? 'Bézier bebas (2 handle)' : lang === 'ja' ? '自由ベジェ (2ハンドル)' : 'Free Bézier (2 handles)'}</option>
+                    <option value="j-curve-end">{lang === 'id' ? 'Lengkung ujung (J)' : lang === 'ja' ? '端部Jカーブ' : 'J-end hook'}</option>
+                  </select>
+                </label>
                 <div className="arch-slider-group">
                   <div className="arch-slider-head">
-                    <span>{t.archWallCurveLabel}</span>
+                    <span>{lang === 'id' ? 'Tinggi busur / kontrol lengkung' : lang === 'ja' ? '円弧高 / カーブ制御' : 'Arc rise / curve control'}</span>
                     <strong>{selectedWall.curveBulge.toFixed(2)} m</strong>
                   </div>
                   <input
                     type="range"
-                    min={-2.5}
-                    max={2.5}
-                    step={0.05}
+                    min={-3.0}
+                    max={3.0}
+                    step={0.01}
                     value={selectedWall.curveBulge}
                     onChange={(e) =>
-                      onUpdateWall(
-                        selectedWall.id,
-                        { curveBulge: parseFloat(e.target.value) },
-                        false
-                      )
+                      onUpdateWall(selectedWall.id, { curveBulge: parseFloat(e.target.value) }, false)
                     }
                     onMouseUp={() => onUpdateWall(selectedWall.id, {}, true)}
                     onTouchEnd={() => onUpdateWall(selectedWall.id, {}, true)}
                   />
+                  <div className="arch-advanced-number-row">
+                    <span>{lang === 'id' ? 'Nilai presisi (m)' : lang === 'ja' ? '精密値 (m)' : 'Exact value (m)'}</span>
+                    <input
+                      type="number"
+                      min={-3}
+                      max={3}
+                      step={0.001}
+                      value={selectedWall.curveBulge}
+                      onChange={(e) =>
+                        onUpdateWall(selectedWall.id, { curveBulge: Math.max(-3, Math.min(3, parseFloat(e.target.value) || 0)) }, false)
+                      }
+                      onBlur={() => onUpdateWall(selectedWall.id, {}, true)}
+                    />
+                  </div>
                 </div>
+                {(selectedWall.pathMode === 's-curve') && (
+                  <div className="arch-advanced-number-row">
+                    <span>{lang === 'id' ? 'Amplitudo kurva S (m)' : lang === 'ja' ? 'S字振幅 (m)' : 'S-curve amplitude (m)'}</span>
+                    <input
+                      type="number"
+                      min={0.01}
+                      max={1.5}
+                      step={0.001}
+                      value={selectedWall.sWaveAmp ?? 0.55}
+                      onChange={(e) => onUpdateWall(selectedWall.id, { sWaveAmp: Math.max(0.01, Math.min(1.5, parseFloat(e.target.value) || 0.01)) }, false)}
+                      onBlur={() => onUpdateWall(selectedWall.id, {}, true)}
+                    />
+                  </div>
+                )}
+
+                {selectedWall.pathMode === 'cubic-bezier' && (
+                  <div className="arch-bezier-controls">
+                    {([
+                      ['bezierControl1Along', lang === 'id' ? 'Handle 1 · posisi' : lang === 'ja' ? 'ハンドル1 · 位置' : 'Handle 1 · along', 0.25, 0, 1],
+                      ['bezierControl1Offset', lang === 'id' ? 'Handle 1 · offset (m)' : lang === 'ja' ? 'ハンドル1 · オフセット (m)' : 'Handle 1 · offset (m)', 0, -3, 3],
+                      ['bezierControl2Along', lang === 'id' ? 'Handle 2 · posisi' : lang === 'ja' ? 'ハンドル2 · 位置' : 'Handle 2 · along', 0.75, 0, 1],
+                      ['bezierControl2Offset', lang === 'id' ? 'Handle 2 · offset (m)' : lang === 'ja' ? 'ハンドル2 · オフセット (m)' : 'Handle 2 · offset (m)', 0, -3, 3],
+                    ] as const).map(([key, label, fallback, min, max]) => (
+                      <label className="arch-advanced-number-row" key={key}>
+                        <span>{label}</span>
+                        <input type="number" min={min} max={max} step={0.001}
+                          value={selectedWall[key] ?? fallback}
+                          onChange={(e) => onUpdateWall(selectedWall.id, { [key]: Math.max(min, Math.min(max, parseFloat(e.target.value) || 0)) }, false)}
+                          onBlur={() => onUpdateWall(selectedWall.id, {}, true)}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                )}
 
                 {/* Independent Construction Material Selectors (System 2) */}
                 <div className="arch-const-mat-box">

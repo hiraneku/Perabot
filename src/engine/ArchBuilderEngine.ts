@@ -165,7 +165,7 @@ export function isWallCurvedPath(
   if (w.pathMode === 's-curve') {
     return Math.abs(w.sWaveAmp ?? 0.45) >= 0.015;
   }
-  if (w.pathMode === 'j-curve-end') {
+  if (w.pathMode === 'j-curve-end' || w.pathMode === 'cubic-bezier') {
     return true;
   }
   return Math.abs(w.curveBulge) >= 0.02;
@@ -1283,7 +1283,8 @@ export class ArchBuilderEngine {
     gridStep: number,
     forcedEndpointSnap?: Vec2XZ | null,
     extraEndpointRadiusM = 0,
-    preferDiagonal45 = false
+    preferDiagonal45 = false,
+    angleSnapStepDeg = 45
   ): {
     point: Vec2XZ;
     snappedEndpoint: boolean;
@@ -1349,46 +1350,31 @@ export class ArchBuilderEngine {
           let bestDiag = 45;
           let bestDiff = Infinity;
           for (const d of diagonals) {
-            const diff = Math.min(
-              Math.abs(deg - d),
-              360 - Math.abs(deg - d)
-            );
+            const diff = Math.min(Math.abs(deg - d), 360 - Math.abs(deg - d));
             if (diff < bestDiff) {
               bestDiff = diff;
               bestDiag = d;
             }
           }
-          if (bestDiff <= 28) {
-            ang = bestDiag * DEG2RAD;
-          }
+          if (bestDiff <= 28) ang = bestDiag * DEG2RAD;
         } else if (angleSnap) {
           const deg = ((ang * RAD2DEG) % 360 + 360) % 360;
-          const cardinals = [0, 90, 180, 270, 360];
-          const diagonals = [45, 135, 225, 315];
-          let snappedDeg: number | null = null;
-          for (const c of cardinals) {
-            if (Math.abs(deg - c) <= 8.5) {
-              snappedDeg = c % 360;
-              break;
-            }
-          }
-          if (snappedDeg === null) {
-            for (const d of diagonals) {
-              if (Math.abs(deg - d) <= 5.0) {
-                snappedDeg = d;
-                break;
-              }
-            }
-          }
-          if (snappedDeg !== null) {
-            ang = snappedDeg * DEG2RAD;
-          }
+          const step = Math.max(1, Math.min(90, angleSnapStepDeg || 45));
+          const snappedDeg = (Math.round(deg / step) * step + 360) % 360;
+          const diff = Math.min(
+            Math.abs(deg - snappedDeg),
+            360 - Math.abs(deg - snappedDeg)
+          );
+          // Magnetic angular tolerance scales with the selected increment; never pulls from far away.
+          const tolerance = Math.min(9, Math.max(1.5, step * 0.16));
+          if (diff <= tolerance) ang = snappedDeg * DEG2RAD;
         }
+        // Free angle means continuous vector AND continuous length: never quantize distance here.
+        // Grid-length quantization is intentionally tied to angle-lock mode; grid/object magnets remain separate snap systems.
         const fineStep = gridStep > 0 ? Math.min(0.1, gridStep) : 0.05;
-        const cleanLen = Math.max(
-          fineStep,
-          Math.round(rawLen / fineStep) * fineStep
-        );
+        const cleanLen = angleSnap
+          ? Math.max(fineStep, Math.round(rawLen / fineStep) * fineStep)
+          : rawLen;
         x = anchorStart.x + Math.cos(ang) * cleanLen;
         z = anchorStart.z + Math.sin(ang) * cleanLen;
       }
@@ -1617,7 +1603,7 @@ export class ArchBuilderEngine {
     this.splitWallsContainingPoint(floorId, cleanStart);
     this.splitWallsContainingPoint(floorId, cleanEnd);
 
-    if (Math.abs(defaults.curveBulge) < 0.04 && !isTemplateCurved) {
+    if (Math.abs(defaults.curveBulge) < 0.04 && !isTemplateCurved && (!defaults.pathMode || defaults.pathMode === 'line')) {
       // Check interior X-intersections with existing straight walls so crossing walls split cleanly!
       const crossPts: Vec2XZ[] = [];
       const dx1 = cleanEnd.x - cleanStart.x;
@@ -1709,6 +1695,12 @@ export class ArchBuilderEngine {
       thickness: defaults.thickness,
       style: defaults.style,
       curveBulge: defaults.curveBulge,
+      pathMode: defaults.pathMode ?? (Math.abs(defaults.curveBulge) > 0.015 ? 'circular-arc' : 'line'),
+      sWaveAmp: defaults.sWaveAmp,
+      bezierControl1Along: defaults.bezierControl1Along,
+      bezierControl1Offset: defaults.bezierControl1Offset,
+      bezierControl2Along: defaults.bezierControl2Along,
+      bezierControl2Offset: defaults.bezierControl2Offset,
       exteriorColor: defaults.exteriorColor,
       interiorColor: defaults.interiorColor,
       exteriorPattern: defaults.exteriorPattern,
@@ -4514,7 +4506,8 @@ export class ArchBuilderEngine {
     rawTargetXZ: Vec2XZ,
     angleLock: boolean,
     gridStep = 0.05,
-    explicitBindings?: ReadonlyArray<WallVertexBinding>
+    explicitBindings?: ReadonlyArray<WallVertexBinding>,
+    angleSnapStepDeg = 45
   ): {
     point: Vec2XZ;
     snappedEndpoint: boolean;
@@ -4650,19 +4643,21 @@ export class ArchBuilderEngine {
         }
       }
 
-      // 2b. Lock ray angle to crisp 45° increments (0° / 45° / 90° / 135° / 180° / 225° / 270° / 315°) from primary anchor!
+      // Configurable angle increments (1°–90°); lock constrains heading only when within its magnetic tolerance.
       const anchor = anchors[0];
       const dx = px - anchor.x;
       const dz = pz - anchor.z;
-      const rawDist = Math.max(0.25, Math.hypot(dx, dz));
-      const snappedDist =
-        step >= 0.05 ? Math.max(0.25, Math.round(rawDist / step) * step) : rawDist;
+      const rawDist = Math.hypot(dx, dz);
+      const snappedDist = step >= 0.05 ? Math.round(rawDist / step) * step : rawDist;
       const rawAng = Math.atan2(dz, dx);
-      const snapStep = Math.PI / 4;
-      const lockedAng = Math.round(rawAng / snapStep) * snapStep;
-      px = anchor.x + Math.cos(lockedAng) * snappedDist;
-      pz = anchor.z + Math.sin(lockedAng) * snappedDist;
-      const deg = Math.round(((lockedAng * 180) / Math.PI + 360) % 360);
+      const snapRad = Math.max(1, Math.min(90, angleSnapStepDeg || 45)) * DEG2RAD;
+      const lockedAng = Math.round(rawAng / snapRad) * snapRad;
+      const angDiff = Math.abs(Math.atan2(Math.sin(rawAng - lockedAng), Math.cos(rawAng - lockedAng)));
+      const tolerance = Math.min(9 * DEG2RAD, Math.max(1.5 * DEG2RAD, snapRad * 0.16));
+      const appliedAng = angDiff <= tolerance ? lockedAng : rawAng;
+      px = anchor.x + Math.cos(appliedAng) * snappedDist;
+      pz = anchor.z + Math.sin(appliedAng) * snappedDist;
+      const deg = Math.round(((appliedAng * 180) / Math.PI + 360) % 360);
       return {
         point: { x: round3(px), z: round3(pz) },
         snappedEndpoint: false,
@@ -4672,17 +4667,8 @@ export class ArchBuilderEngine {
       };
     }
 
-    // 3. Freeform Angle Mode (Angle Lock OFF): smooth freedom at any angle!
-    if (gridStep >= 0.05) {
-      px = Math.round(px / gridStep) * gridStep;
-      pz = Math.round(pz / gridStep) * gridStep;
-    }
+    // 3. True Freeform Angle Mode (Angle Lock OFF): no angular, grid-distance, or minimum-length quantization.
     const anchor = anchors[0] ?? null;
-    if (anchor && Math.hypot(px - anchor.x, pz - anchor.z) < 0.25) {
-      const ang = Math.atan2(pz - anchor.z, px - anchor.x);
-      px = anchor.x + Math.cos(ang) * 0.25;
-      pz = anchor.z + Math.sin(ang) * 0.25;
-    }
     const angleDeg = anchor
       ? Math.round(
           ((Math.atan2(pz - anchor.z, px - anchor.x) * 180) / Math.PI + 360) %

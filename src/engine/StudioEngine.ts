@@ -19,6 +19,7 @@ import { SnappingEngine, SnapVisualizer } from './SnappingEngine';
 import { SurfaceAlignEngine } from './SurfaceAlignEngine';
 import { buildSubdividedGeometry, computeGeometryStats } from './SubdivisionEngine';
 import { GridTerrainSystem } from './GridTerrainSystem';
+import { constrainTranslationPosition } from './transformConstraints';
 import {
   PlacementValidationVisualizer,
   PlacementValidator,
@@ -963,27 +964,31 @@ export class StudioEngine {
       this.transformControls.showX = false;
       this.transformControls.showY = false;
       this.transformControls.showZ = true;
+    } else if (this.axisLock === 'xy') {
+      this.transformControls.showX = true;
+      this.transformControls.showY = true;
+      this.transformControls.showZ = false;
     } else if (this.axisLock === 'xz') {
       this.transformControls.showX = true;
       this.transformControls.showY = false;
       this.transformControls.showZ = true;
+    } else if (this.axisLock === 'yz') {
+      this.transformControls.showX = false;
+      this.transformControls.showY = true;
+      this.transformControls.showZ = true;
     }
   }
 
-  private clampPositionByAxisLock(pos: THREE.Vector3): void {
-    if (this.axisLock === 'free') return;
-    if (this.axisLock === 'x') {
-      pos.y = this.dragStartLeaderPos.y;
-      pos.z = this.dragStartLeaderPos.z;
-    } else if (this.axisLock === 'y') {
-      pos.x = this.dragStartLeaderPos.x;
-      pos.z = this.dragStartLeaderPos.z;
-    } else if (this.axisLock === 'z') {
-      pos.x = this.dragStartLeaderPos.x;
-      pos.y = this.dragStartLeaderPos.y;
-    } else if (this.axisLock === 'xz') {
-      pos.y = this.dragStartLeaderPos.y;
-    }
+  private clampPositionByAxisLock(
+    pos: THREE.Vector3,
+    dragOrigin: THREE.Vector3 = this.dragStartLeaderPos
+  ): void {
+    const constrained = constrainTranslationPosition(
+      { x: pos.x, y: pos.y, z: pos.z },
+      { x: dragOrigin.x, y: dragOrigin.y, z: dragOrigin.z },
+      this.axisLock
+    );
+    pos.set(constrained.x, constrained.y, constrained.z);
   }
 
   public setPlacementValidationEnabled(enabled: boolean): void {
@@ -4129,7 +4134,7 @@ export class StudioEngine {
 
         if (mode === 'translate') {
           const rawPos = this.archGizmoProxy.position.clone();
-          this.clampPositionByAxisLock(rawPos);
+          this.clampPositionByAxisLock(rawPos, this.archGizmoStartPos);
           if (this.snapSettings.enabled && this.snapSettings.grid) {
             const step = this.gridSettings.adaptive
               ? this.gridSystem.getEffectiveSpacing()
@@ -4781,7 +4786,8 @@ export class StudioEngine {
             snapStep,
             magnet.point,
             magnet.adaptiveWorldRadius,
-            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
+            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall',
+            this.wallDrawDefaults.angleSnapStepDeg
           );
           this.pointerDownSnappedXZ = snapped.point;
           this.archDragStartXZ = this.wallChainStart ?? snapped.point;
@@ -5188,7 +5194,8 @@ export class StudioEngine {
           magnet.point ?? rawXZ,
           this.wallEditAngleLock,
           snapStep,
-          this.activeArchDrag.bindings
+          this.activeArchDrag.bindings,
+          this.wallDrawDefaults.angleSnapStepDeg
         );
         const nextXZ = magnet.point ?? snappedEdit.point;
         const isLockedEndpoint = Boolean(magnet.point) || snappedEdit.snappedEndpoint;
@@ -5333,7 +5340,8 @@ export class StudioEngine {
             snapStep,
             magnet.point,
             magnet.adaptiveWorldRadius,
-            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
+            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall',
+            this.wallDrawDefaults.angleSnapStepDeg
           );
           this.lastHoverWallXZ = snapped.point;
           if (this.isArchDragDrawing || this.archDragStartXZ) {
@@ -5645,7 +5653,8 @@ export class StudioEngine {
             0.05,
             null,
             0,
-            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall'
+            this.wallDrawDefaults.activeTemplateId === 'diagonal-wall',
+            this.wallDrawDefaults.angleSnapStepDeg
           );
           const created = this.archEngine.addWallSegment(
             this.activeFloorId,

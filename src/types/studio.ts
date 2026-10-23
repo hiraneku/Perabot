@@ -178,7 +178,7 @@ export type TransformMode = 'select' | 'translate' | 'rotate' | 'scale';
 
 export type SelectionSubMode = 'single' | 'multi' | 'box';
 
-export type AxisLockMode = 'free' | 'x' | 'y' | 'z' | 'xz';
+export type AxisLockMode = 'free' | 'x' | 'y' | 'z' | 'xy' | 'xz' | 'yz';
 
 export type SurfacePlacementRule =
   | 'any'
@@ -526,7 +526,7 @@ export type WallCornerStyleKind =
   | 'rounded-inner'
   | 'rounded-outer';
 
-export type WallPathMode = 'line' | 'circular-arc' | 's-curve' | 'j-curve-end';
+export type WallPathMode = 'line' | 'circular-arc' | 's-curve' | 'j-curve-end' | 'cubic-bezier';
 
 export type WallTemplateId =
   // 1. Basic Wall Templates (8)
@@ -596,6 +596,10 @@ export interface ArchWallSegment {
   endThickness?: number; // gradual tapered thickness at end in meters
   pathMode?: WallPathMode;
   sWaveAmp?: number; // S-curve wave amplitude in meters
+  bezierControl1Along?: number; // normalized chord position (0..1)
+  bezierControl1Offset?: number; // signed normal offset in meters
+  bezierControl2Along?: number; // normalized chord position (0..1)
+  bezierControl2Offset?: number; // signed normal offset in meters
   cornerStyle?: WallCornerStyleKind;
   cornerRadius?: number; // fillet radius in meters for rounded-inner / rounded-outer
   wallGroupId?: string;
@@ -944,7 +948,14 @@ export interface WallDrawDefaults {
   lengthTemplate: number; // default 3.00m
   style: ArchWallStyle;
   curveBulge: number;
+  pathMode?: WallPathMode;
+  sWaveAmp?: number;
+  bezierControl1Along?: number;
+  bezierControl1Offset?: number;
+  bezierControl2Along?: number;
+  bezierControl2Offset?: number;
   angleSnap: boolean;
+  angleSnapStepDeg: number; // adjustable 1°..90° angle increment for architectural draw/edit snapping
   chainMode: boolean; // false = 1-stroke drag-to-draw (never chains unexpectedly!), true = continuous polyline
   confirmBeforeCommit: boolean; // optional safe touch checkmark confirmation
   exteriorColor: string;
@@ -1296,7 +1307,10 @@ export const DEFAULT_WALL_DRAW: WallDrawDefaults = {
   lengthTemplate: 3.0,
   style: 'full',
   curveBulge: 0,
+  pathMode: 'line',
+  sWaveAmp: 0.55,
   angleSnap: true,
+  angleSnapStepDeg: 45,
   chainMode: false,
   confirmBeforeCommit: false,
   exteriorColor: '#f1f5f9',

@@ -924,6 +924,10 @@ export function applyWallTemplateProfileToWall(
   wall.pathMode = 'line';
   wall.curveBulge = 0;
   wall.sWaveAmp = undefined;
+  wall.bezierControl1Along = undefined;
+  wall.bezierControl1Offset = undefined;
+  wall.bezierControl2Along = undefined;
+  wall.bezierControl2Offset = undefined;
   wall.cornerStyle = 'sharp';
   wall.cornerRadius = undefined;
 
@@ -1092,6 +1096,12 @@ export function buildDrawDefaultsForWallTemplate(
     thickness: probe.thickness,
     style: probe.style,
     curveBulge: probe.curveBulge,
+    pathMode: probe.pathMode ?? 'line',
+    sWaveAmp: probe.sWaveAmp,
+    bezierControl1Along: probe.bezierControl1Along ?? 0.25,
+    bezierControl1Offset: probe.bezierControl1Offset ?? 0,
+    bezierControl2Along: probe.bezierControl2Along ?? 0.75,
+    bezierControl2Offset: probe.bezierControl2Offset ?? 0,
   };
 }
 

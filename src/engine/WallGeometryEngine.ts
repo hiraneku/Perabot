@@ -67,7 +67,16 @@ function normalizeAngleSigned(rad: number): number {
 export function sampleAdvancedWallPath(
   wall: Pick<
     ArchWallSegment,
-    'start' | 'end' | 'curveBulge' | 'pathMode' | 'sWaveAmp' | 'endCap'
+    | 'start'
+    | 'end'
+    | 'curveBulge'
+    | 'pathMode'
+    | 'sWaveAmp'
+    | 'bezierControl1Along'
+    | 'bezierControl1Offset'
+    | 'bezierControl2Along'
+    | 'bezierControl2Offset'
+    | 'endCap'
   >,
   tRaw: number
 ): PathSample2D {
@@ -93,6 +102,26 @@ export function sampleAdvancedWallPath(
       : 'line');
 
   // 1. Serpentine Cubic S-Curve (`s-shaped-wall`)
+  if (mode === 'cubic-bezier') {
+    const c1Along = Math.max(0, Math.min(1, wall.bezierControl1Along ?? 0.25));
+    const c2Along = Math.max(0, Math.min(1, wall.bezierControl2Along ?? 0.75));
+    const c1Offset = Math.max(-3, Math.min(3, wall.bezierControl1Offset ?? 0));
+    const c2Offset = Math.max(-3, Math.min(3, wall.bezierControl2Offset ?? 0));
+    const p1x = x0 + ux * chord * c1Along + nx * c1Offset;
+    const p1z = z0 + uz * chord * c1Along + nz * c1Offset;
+    const p2x = x0 + ux * chord * c2Along + nx * c2Offset;
+    const p2z = z0 + uz * chord * c2Along + nz * c2Offset;
+    const omt = 1 - t;
+    const omt2 = omt * omt;
+    const t2 = t * t;
+    const px = omt2 * omt * x0 + 3 * omt2 * t * p1x + 3 * omt * t2 * p2x + t2 * t * x1;
+    const pz = omt2 * omt * z0 + 3 * omt2 * t * p1z + 3 * omt * t2 * p2z + t2 * t * z1;
+    const dpx = 3 * omt2 * (p1x - x0) + 6 * omt * t * (p2x - p1x) + 3 * t2 * (x1 - p2x);
+    const dpz = 3 * omt2 * (p1z - z0) + 6 * omt * t * (p2z - p1z) + 3 * t2 * (z1 - p2z);
+    const dLen = Math.max(1e-5, Math.hypot(dpx, dpz));
+    return { x: px, z: pz, tx: dpx / dLen, tz: dpz / dLen };
+  }
+
   if (mode === 's-curve') {
     const amp =
       wall.sWaveAmp !== undefined && Math.abs(wall.sWaveAmp) > 0.01
@@ -215,7 +244,16 @@ export function sampleAdvancedWallPath(
 export function computeAdvancedWallLength(
   wall: Pick<
     ArchWallSegment,
-    'start' | 'end' | 'curveBulge' | 'pathMode' | 'sWaveAmp' | 'endCap'
+    | 'start'
+    | 'end'
+    | 'curveBulge'
+    | 'pathMode'
+    | 'sWaveAmp'
+    | 'bezierControl1Along'
+    | 'bezierControl1Offset'
+    | 'bezierControl2Along'
+    | 'bezierControl2Offset'
+    | 'endCap'
   >
 ): number {
   const chord = Math.hypot(wall.end.x - wall.start.x, wall.end.z - wall.start.z);
@@ -223,6 +261,7 @@ export function computeAdvancedWallLength(
     Math.abs(wall.curveBulge) >= 0.015 ||
     wall.pathMode === 's-curve' ||
     wall.pathMode === 'j-curve-end' ||
+    wall.pathMode === 'cubic-bezier' ||
     wall.endCap === 'curved';
   if (!isCurved) return chord;
 
@@ -1025,6 +1064,7 @@ export function buildManifoldWallBodyGeometry(
     Math.abs(wall.curveBulge) >= 0.015 ||
     wall.pathMode === 's-curve' ||
     wall.pathMode === 'j-curve-end' ||
+    wall.pathMode === 'cubic-bezier' ||
     wall.endCap === 'curved';
 
   const startSample = sampleAdvancedWallPath(wall, 0);
