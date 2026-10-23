@@ -14,6 +14,7 @@ import {
   Plus,
   RotateCw,
   Ruler,
+  SquareDashed,
   Sun,
   Trash2,
   X,
@@ -83,6 +84,7 @@ interface ArchContextPanelProps {
   onChangeLensFov: (fov: number) => void;
   onExportBlueprintPNG: () => void;
   activeFloor: BuildingFloorLayer | undefined;
+  isActivelyDrawing?: boolean;
 }
 
 const ARCH_WALL_SWATCHES = [
@@ -159,6 +161,7 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
   onChangeLensFov,
   onExportBlueprintPNG,
   activeFloor,
+  isActivelyDrawing = false,
 }) => {
   const [roofStyleDraft, setRoofStyleDraft] = useState<ArchRoofStyle>('gable');
 
@@ -229,7 +232,12 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
   ];
 
   return (
-    <div className="arch-context-panel" onPointerDown={(e) => e.stopPropagation()}>
+    <div
+      className={`arch-context-panel ${
+        isActivelyDrawing ? 'is-drawing-minimized' : ''
+      }`}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       <div className="arch-panel-header">
         <div className="arch-panel-title-wrap">
           <span className="arch-panel-title">{phaseTitle}</span>
@@ -253,7 +261,7 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
             ===================================================== */}
         {phase === 'walls' && (
           <>
-            <div className="arch-segmented-row">
+            <div className="arch-segmented-row is-three">
               <button
                 type="button"
                 className={`arch-seg-btn ${archTool === 'select' ? 'active' : ''}`}
@@ -269,6 +277,14 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
               >
                 <PenTool size={14} />
                 <span>{t.archToolDrawWall}</span>
+              </button>
+              <button
+                type="button"
+                className={`arch-seg-btn ${archTool === 'draw-room' ? 'active' : ''}`}
+                onClick={() => onSetArchTool('draw-room')}
+              >
+                <SquareDashed size={14} />
+                <span>{t.archToolDrawRoom}</span>
               </button>
             </div>
 
@@ -399,6 +415,28 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                   }
                 />
                 <span>{t.archWallBaseboard}</span>
+              </label>
+              <label className="arch-check-row">
+                <input
+                  type="checkbox"
+                  checked={wallDefaults.chainMode}
+                  onChange={(e) =>
+                    onChangeWallDefaults({ chainMode: e.target.checked })
+                  }
+                />
+                <span>{t.archChainModeToggle}</span>
+              </label>
+              <label className="arch-check-row">
+                <input
+                  type="checkbox"
+                  checked={wallDefaults.confirmBeforeCommit}
+                  onChange={(e) =>
+                    onChangeWallDefaults({
+                      confirmBeforeCommit: e.target.checked,
+                    })
+                  }
+                />
+                <span>{t.archSafeConfirmToggle}</span>
               </label>
             </div>
 

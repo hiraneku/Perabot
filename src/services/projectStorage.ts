@@ -397,3 +397,57 @@ export async function deleteCustomAssetRecord(id: string): Promise<void> {
     // Ignored
   }
 }
+
+export interface CustomAssetsPackFile {
+  format: 'perabot-assets-pack-v1';
+  exportedAt: number;
+  assets: CustomAssetRecord[];
+}
+
+export async function downloadCustomAssetsPack(): Promise<number> {
+  const assets = await listCustomAssets();
+  if (assets.length === 0) return 0;
+  const pack: CustomAssetsPackFile = {
+    format: 'perabot-assets-pack-v1',
+    exportedAt: Date.now(),
+    assets,
+  };
+  const json = JSON.stringify(pack, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `perabot-koleksi-${dateStr}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return assets.length;
+}
+
+export async function importCustomAssetsPackFile(file: File): Promise<number> {
+  const text = await file.text();
+  const parsed = JSON.parse(text) as Partial<CustomAssetsPackFile>;
+  if (!parsed || !Array.isArray(parsed.assets)) {
+    throw new Error('Invalid custom assets pack file');
+  }
+  let importedCount = 0;
+  for (const raw of parsed.assets) {
+    if (!raw || !Array.isArray(raw.parts) || raw.parts.length === 0) continue;
+    const rec: CustomAssetRecord = {
+      id:
+        raw.id ||
+        `asset_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: (raw.name || 'Properti Impor').trim(),
+      category: raw.category ?? 'other',
+      thumbnailDataUrl: raw.thumbnailDataUrl || '',
+      createdAt: raw.createdAt || Date.now(),
+      updatedAt: Date.now(),
+      parts: raw.parts,
+    };
+    await saveCustomAssetRecord(rec);
+    importedCount++;
+  }
+  return importedCount;
+}

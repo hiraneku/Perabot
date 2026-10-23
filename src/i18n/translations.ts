@@ -550,6 +550,43 @@ export interface StudioStrings {
 
   modCatPillars: string;
   modCatFences: string;
+
+  // 16-Upgrade Bundle: Smooth Wall/Room Drawing, Cutaway, Floor Trace, Align/Distribute, Lock, Exact BBox & Asset Pack
+  archToolDrawRoom: string;
+  archToolQuickErase: string;
+  archDrawRoomHint: string;
+  archEraseHint: string;
+  archChainModeToggle: string;
+  archSafeConfirmToggle: string;
+  archConfirmPlaceBtn: string;
+  archCancelPlaceBtn: string;
+  archSoftAngleGuideLabel: string;
+  archCopyLowerWallsBtn: string;
+  archCopiedLowerWallsToast: string;
+  archQuickRotate90: string;
+
+  alignDistributeTitle: string;
+  alignLeftX: string;
+  alignCenterX: string;
+  alignRightX: string;
+  alignBottomY: string;
+  alignTopY: string;
+  alignFrontZ: string;
+  alignCenterZ: string;
+  alignBackZ: string;
+  distributeEvenX: string;
+  distributeEvenZ: string;
+  alignedToast: string;
+
+  lockObjectTip: string;
+  unlockObjectTip: string;
+  exactDimTitle: string;
+  exactDimProportional: string;
+
+  exportAssetsPackBtn: string;
+  importAssetsPackBtn: string;
+  assetsPackExportedToast: string;
+  assetsPackImportedToast: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -1116,6 +1153,42 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
 
     modCatPillars: 'Pilar & Kanopi',
     modCatFences: 'Pagar & Gerbang',
+
+    archToolDrawRoom: 'Kotak Ruangan',
+    archToolQuickErase: 'Hapus Sentuh',
+    archDrawRoomHint: 'Tahan & geser diagonal untuk membuat 4 tembok ruangan sekaligus',
+    archEraseHint: 'Ketuk tembok, pintu/jendela, tangga, atau atap untuk menghapus cepat',
+    archChainModeToggle: 'Sambung Beruntun',
+    archSafeConfirmToggle: 'Konfirmasi Pasang',
+    archConfirmPlaceBtn: 'Pasang',
+    archCancelPlaceBtn: 'Batal',
+    archSoftAngleGuideLabel: 'Magnet Sudut Halus (0°/45°/90°)',
+    archCopyLowerWallsBtn: 'Jiplak Dinding Lantai Bawah',
+    archCopiedLowerWallsToast: 'Dinding lantai bawah berhasil disalin',
+    archQuickRotate90: 'Putar 90°',
+
+    alignDistributeTitle: 'Ratakan & Susun Presisi',
+    alignLeftX: 'Rata Kiri (X-)',
+    alignCenterX: 'Tengah X',
+    alignRightX: 'Rata Kanan (X+)',
+    alignBottomY: 'Rata Alas (Y-)',
+    alignTopY: 'Rata Atas (Y+)',
+    alignFrontZ: 'Rata Depan (Z+)',
+    alignCenterZ: 'Tengah Z',
+    alignBackZ: 'Rata Belakang (Z-)',
+    distributeEvenX: 'Jarak Sama X',
+    distributeEvenZ: 'Jarak Sama Z',
+    alignedToast: 'Posisi objek berhasil diratakan',
+
+    lockObjectTip: 'Kunci objek agar tidak tergeser',
+    unlockObjectTip: 'Buka kunci objek',
+    exactDimTitle: 'Ukuran Asli (Meter P×T×L)',
+    exactDimProportional: 'Kunci Rasio',
+
+    exportAssetsPackBtn: 'Ekspor Koleksi',
+    importAssetsPackBtn: 'Impor Koleksi',
+    assetsPackExportedToast: 'Paket koleksi properti berhasil diekspor',
+    assetsPackImportedToast: 'Koleksi properti berhasil diimpor',
   },
 
   en: {
@@ -1681,6 +1754,42 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
 
     modCatPillars: 'Pillars & Pergola',
     modCatFences: 'Fences & Gates',
+
+    archToolDrawRoom: 'Room Box',
+    archToolQuickErase: 'Quick Erase',
+    archDrawRoomHint: 'Press & drag diagonally to create all 4 room walls in one stroke',
+    archEraseHint: 'Tap any wall, door/window, stair, or roof to erase immediately',
+    archChainModeToggle: 'Chain Mode',
+    archSafeConfirmToggle: 'Confirm Placement',
+    archConfirmPlaceBtn: 'Place',
+    archCancelPlaceBtn: 'Cancel',
+    archSoftAngleGuideLabel: 'Soft Magnetic Ortho Guide (0°/45°/90°)',
+    archCopyLowerWallsBtn: 'Copy Lower Floor Walls',
+    archCopiedLowerWallsToast: 'Lower floor walls copied to this level',
+    archQuickRotate90: 'Rotate 90°',
+
+    alignDistributeTitle: 'Align & Distribute',
+    alignLeftX: 'Align Left (X-)',
+    alignCenterX: 'Center X',
+    alignRightX: 'Align Right (X+)',
+    alignBottomY: 'Align Base (Y-)',
+    alignTopY: 'Align Top (Y+)',
+    alignFrontZ: 'Align Front (Z+)',
+    alignCenterZ: 'Center Z',
+    alignBackZ: 'Align Back (Z-)',
+    distributeEvenX: 'Distribute X',
+    distributeEvenZ: 'Distribute Z',
+    alignedToast: 'Selected objects aligned',
+
+    lockObjectTip: 'Lock object from accidental edits',
+    unlockObjectTip: 'Unlock object',
+    exactDimTitle: 'True Size (Meters W×H×D)',
+    exactDimProportional: 'Lock Ratio',
+
+    exportAssetsPackBtn: 'Export Pack',
+    importAssetsPackBtn: 'Import Pack',
+    assetsPackExportedToast: 'Custom asset pack exported',
+    assetsPackImportedToast: 'Custom asset pack imported',
   },
 
   ja: {
@@ -2237,6 +2346,42 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
 
     modCatPillars: '柱・パーゴラ',
     modCatFences: 'フェンス・門扉',
+
+    archToolDrawRoom: '部屋ボックス',
+    archToolQuickErase: 'クイック消去',
+    archDrawRoomHint: '対角線にドラッグして4面の壁と部屋を一度に作成',
+    archEraseHint: '壁・ドア・窓・階段・屋根をタップして素早く削除',
+    archChainModeToggle: '連続描画',
+    archSafeConfirmToggle: '配置前に確認',
+    archConfirmPlaceBtn: '配置する',
+    archCancelPlaceBtn: 'キャンセル',
+    archSoftAngleGuideLabel: 'ソフト角度マグネット (0°/45°/90°)',
+    archCopyLowerWallsBtn: '下の階の壁をコピー',
+    archCopiedLowerWallsToast: '下の階の壁をコピーしました',
+    archQuickRotate90: '90°回転',
+
+    alignDistributeTitle: '整列・均等配置',
+    alignLeftX: '左揃え (X-)',
+    alignCenterX: '中央 X',
+    alignRightX: '右揃え (X+)',
+    alignBottomY: '底面揃え (Y-)',
+    alignTopY: '上面揃え (Y+)',
+    alignFrontZ: '手前揃え (Z+)',
+    alignCenterZ: '中央 Z',
+    alignBackZ: '奥揃え (Z-)',
+    distributeEvenX: 'X均等配置',
+    distributeEvenZ: 'Z均等配置',
+    alignedToast: 'オブジェクトを整列しました',
+
+    lockObjectTip: '誤操作防止ロック',
+    unlockObjectTip: 'ロック解除',
+    exactDimTitle: '実寸サイズ (m 幅×高×奥行)',
+    exactDimProportional: '比率固定',
+
+    exportAssetsPackBtn: 'パック書き出し',
+    importAssetsPackBtn: 'パック読み込み',
+    assetsPackExportedToast: 'コレクションパックを書き出しました',
+    assetsPackImportedToast: 'コレクションパックを読み込みました',
   },
 };
 

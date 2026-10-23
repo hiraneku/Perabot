@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   Building2,
+  Copy,
   Eye,
   EyeOff,
   Ghost,
@@ -35,6 +36,7 @@ interface FloorLayerWidgetProps {
     patch: Partial<BuildingFloorLayer>
   ) => void;
   onChangeViewMode: (mode: FloorViewMode) => void;
+  onCopyLowerFloorWalls?: () => void;
   onClose: () => void;
 }
 
@@ -50,6 +52,7 @@ export const FloorLayerWidget: React.FC<FloorLayerWidgetProps> = ({
   onRemoveFloor,
   onUpdateFloor,
   onChangeViewMode,
+  onCopyLowerFloorWalls,
   onClose,
 }) => {
   const t = TRANSLATIONS[language];
@@ -59,6 +62,9 @@ export const FloorLayerWidget: React.FC<FloorLayerWidgetProps> = ({
   const stackedFloors = [...floors].sort(
     (a, b) => b.elevation - a.elevation
   );
+  const sortedAsc = [...floors].sort((a, b) => a.elevation - b.elevation);
+  const activeAscIdx = sortedAsc.findIndex((f) => f.id === activeFloorId);
+  const hasLowerFloor = activeAscIdx > 0;
   const activeFl = floors.find((f) => f.id === activeFloorId) ?? floors[0];
 
   return (
@@ -184,6 +190,17 @@ export const FloorLayerWidget: React.FC<FloorLayerWidgetProps> = ({
           );
         })}
       </div>
+
+      {hasLowerFloor && onCopyLowerFloorWalls && (
+        <button
+          type="button"
+          className="floor-copy-walls-btn"
+          onClick={onCopyLowerFloorWalls}
+        >
+          <Copy size={13} />
+          <span>{t.archCopyLowerWallsBtn}</span>
+        </button>
+      )}
 
       <button type="button" className="floor-add-btn" onClick={onAddFloor}>
         <Plus size={14} />

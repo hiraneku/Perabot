@@ -32,6 +32,7 @@ import {
 } from './ModifierEngine';
 import { applyProceduralPatternToMaterial } from './proceduralTextures';
 import {
+  AlignDistributeAction,
   ArchDetectedRoom,
   ArchHouseData,
   ArchOpeningItem,
@@ -68,6 +69,7 @@ import {
   ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
+  PendingArchCommit,
   PlacementValidationStatus,
   PrimitiveKind,
   ProceduralPatternKind,
@@ -144,6 +146,8 @@ export interface StudioEngineCallbacks {
     isBlueprint2D: boolean;
     cameraLensFov: number;
     wallChainActive: boolean;
+    isArchActivelyDrawing: boolean;
+    pendingArchCommit: PendingArchCommit | null;
   }) => void;
   onDragFeedback: (feedback: DragFeedback) => void;
   onEyedropperSample?: (sample: PaintBrushPayload, objectName: string) => void;
@@ -224,6 +228,14 @@ export class StudioEngine {
   private activeOpeningKind: ArchOpeningKind = 'door-single';
   private wallChainStart: Vec2XZ | null = null;
   private lastHoverWallXZ: Vec2XZ | null = null;
+  private isArchDragDrawing = false;
+  private archDragStartXZ: Vec2XZ | null = null;
+  private archDragCurrentXZ: Vec2XZ | null = null;
+  private archDragOpeningHit: { wallId: string; offsetRatio: number } | null = null;
+  private pendingArchCommit: PendingArchCommit | null = null;
+  private activePointers = new Map<number, { x: number; y: number }>();
+  private wasMultiTouchGesture = false;
+  private multiTouchCooldownUntil = 0;
   private activeArchDrag:
     | {
         kind: 'wall-node';
@@ -473,6 +485,7 @@ export class StudioEngine {
     this.renderer.domElement.addEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.addEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.addEventListener('pointerup', this.handlePointerUp);
+    this.renderer.domElement.addEventListener('pointercancel', this.handlePointerCancel);
     window.addEventListener('keydown', this.handleWalkKeyDown);
     window.addEventListener('keyup', this.handleWalkKeyUp);
 
@@ -866,6 +879,7 @@ export class StudioEngine {
      #12 Building Floor / Story Layer System (`house` mode)
      ========================================================= */
   private isMeshFloorLocked(mesh: THREE.Mesh): boolean {
+    if (mesh.userData.userLocked) return true;
     if (this.studioMode !== 'house') return false;
     const fid = mesh.userData.floorId as string | undefined;
     if (!fid) return false;
@@ -941,6 +955,7 @@ export class StudioEngine {
     const idx = this.floors.findIndex((f) => f.id === floorId);
     if (idx === -1) return false;
     this.floors.splice(idx, 1);
+    this.archEngine.removeFloorData(floorId);
     const fallbackId = this.floors[Math.max(0, idx - 1)].id;
     for (const m of this.meshMap.values()) {
       if (m.userData.floorId === floorId) {
@@ -954,6 +969,27 @@ export class StudioEngine {
     this.pushHistorySnapshot();
     this.emitState();
     return true;
+  }
+
+  /**
+   * #11 Multi-Story Helper: Duplicates all Smart Walls from the floor immediately below onto the active floor!
+   */
+  public copyLowerFloorWallsToActiveFloor(): number {
+    if (this.studioMode !== 'house' || this.floors.length < 2) return 0;
+    const sorted = [...this.floors].sort((a, b) => a.elevation - b.elevation);
+    const activeIdx = sorted.findIndex((f) => f.id === this.activeFloorId);
+    if (activeIdx <= 0) return 0;
+    const lowerFloor = sorted[activeIdx - 1];
+    const copied = this.archEngine.copyWallsFromFloor(
+      lowerFloor.id,
+      this.activeFloorId
+    );
+    if (copied > 0) {
+      this.rebuildArchitecture();
+      this.pushHistorySnapshot();
+      this.emitState();
+    }
+    return copied;
   }
 
   public updateBuildingFloor(
@@ -1151,6 +1187,11 @@ export class StudioEngine {
   public setArchTool(tool: ArchSubTool): void {
     this.archTool = tool;
     this.wallChainStart = null;
+    this.isArchDragDrawing = false;
+    this.archDragStartXZ = null;
+    this.archDragCurrentXZ = null;
+    this.archDragOpeningHit = null;
+    this.pendingArchCommit = null;
     this.archEngine.clearPreview();
     if (tool !== 'measure') {
       this.measureStart = null;
@@ -1171,12 +1212,109 @@ export class StudioEngine {
   }
 
   public cancelArchChain(): void {
-    if (this.wallChainStart) {
+    if (this.pendingArchCommit) {
+      this.cancelPendingArchCommit();
+      return;
+    }
+    if (this.wallChainStart || this.isArchDragDrawing) {
       this.wallChainStart = null;
+      this.isArchDragDrawing = false;
+      this.archDragStartXZ = null;
+      this.archDragCurrentXZ = null;
       this.archEngine.clearPreview();
+      this.emitState();
     } else if (this.archTool !== 'select') {
       this.setArchTool('select');
     }
+  }
+
+  public confirmPendingArchCommit(): boolean {
+    const pending = this.pendingArchCommit;
+    if (!pending) return false;
+    this.pendingArchCommit = null;
+    let ok = false;
+
+    if (pending.kind === 'wall') {
+      const created = this.archEngine.addWallSegment(
+        this.activeFloorId,
+        pending.start,
+        pending.end,
+        this.wallDrawDefaults
+      );
+      ok = Boolean(created);
+      if (ok && this.wallDrawDefaults.chainMode) {
+        this.wallChainStart = pending.end;
+      } else {
+        this.wallChainStart = null;
+      }
+    } else if (pending.kind === 'room') {
+      const created = this.archEngine.addRoomBox(
+        this.activeFloorId,
+        pending.cornerA,
+        pending.cornerB,
+        this.wallDrawDefaults
+      );
+      ok = created > 0;
+    } else if (pending.kind === 'opening') {
+      const op = this.archEngine.addOpeningOnWall(
+        pending.wallId,
+        pending.openingKind,
+        pending.offsetRatio
+      );
+      ok = Boolean(op);
+    }
+
+    this.archEngine.clearPreview();
+    if (ok) {
+      this.rebuildArchitecture();
+      this.pushHistorySnapshot();
+    }
+    this.emitState();
+    return ok;
+  }
+
+  public cancelPendingArchCommit(): void {
+    this.pendingArchCommit = null;
+    this.wallChainStart = null;
+    this.archEngine.clearPreview();
+    this.emitState();
+  }
+
+  /**
+   * #12 Quick Floating Action: Flips Door Swing, Swaps Roof Ridge Axis, or Rotates Staircase +90°!
+   */
+  public rotateSelectedArchElement90(): boolean {
+    const sel = this.archEngine.getSelection();
+    if (!sel) return false;
+    const data = this.archEngine.getData();
+
+    if (sel.kind === 'opening') {
+      const op = data.openings.find((o) => o.id === sel.id);
+      if (!op) return false;
+      this.updateArchOpening(op.id, { flipSwing: !op.flipSwing }, true);
+      return true;
+    }
+    if (sel.kind === 'roof') {
+      const rf = data.roofs.find((r) => r.id === sel.id);
+      if (!rf) return false;
+      this.updateArchRoof(
+        rf.id,
+        { ridgeAxis: rf.ridgeAxis === 'x' ? 'z' : 'x' },
+        true
+      );
+      return true;
+    }
+    if (sel.kind === 'stair') {
+      const st = data.stairs.find((s) => s.id === sel.id);
+      if (!st) return false;
+      this.updateArchStair(
+        st.id,
+        { rotationY: (st.rotationY + 90) % 360 },
+        true
+      );
+      return true;
+    }
+    return false;
   }
 
   public setWallDrawDefaults(patch: Partial<WallDrawDefaults>): void {
@@ -1532,7 +1670,9 @@ export class StudioEngine {
   private raycastActiveFloorXZ(event: PointerEvent): Vec2XZ | null {
     const touchYOffset =
       event.pointerType === 'touch' &&
-      (this.archTool === 'draw-wall' || this.archTool === 'place-opening')
+      (this.archTool === 'draw-wall' ||
+        this.archTool === 'draw-room' ||
+        this.archTool === 'place-opening')
         ? -26
         : 0;
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -2093,6 +2233,11 @@ export class StudioEngine {
       }
     }
     this.ghostedMeshIds.clear();
+    this.archEngine.applyInteriorPeekCutaway(
+      this.camera.position,
+      this.orbitControls.target,
+      false
+    );
     this.updateSeamlessTouchFaces();
   }
 
@@ -2101,6 +2246,9 @@ export class StudioEngine {
 
     const camPos = this.camera.position;
     const focusPt = this.orbitControls.target;
+    if (this.studioMode === 'house') {
+      this.archEngine.applyInteriorPeekCutaway(camPos, focusPt, true);
+    }
     const camToFocusDist = camPos.distanceTo(focusPt);
     const newlyGhosted = new Set<string>();
 
@@ -2910,7 +3058,59 @@ export class StudioEngine {
     return this.raycaster.ray.intersectPlane(plane, pt) ? pt : null;
   }
 
+  private handlePointerCancel = (event: PointerEvent): void => {
+    this.activePointers.delete(event.pointerId);
+    if (this.activePointers.size === 0) {
+      this.wasMultiTouchGesture = false;
+      this.multiTouchCooldownUntil = performance.now() + 180;
+    }
+    if (this.isArchDragDrawing) {
+      this.isArchDragDrawing = false;
+      this.archDragStartXZ = null;
+      this.archDragCurrentXZ = null;
+      this.archDragOpeningHit = null;
+      this.orbitControls.enabled = true;
+      this.archEngine.clearPreview();
+      this.emitState();
+    }
+  };
+
   private handlePointerDown = (event: PointerEvent): void => {
+    this.activePointers.set(event.pointerId, {
+      x: event.clientX,
+      y: event.clientY,
+    });
+
+    // #1 Multi-Touch & Pinch-Zoom Guard: 2+ fingers immediately cancel any single-finger tool stroke!
+    if (this.activePointers.size >= 2) {
+      this.wasMultiTouchGesture = true;
+      this.multiTouchCooldownUntil = performance.now() + 220;
+      const hadArchStroke = this.isArchDragDrawing;
+      this.isArchDragDrawing = false;
+      this.archDragStartXZ = null;
+      this.archDragCurrentXZ = null;
+      this.archDragOpeningHit = null;
+      this.activeArchDrag = null;
+      this.isSculptingStroke = false;
+      if (this.isBoxSelecting) {
+        this.isBoxSelecting = false;
+        this.callbacks.onBoxSelectRect?.(null);
+      }
+      this.isSurfaceSliding = false;
+      this.didMoveDuringSurfaceSlide = false;
+      this.activeGroupRelMatrices.clear();
+      this.orbitControls.enabled = !this.walkthroughEnabled;
+      if (hadArchStroke) {
+        this.archEngine.clearPreview();
+        this.emitState();
+      }
+      return;
+    }
+
+    if (performance.now() < this.multiTouchCooldownUntil) {
+      return;
+    }
+
     this.pointerDownPos = { x: event.clientX, y: event.clientY };
     this.wasGizmoDragging = false;
 
@@ -2919,6 +3119,102 @@ export class StudioEngine {
       this.walkLookPrev = { x: event.clientX, y: event.clientY };
       this.renderer.domElement.setPointerCapture?.(event.pointerId);
       return;
+    }
+
+    // #2, #3 & #7 Fluid Press-and-Drag Architectural Creation (`draw-wall`, `draw-room`, `place-opening`)
+    if (
+      this.studioMode === 'house' &&
+      event.button <= 0 &&
+      !this.pendingArchCommit &&
+      (this.archTool === 'draw-wall' ||
+        this.archTool === 'draw-room' ||
+        this.archTool === 'place-opening')
+    ) {
+      const rawXZ = this.raycastActiveFloorXZ(event);
+      if (rawXZ) {
+        const activeFl =
+          this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+        const baseY = activeFl ? activeFl.elevation : 0;
+        const snapStep =
+          this.snapSettings.enabled && this.snapSettings.grid
+            ? Math.min(0.25, this.snapSettings.gridStep)
+            : 0.1;
+
+        if (this.archTool === 'draw-wall') {
+          const snapped = this.archEngine.snapWallPoint(
+            rawXZ,
+            this.activeFloorId,
+            this.wallChainStart,
+            this.wallDrawDefaults.angleSnap,
+            snapStep
+          );
+          this.isArchDragDrawing = true;
+          this.archDragStartXZ = this.wallChainStart ?? snapped.point;
+          this.archDragCurrentXZ = snapped.point;
+          this.lastHoverWallXZ = snapped.point;
+          this.orbitControls.enabled = false;
+          this.renderer.domElement.setPointerCapture?.(event.pointerId);
+          this.archEngine.updateWallDrawPreview(
+            this.archDragStartXZ,
+            this.wallChainStart ? snapped.point : null,
+            baseY,
+            this.wallDrawDefaults,
+            snapped.point,
+            snapped.guideLines
+          );
+          this.emitState();
+          return;
+        }
+
+        if (this.archTool === 'draw-room') {
+          const snapped = this.archEngine.snapWallPoint(
+            rawXZ,
+            this.activeFloorId,
+            null,
+            false,
+            snapStep
+          );
+          this.isArchDragDrawing = true;
+          this.archDragStartXZ = snapped.point;
+          this.archDragCurrentXZ = snapped.point;
+          this.orbitControls.enabled = false;
+          this.renderer.domElement.setPointerCapture?.(event.pointerId);
+          this.archEngine.updateRoomBoxPreview(
+            snapped.point,
+            null,
+            baseY,
+            this.wallDrawDefaults,
+            snapped.point
+          );
+          this.emitState();
+          return;
+        }
+
+        if (this.archTool === 'place-opening') {
+          const hit = this.archEngine.findClosestWallForOpening(
+            rawXZ,
+            this.activeFloorId,
+            1.15
+          );
+          if (hit) {
+            this.isArchDragDrawing = true;
+            this.archDragOpeningHit = {
+              wallId: hit.wall.id,
+              offsetRatio: hit.offsetRatio,
+            };
+            this.orbitControls.enabled = false;
+            this.renderer.domElement.setPointerCapture?.(event.pointerId);
+            this.archEngine.updateOpeningHoverPreview(
+              hit.wall,
+              hit.offsetRatio,
+              this.activeOpeningKind,
+              baseY
+            );
+            this.emitState();
+            return;
+          }
+        }
+      }
     }
 
     // #3 Terrain Sculpting Stroke Start (`house` mode, primary pointer)
@@ -3106,6 +3402,20 @@ export class StudioEngine {
   };
 
   private handlePointerMove = (event: PointerEvent): void => {
+    if (this.activePointers.has(event.pointerId)) {
+      this.activePointers.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+    }
+    if (
+      this.activePointers.size >= 2 ||
+      this.wasMultiTouchGesture ||
+      performance.now() < this.multiTouchCooldownUntil
+    ) {
+      return;
+    }
+
     if (this.walkthroughEnabled) {
       if (!this.isWalkLooking) return;
       const dx = event.clientX - this.walkLookPrev.x;
@@ -3168,14 +3478,22 @@ export class StudioEngine {
             nextXZ.z - this.activeArchDrag.curXZ.z
           ) >= 0.02
         ) {
+          const dragFloorId = this.activeArchDrag.floorId;
           this.archEngine.moveConnectedWallVertex(
-            this.activeArchDrag.floorId,
+            dragFloorId,
             this.activeArchDrag.curXZ,
             nextXZ
           );
           this.activeArchDrag.curXZ = nextXZ;
           this.activeArchDrag.moved = true;
+          const activeFl =
+            this.floors.find((f) => f.id === dragFloorId) ?? this.floors[0];
           this.rebuildArchitecture();
+          this.archEngine.updateCornerDragDimensions(
+            dragFloorId,
+            nextXZ,
+            activeFl ? activeFl.elevation : 0
+          );
           this.emitState();
         }
       } else if (this.activeArchDrag.kind === 'opening-slide') {
@@ -3217,8 +3535,12 @@ export class StudioEngine {
       return;
     }
 
-    // Architect Life × Blender Interactive Previews (`house` mode)
-    if (this.studioMode === 'house' && this.archTool !== 'select') {
+    // Architect Life × Blender Interactive Previews & Drag-Creation (`house` mode)
+    if (
+      this.studioMode === 'house' &&
+      this.archTool !== 'select' &&
+      !this.pendingArchCommit
+    ) {
       const activeFl =
         this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
       const baseY = activeFl ? activeFl.elevation : 0;
@@ -3230,21 +3552,61 @@ export class StudioEngine {
             this.snapSettings.enabled && this.snapSettings.grid
               ? Math.min(0.25, this.snapSettings.gridStep)
               : 0.1;
+          const anchorPt = this.archDragStartXZ ?? this.wallChainStart;
           const snapped = this.archEngine.snapWallPoint(
             rawXZ,
             this.activeFloorId,
-            this.wallChainStart,
+            anchorPt,
             this.wallDrawDefaults.angleSnap,
             snapStep
           );
           this.lastHoverWallXZ = snapped.point;
+          if (this.isArchDragDrawing) {
+            this.archDragCurrentXZ = snapped.point;
+          }
           this.archEngine.updateWallDrawPreview(
-            this.wallChainStart,
-            this.wallChainStart ? snapped.point : null,
+            anchorPt,
+            anchorPt ? snapped.point : null,
             baseY,
             this.wallDrawDefaults,
-            snapped.point
+            snapped.point,
+            snapped.guideLines
           );
+          if (this.isArchDragDrawing) return;
+        }
+      } else if (this.archTool === 'draw-room') {
+        const rawXZ = this.raycastActiveFloorXZ(event);
+        if (rawXZ) {
+          const snapStep =
+            this.snapSettings.enabled && this.snapSettings.grid
+              ? Math.min(0.25, this.snapSettings.gridStep)
+              : 0.1;
+          const snapped = this.archEngine.snapWallPoint(
+            rawXZ,
+            this.activeFloorId,
+            null,
+            false,
+            snapStep
+          );
+          if (this.isArchDragDrawing && this.archDragStartXZ) {
+            this.archDragCurrentXZ = snapped.point;
+            this.archEngine.updateRoomBoxPreview(
+              this.archDragStartXZ,
+              snapped.point,
+              baseY,
+              this.wallDrawDefaults,
+              snapped.point
+            );
+            return;
+          } else {
+            this.archEngine.updateRoomBoxPreview(
+              null,
+              null,
+              baseY,
+              this.wallDrawDefaults,
+              snapped.point
+            );
+          }
         }
       } else if (this.archTool === 'place-opening') {
         const rawXZ = this.raycastActiveFloorXZ(event);
@@ -3252,14 +3614,20 @@ export class StudioEngine {
           const hit = this.archEngine.findClosestWallForOpening(
             rawXZ,
             this.activeFloorId,
-            0.95
+            this.isArchDragDrawing ? 1.6 : 0.95
           );
+          if (this.isArchDragDrawing) {
+            this.archDragOpeningHit = hit
+              ? { wallId: hit.wall.id, offsetRatio: hit.offsetRatio }
+              : null;
+          }
           this.archEngine.updateOpeningHoverPreview(
             hit ? hit.wall : null,
             hit ? hit.offsetRatio : 0.5,
             this.activeOpeningKind,
             baseY
           );
+          if (this.isArchDragDrawing) return;
         }
       } else if (
         this.archTool === 'measure' &&
@@ -3341,6 +3709,20 @@ export class StudioEngine {
   };
 
   private handlePointerUp = (event: PointerEvent): void => {
+    this.activePointers.delete(event.pointerId);
+
+    // #1 Multi-Touch & Pinch-Zoom Guard: never fire single-click/draw actions on multi-touch lift!
+    if (this.wasMultiTouchGesture) {
+      if (this.activePointers.size === 0) {
+        this.wasMultiTouchGesture = false;
+        this.multiTouchCooldownUntil = performance.now() + 180;
+      }
+      return;
+    }
+    if (performance.now() < this.multiTouchCooldownUntil) {
+      return;
+    }
+
     if (this.walkthroughEnabled) {
       if (this.isWalkLooking) {
         this.isWalkLooking = false;
@@ -3376,12 +3758,172 @@ export class StudioEngine {
       return;
     }
 
+    // #2, #3 & #7 Finalize Fluid Press-and-Drag Architectural Creation
+    if (this.isArchDragDrawing && this.studioMode === 'house') {
+      const startXZ = this.archDragStartXZ;
+      const curXZ = this.archDragCurrentXZ;
+      const opHit = this.archDragOpeningHit;
+      this.isArchDragDrawing = false;
+      this.archDragStartXZ = null;
+      this.archDragCurrentXZ = null;
+      this.archDragOpeningHit = null;
+      this.orbitControls.enabled = true;
+      this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+
+      const activeFl =
+        this.floors.find((f) => f.id === this.activeFloorId) ?? this.floors[0];
+      const baseY = activeFl ? activeFl.elevation : 0;
+      const movePx = Math.hypot(
+        event.clientX - this.pointerDownPos.x,
+        event.clientY - this.pointerDownPos.y
+      );
+
+      if (this.archTool === 'draw-wall' && startXZ && curXZ) {
+        const distWorld = Math.hypot(curXZ.x - startXZ.x, curXZ.z - startXZ.z);
+        if (distWorld >= 0.25) {
+          if (this.wallDrawDefaults.confirmBeforeCommit) {
+            this.pendingArchCommit = {
+              kind: 'wall',
+              start: startXZ,
+              end: curXZ,
+            };
+            this.archEngine.updateWallDrawPreview(
+              startXZ,
+              curXZ,
+              baseY,
+              this.wallDrawDefaults,
+              curXZ
+            );
+            this.emitState();
+            return;
+          }
+
+          const snapCheck = this.archEngine.snapWallPoint(
+            curXZ,
+            this.activeFloorId,
+            startXZ,
+            this.wallDrawDefaults.angleSnap,
+            0.05
+          );
+          const created = this.archEngine.addWallSegment(
+            this.activeFloorId,
+            startXZ,
+            curXZ,
+            this.wallDrawDefaults
+          );
+          if (created) {
+            if (
+              this.wallDrawDefaults.chainMode &&
+              !snapCheck.snappedEndpoint &&
+              !snapCheck.snappedWallBody
+            ) {
+              this.wallChainStart = curXZ;
+            } else {
+              this.wallChainStart = null;
+              this.archEngine.clearPreview();
+            }
+            this.rebuildArchitecture();
+            this.pushHistorySnapshot();
+          } else {
+            this.wallChainStart = null;
+            this.archEngine.clearPreview();
+          }
+          this.emitState();
+          return;
+        } else if (movePx <= 7 && !this.wallChainStart) {
+          // Light single tap at Point A: keep anchor ready so a 2nd tap at Point B also works naturally!
+          this.wallChainStart = startXZ;
+          this.archEngine.updateWallDrawPreview(
+            startXZ,
+            null,
+            baseY,
+            this.wallDrawDefaults,
+            startXZ
+          );
+          this.emitState();
+          return;
+        } else {
+          this.archEngine.clearPreview();
+          this.emitState();
+          return;
+        }
+      }
+
+      if (this.archTool === 'draw-room' && startXZ && curXZ) {
+        const spanX = Math.abs(curXZ.x - startXZ.x);
+        const spanZ = Math.abs(curXZ.z - startXZ.z);
+        if (spanX >= 0.35 && spanZ >= 0.35) {
+          if (this.wallDrawDefaults.confirmBeforeCommit) {
+            this.pendingArchCommit = {
+              kind: 'room',
+              cornerA: startXZ,
+              cornerB: curXZ,
+            };
+            this.archEngine.updateRoomBoxPreview(
+              startXZ,
+              curXZ,
+              baseY,
+              this.wallDrawDefaults,
+              curXZ
+            );
+            this.emitState();
+            return;
+          }
+          const createdWalls = this.archEngine.addRoomBox(
+            this.activeFloorId,
+            startXZ,
+            curXZ,
+            this.wallDrawDefaults
+          );
+          this.archEngine.clearPreview();
+          if (createdWalls > 0) {
+            this.rebuildArchitecture();
+            this.pushHistorySnapshot();
+          }
+        } else {
+          this.archEngine.clearPreview();
+        }
+        this.emitState();
+        return;
+      }
+
+      if (this.archTool === 'place-opening') {
+        if (opHit) {
+          if (this.wallDrawDefaults.confirmBeforeCommit) {
+            this.pendingArchCommit = {
+              kind: 'opening',
+              wallId: opHit.wallId,
+              openingKind: this.activeOpeningKind,
+              offsetRatio: opHit.offsetRatio,
+            };
+            this.emitState();
+            return;
+          }
+          const op = this.archEngine.addOpeningOnWall(
+            opHit.wallId,
+            this.activeOpeningKind,
+            opHit.offsetRatio
+          );
+          this.archEngine.clearPreview();
+          if (op) {
+            this.rebuildArchitecture();
+            this.pushHistorySnapshot();
+          }
+        } else {
+          this.archEngine.clearPreview();
+        }
+        this.emitState();
+        return;
+      }
+    }
+
     // Finalize Direct Architectural Viewport Drag
     if (this.activeArchDrag) {
       const wasMoved = this.activeArchDrag.moved;
       this.activeArchDrag = null;
       this.orbitControls.enabled = true;
       this.renderer.domElement.releasePointerCapture?.(event.pointerId);
+      this.archEngine.clearPreview();
       if (wasMoved) {
         this.pushHistorySnapshot();
         this.emitState();
@@ -3580,6 +4122,38 @@ export class StudioEngine {
         return;
       }
 
+      if (this.archTool === 'erase-arch') {
+        this.setPointerNDCFromEvent(event);
+        this.raycaster.setFromCamera(this.pointerNDC, this.camera);
+        const archHits = this.raycaster.intersectObjects(
+          this.archEngine.structuralGroup.children,
+          true
+        );
+        for (const ah of archHits) {
+          let cur: THREE.Object3D | null = ah.object;
+          while (cur && cur !== this.archEngine.structuralGroup) {
+            const kind = cur.userData?.archKind as string | undefined;
+            const id = cur.userData?.archId as string | undefined;
+            if (
+              id &&
+              (kind === 'opening' ||
+                kind === 'wall' ||
+                kind === 'roof' ||
+                kind === 'stair')
+            ) {
+              if (this.archEngine.deleteArchElementByKindAndId(kind, id)) {
+                this.rebuildArchitecture();
+                this.pushHistorySnapshot();
+                this.emitState();
+              }
+              return;
+            }
+            cur = cur.parent;
+          }
+        }
+        return;
+      }
+
       if (this.archTool === 'measure') {
         const pt = this.raycastAnyScenePoint(event);
         if (!pt) return;
@@ -3607,49 +4181,178 @@ export class StudioEngine {
     );
     const hits = this.raycaster.intersectObjects(selectableMeshes, false);
 
-    // 1. Paint / Eyedropper
-    if (this.paintMode !== 'none' && hits.length > 0) {
-      const hitMesh = hits[0].object as THREE.Mesh;
-      const hitId = hitMesh.userData.objectId as string | undefined;
-      if (hitId) {
-        const mat = this.getBaseMaterial(hitMesh);
-        if (this.paintMode === 'eyedropper') {
-          const sample: PaintBrushPayload = {
-            color: `#${mat.color.getHexString()}`,
-            roughness: round3(mat.roughness),
-            metalness: round3(mat.metalness),
-            opacity: round3(mat.opacity),
-            emissive: (hitMesh.userData.userEmissiveHex as string) ?? '#000000',
-            emissiveIntensity: round3(
-              (hitMesh.userData.userEmissiveIntensity as number) ?? 0
-            ),
-            flatShading: Boolean(mat.flatShading),
-          };
-          this.activeBrush = sample;
-          this.paintMode = 'none';
-          this.renderer.domElement.style.cursor = 'default';
-          this.callbacks.onEyedropperSample?.(sample, hitMesh.name);
-          return;
+    // 1. Paint / Eyedropper (Scene Objects + #9 Smart Architectural Walls/Rooms/Roofs!)
+    if (this.paintMode !== 'none') {
+      const meshDist = hits.length > 0 ? hits[0].distance : Infinity;
+      const archHits =
+        this.studioMode === 'house'
+          ? this.raycaster.intersectObjects(
+              this.archEngine.structuralGroup.children,
+              true
+            )
+          : [];
+      const archDist = archHits.length > 0 ? archHits[0].distance : Infinity;
+
+      if (archHits.length > 0 && archDist < meshDist - 0.005) {
+        const hitInfo = archHits[0];
+        let cur: THREE.Object3D | null = hitInfo.object;
+        while (cur && cur !== this.archEngine.structuralGroup) {
+          const kind = cur.userData?.archKind as string | undefined;
+          const id = cur.userData?.archId as string | undefined;
+          if (kind === 'wall' && id) {
+            const wall = this.archEngine
+              .getData()
+              .walls.find((w) => w.id === id);
+            if (wall) {
+              const hasDual = Boolean(hitInfo.object.userData?.hasDualWallFaces);
+              const matIdx = hitInfo.face?.materialIndex ?? 4;
+              const isInterior = hasDual && matIdx === 5;
+              const faceLabel = isInterior ? 'Dinding Dalam' : 'Dinding Luar';
+
+              if (this.paintMode === 'eyedropper') {
+                const sample: PaintBrushPayload = {
+                  color: isInterior ? wall.interiorColor : wall.exteriorColor,
+                  roughness: round3(wall.roughness),
+                  metalness: 0.04,
+                  opacity: 1,
+                  emissive: '#000000',
+                  emissiveIntensity: 0,
+                  flatShading: false,
+                };
+                this.activeBrush = sample;
+                this.paintMode = 'none';
+                this.renderer.domElement.style.cursor = 'default';
+                this.callbacks.onEyedropperSample?.(sample, faceLabel);
+              } else if (this.paintMode === 'bucket') {
+                this.updateArchWall(
+                  wall.id,
+                  isInterior
+                    ? {
+                        interiorColor: this.activeBrush.color,
+                        roughness: this.activeBrush.roughness,
+                      }
+                    : {
+                        exteriorColor: this.activeBrush.color,
+                        roughness: this.activeBrush.roughness,
+                      },
+                  true
+                );
+                this.callbacks.onPaintApplied?.(faceLabel);
+              }
+              return;
+            }
+          }
+          if (kind === 'room' && id) {
+            const room = this.archEngine
+              .getDetectedRooms()
+              .find((r) => r.id === id);
+            if (room) {
+              if (this.paintMode === 'eyedropper') {
+                const sample: PaintBrushPayload = {
+                  color: room.floorColor,
+                  roughness: 0.65,
+                  metalness: 0.05,
+                  opacity: 1,
+                  emissive: '#000000',
+                  emissiveIntensity: 0,
+                  flatShading: false,
+                };
+                this.activeBrush = sample;
+                this.paintMode = 'none';
+                this.renderer.domElement.style.cursor = 'default';
+                this.callbacks.onEyedropperSample?.(sample, room.name);
+              } else if (this.paintMode === 'bucket') {
+                this.updateArchRoomMeta(
+                  room.id,
+                  { floorColor: this.activeBrush.color },
+                  true
+                );
+                this.callbacks.onPaintApplied?.(room.name);
+              }
+              return;
+            }
+          }
+          if (kind === 'roof' && id) {
+            const roof = this.archEngine
+              .getData()
+              .roofs.find((r) => r.id === id);
+            if (roof) {
+              if (this.paintMode === 'eyedropper') {
+                const sample: PaintBrushPayload = {
+                  color: roof.color,
+                  roughness: 0.72,
+                  metalness: 0.08,
+                  opacity: 1,
+                  emissive: '#000000',
+                  emissiveIntensity: 0,
+                  flatShading: false,
+                };
+                this.activeBrush = sample;
+                this.paintMode = 'none';
+                this.renderer.domElement.style.cursor = 'default';
+                this.callbacks.onEyedropperSample?.(sample, roof.name);
+              } else if (this.paintMode === 'bucket') {
+                this.updateArchRoof(
+                  roof.id,
+                  { color: this.activeBrush.color },
+                  true
+                );
+                this.callbacks.onPaintApplied?.(roof.name);
+              }
+              return;
+            }
+          }
+          cur = cur.parent;
         }
-        if (this.paintMode === 'bucket') {
-          this.updateObjectMaterial(hitId, { ...this.activeBrush }, true);
-          this.selectObject(hitId, true);
-          this.callbacks.onPaintApplied?.(hitMesh.name);
-          return;
+      }
+
+      if (hits.length > 0) {
+        const hitMesh = hits[0].object as THREE.Mesh;
+        const hitId = hitMesh.userData.objectId as string | undefined;
+        if (hitId) {
+          const mat = this.getBaseMaterial(hitMesh);
+          if (this.paintMode === 'eyedropper') {
+            const sample: PaintBrushPayload = {
+              color: `#${mat.color.getHexString()}`,
+              roughness: round3(mat.roughness),
+              metalness: round3(mat.metalness),
+              opacity: round3(mat.opacity),
+              emissive:
+                (hitMesh.userData.userEmissiveHex as string) ?? '#000000',
+              emissiveIntensity: round3(
+                (hitMesh.userData.userEmissiveIntensity as number) ?? 0
+              ),
+              flatShading: Boolean(mat.flatShading),
+            };
+            this.activeBrush = sample;
+            this.paintMode = 'none';
+            this.renderer.domElement.style.cursor = 'default';
+            this.callbacks.onEyedropperSample?.(sample, hitMesh.name);
+            return;
+          }
+          if (this.paintMode === 'bucket') {
+            this.updateObjectMaterial(hitId, { ...this.activeBrush }, true);
+            this.selectObject(hitId, true);
+            this.callbacks.onPaintApplied?.(hitMesh.name);
+            return;
+          }
         }
       }
     }
 
-    // 2. Surface Click-to-Place
+    // 2. Surface Click-to-Place (#10 includes Smart Walls & Room Floors!)
     if (
       this.surfaceSettings.enabled &&
       this.surfaceSettings.clickToPlace &&
       this.selectedId
     ) {
       const selMesh = this.meshMap.get(this.selectedId);
-      if (selMesh) {
+      if (selMesh && !selMesh.userData.userLocked) {
         this.captureGroupRelativeMatrices(selMesh);
-        const others = this.getNonSiblingMeshes(selMesh);
+        const others = [
+          ...this.getNonSiblingMeshes(selMesh),
+          ...this.collectArchSurfaceMeshes(),
+        ];
         const hitSurf = this.surfaceEngine.raycastPointerSurface(
           this.raycaster,
           selMesh,
@@ -3771,7 +4474,8 @@ export class StudioEngine {
       !this.isSurfaceSliding &&
       !this.isSculptingStroke &&
       !this.isBoxSelecting &&
-      !this.activeArchDrag
+      !this.activeArchDrag &&
+      !this.isArchDragDrawing
     ) {
       this.orbitControls.enabled = true;
       this.orbitControls.update();
@@ -4498,6 +5202,7 @@ export class StudioEngine {
       baseMaterial,
       userOpacity: opacity,
       userVisible: data.visible,
+      userLocked: Boolean(data.locked),
       userEmissiveHex: emissiveHex,
       userEmissiveIntensity: emissiveIntensity,
       proceduralPattern: procPattern,
@@ -4664,7 +5369,7 @@ export class StudioEngine {
       !this.terrainSculpt.active
     ) {
       const mesh = this.meshMap.get(this.selectedId);
-      if (mesh && mesh.visible) {
+      if (mesh && mesh.visible && !mesh.userData.userLocked) {
         this.transformControls.attach(mesh);
         this.applyAxisLockToGizmo();
       } else {
@@ -4725,8 +5430,10 @@ export class StudioEngine {
       this.applyAxisLockToGizmo();
       if (this.selectedId) {
         const mesh = this.meshMap.get(this.selectedId);
-        if (mesh && mesh.visible) {
+        if (mesh && mesh.visible && !mesh.userData.userLocked) {
           this.transformControls.attach(mesh);
+        } else {
+          this.transformControls.detach();
         }
       }
     }
@@ -4769,10 +5476,13 @@ export class StudioEngine {
 
     if (!wasEnabled && this.surfaceSettings.enabled && this.selectedId) {
       const selMesh = this.meshMap.get(this.selectedId);
-      if (selMesh && selMesh.visible) {
+      if (selMesh && selMesh.visible && !selMesh.userData.userLocked) {
         this.captureGroupRelativeMatrices(selMesh);
         const halfDiag = this.getMeshHalfDiagonal(selMesh);
-        const others = this.getNonSiblingMeshes(selMesh);
+        const others = [
+          ...this.getNonSiblingMeshes(selMesh),
+          ...this.collectArchSurfaceMeshes(),
+        ];
         const nearHit = this.surfaceEngine.findClosestSurface3D(
           selMesh.position,
           selMesh.position,
@@ -5557,10 +6267,211 @@ export class StudioEngine {
     return newId;
   }
 
+  /**
+   * #14 Outliner Object Lock: Prevents accidental viewport click, drag, gizmo move, or delete!
+   */
+  public toggleObjectLocked(id: string): boolean {
+    const mesh = this.meshMap.get(id);
+    if (!mesh) return false;
+    const nextLocked = !Boolean(mesh.userData.userLocked);
+    mesh.userData.userLocked = nextLocked;
+    if (nextLocked && this.selectedId === id) {
+      this.transformControls.detach();
+    } else if (!nextLocked && this.selectedId === id && this.transformMode !== 'select') {
+      this.reattachTransformAfterSelectionChange();
+    }
+    this.pushHistorySnapshot();
+    this.emitState();
+    return nextLocked;
+  }
+
+  /**
+   * #15 Exact Meter Dimensions (Bounding-Box World Span `[X, Y, Z]` in meters)
+   */
+  public getSelectedCombinedDimensions(): [number, number, number] | null {
+    const box = this.computeSelectedCombinedBounds();
+    if (!box) return null;
+    return [
+      round3(Math.max(0.02, box.max.x - box.min.x)),
+      round3(Math.max(0.02, box.max.y - box.min.y)),
+      round3(Math.max(0.02, box.max.z - box.min.z)),
+    ];
+  }
+
+  public setSelectedExactDimensions(
+    targetSize: [number, number, number],
+    proportional = false,
+    changedAxis?: 0 | 1 | 2
+  ): boolean {
+    if (!this.selectedId) return false;
+    const selMesh = this.meshMap.get(this.selectedId);
+    if (!selMesh || selMesh.userData.userLocked) return false;
+
+    const box = this.computeSelectedCombinedBounds();
+    if (!box) return false;
+    const curX = Math.max(0.02, box.max.x - box.min.x);
+    const curY = Math.max(0.02, box.max.y - box.min.y);
+    const curZ = Math.max(0.02, box.max.z - box.min.z);
+
+    let rx = Math.max(0.02, Math.min(80, targetSize[0])) / curX;
+    let ry = Math.max(0.02, Math.min(80, targetSize[1])) / curY;
+    let rz = Math.max(0.02, Math.min(80, targetSize[2])) / curZ;
+
+    if (proportional && changedAxis !== undefined) {
+      const uniformRatio =
+        changedAxis === 0 ? rx : changedAxis === 1 ? ry : rz;
+      rx = uniformRatio;
+      ry = uniformRatio;
+      rz = uniformRatio;
+    }
+
+    const companions = this.getGroupSiblings(selMesh).filter(
+      (m) => !m.userData.userLocked
+    );
+    const targets = [selMesh, ...companions];
+    const pivot = new THREE.Vector3(
+      (box.min.x + box.max.x) * 0.5,
+      box.min.y,
+      (box.min.z + box.max.z) * 0.5
+    );
+
+    for (const m of targets) {
+      const rel = m.position.clone().sub(pivot);
+      m.position.set(
+        round3(pivot.x + rel.x * rx),
+        round3(pivot.y + rel.y * ry),
+        round3(pivot.z + rel.z * rz)
+      );
+      m.scale.set(
+        round3(Math.max(0.02, m.scale.x * rx)),
+        round3(Math.max(0.02, m.scale.y * ry)),
+        round3(Math.max(0.02, m.scale.z * rz))
+      );
+      if (!m.userData.modelAssetId && m.userData.modifiers) {
+        syncMeshMirrorTwins(
+          m,
+          normalizeModifierSettings(m.userData.modifiers as ObjectModifierSettings),
+          this.getBaseMaterial(m)
+        );
+      }
+      m.updateMatrixWorld(true);
+    }
+
+    this.updateSeamlessTouchFaces();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  /**
+   * #13 Multi-Select Precision Align & Distribute (`Mode Modeling` & `Buat Rumah`)
+   */
+  public alignOrDistributeSelected(action: AlignDistributeAction): number {
+    if (this.selectedIds.length < 2) return 0;
+
+    // Collect distinct movable units (if objects share a groupId and !editSinglePartMode, treat group as one unit)
+    const unitMap = new Map<
+      string,
+      { meshes: THREE.Mesh[]; box: THREE.Box3 }
+    >();
+
+    for (const sid of this.selectedIds) {
+      const m = this.meshMap.get(sid);
+      if (!m || !m.visible || m.userData.userLocked) continue;
+      const gid = !this.editSinglePartMode
+        ? (m.userData.groupId as string | null | undefined)
+        : null;
+      const unitKey = gid ? `grp:${gid}` : `obj:${sid}`;
+      if (unitMap.has(unitKey)) continue;
+
+      const unitMeshes: THREE.Mesh[] = [];
+      if (gid) {
+        for (const gm of this.meshMap.values()) {
+          if (gm.userData.groupId === gid && !gm.userData.userLocked) {
+            unitMeshes.push(gm);
+          }
+        }
+      } else {
+        unitMeshes.push(m);
+      }
+      if (unitMeshes.length === 0) continue;
+
+      const box = new THREE.Box3();
+      for (const um of unitMeshes) {
+        box.union(this.computeWorldBounds(um));
+      }
+      unitMap.set(unitKey, { meshes: unitMeshes, box });
+    }
+
+    const units = Array.from(unitMap.values());
+    if (units.length < 2) return 0;
+
+    const totalBox = new THREE.Box3();
+    for (const u of units) totalBox.union(u.box);
+
+    const shiftUnit = (u: { meshes: THREE.Mesh[] }, dx: number, dy: number, dz: number) => {
+      for (const m of u.meshes) {
+        m.position.set(
+          round3(m.position.x + dx),
+          round3(m.position.y + dy),
+          round3(m.position.z + dz)
+        );
+        m.updateMatrixWorld(true);
+      }
+    };
+
+    if (action === 'distribute-x' || action === 'distribute-z') {
+      if (units.length < 3) return 0;
+      const axis = action === 'distribute-x' ? 'x' : 'z';
+      units.sort(
+        (a, b) =>
+          (a.box.min[axis] + a.box.max[axis]) * 0.5 -
+          (b.box.min[axis] + b.box.max[axis]) * 0.5
+      );
+      const firstC = (units[0].box.min[axis] + units[0].box.max[axis]) * 0.5;
+      const lastC =
+        (units[units.length - 1].box.min[axis] +
+          units[units.length - 1].box.max[axis]) *
+        0.5;
+      const step = (lastC - firstC) / (units.length - 1);
+      for (let i = 1; i < units.length - 1; i++) {
+        const curC = (units[i].box.min[axis] + units[i].box.max[axis]) * 0.5;
+        const delta = firstC + step * i - curC;
+        if (axis === 'x') shiftUnit(units[i], delta, 0, 0);
+        else shiftUnit(units[i], 0, 0, delta);
+      }
+    } else {
+      for (const u of units) {
+        const cx = (u.box.min.x + u.box.max.x) * 0.5;
+        const cz = (u.box.min.z + u.box.max.z) * 0.5;
+        if (action === 'align-min-x') shiftUnit(u, totalBox.min.x - u.box.min.x, 0, 0);
+        else if (action === 'align-center-x')
+          shiftUnit(u, (totalBox.min.x + totalBox.max.x) * 0.5 - cx, 0, 0);
+        else if (action === 'align-max-x')
+          shiftUnit(u, totalBox.max.x - u.box.max.x, 0, 0);
+        else if (action === 'align-min-y')
+          shiftUnit(u, 0, totalBox.min.y - u.box.min.y, 0);
+        else if (action === 'align-max-y')
+          shiftUnit(u, 0, totalBox.max.y - u.box.max.y, 0);
+        else if (action === 'align-min-z')
+          shiftUnit(u, 0, 0, totalBox.min.z - u.box.min.z);
+        else if (action === 'align-center-z')
+          shiftUnit(u, 0, 0, (totalBox.min.z + totalBox.max.z) * 0.5 - cz);
+        else if (action === 'align-max-z')
+          shiftUnit(u, 0, 0, totalBox.max.z - u.box.max.z);
+      }
+    }
+
+    this.updateSeamlessTouchFaces();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return units.length;
+  }
+
   public deleteObject(id: string | null = this.selectedId): void {
     if (!id) return;
     const mesh = this.meshMap.get(id);
-    if (!mesh) return;
+    if (!mesh || mesh.userData.userLocked) return;
 
     const deleteSet = new Set<string>();
     const seedIds =
@@ -5569,14 +6480,17 @@ export class StudioEngine {
         : [id];
 
     for (const sid of seedIds) {
-      deleteSet.add(sid);
       const sm = this.meshMap.get(sid);
+      if (sm?.userData.userLocked) continue;
+      deleteSet.add(sid);
       const gid = !this.editSinglePartMode
         ? (sm?.userData.groupId as string | null | undefined)
         : null;
       if (gid) {
         for (const [k, m] of this.meshMap.entries()) {
-          if (m.userData.groupId === gid) deleteSet.add(k);
+          if (m.userData.groupId === gid && !m.userData.userLocked) {
+            deleteSet.add(k);
+          }
         }
       }
     }
@@ -5872,6 +6786,7 @@ export class StudioEngine {
         : { ...DEFAULT_MODIFIER_SETTINGS },
       subdivision: { ...subdiv },
       visible: userVisible,
+      locked: Boolean(mesh.userData.userLocked),
       groupId: (mesh.userData.groupId as string | null | undefined) ?? null,
       groupName: mesh.userData.groupName as string | undefined,
       archRole: mesh.userData.archRole as ArchitecturalRole | undefined,
@@ -6139,6 +7054,10 @@ export class StudioEngine {
       isBlueprint2D: this.isBlueprint2D,
       cameraLensFov: this.cameraLensFov,
       wallChainActive: Boolean(this.wallChainStart),
+      isArchActivelyDrawing: Boolean(this.isArchDragDrawing),
+      pendingArchCommit: this.pendingArchCommit
+        ? { ...this.pendingArchCommit }
+        : null,
     });
   }
 
@@ -6291,6 +7210,7 @@ export class StudioEngine {
     this.renderer.domElement.removeEventListener('pointerdown', this.handlePointerDown);
     this.renderer.domElement.removeEventListener('pointermove', this.handlePointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.handlePointerUp);
+    this.renderer.domElement.removeEventListener('pointercancel', this.handlePointerCancel);
     window.removeEventListener('keydown', this.handleWalkKeyDown);
     window.removeEventListener('keyup', this.handleWalkKeyUp);
 

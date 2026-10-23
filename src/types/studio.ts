@@ -383,8 +383,33 @@ export type ArchBuildPhase =
 export type ArchSubTool =
   | 'select'
   | 'draw-wall'
+  | 'draw-room'
   | 'place-opening'
+  | 'erase-arch'
   | 'measure';
+
+export type AlignDistributeAction =
+  | 'align-min-x'
+  | 'align-center-x'
+  | 'align-max-x'
+  | 'align-min-y'
+  | 'align-max-y'
+  | 'align-min-z'
+  | 'align-center-z'
+  | 'align-max-z'
+  | 'distribute-x'
+  | 'distribute-z';
+
+export type PendingArchCommit =
+  | { kind: 'wall'; start: Vec2XZ; end: Vec2XZ; label?: string }
+  | { kind: 'room'; cornerA: Vec2XZ; cornerB: Vec2XZ; label?: string }
+  | {
+      kind: 'opening';
+      wallId: string;
+      openingKind: ArchOpeningKind;
+      offsetRatio: number;
+      label?: string;
+    };
 
 export type ArchWallStyle = 'full' | 'half' | 'railing';
 
@@ -524,6 +549,8 @@ export interface WallDrawDefaults {
   style: ArchWallStyle;
   curveBulge: number;
   angleSnap: boolean;
+  chainMode: boolean; // false = 1-stroke drag-to-draw (never chains unexpectedly!), true = continuous polyline
+  confirmBeforeCommit: boolean; // optional safe touch checkmark confirmation
   exteriorColor: string;
   interiorColor: string;
   exteriorPattern?: ProceduralPatternKind;
@@ -550,6 +577,7 @@ export interface SceneObjectData {
   subdivision: ObjectSubdivisionSettings;
   modifiers?: ObjectModifierSettings;
   visible: boolean;
+  locked?: boolean;
   groupId?: string | null;
   groupName?: string;
   archRole?: ArchitecturalRole;
@@ -836,6 +864,8 @@ export const DEFAULT_WALL_DRAW: WallDrawDefaults = {
   style: 'full',
   curveBulge: 0,
   angleSnap: true,
+  chainMode: false,
+  confirmBeforeCommit: false,
   exteriorColor: '#f1f5f9',
   interiorColor: '#f8efe2',
   hasBaseboard: true,

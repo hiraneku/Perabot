@@ -818,7 +818,7 @@ function buildOpeningAssembly(
   const innerH = Math.max(0.2, h - frameT);
   const isDoorOpen = op.isOpen !== false;
 
-  if (op.kind === 'door-single') {
+    if (op.kind === 'door-single') {
     // Interactive door leaf: swings open 76 deg when isOpen !== false, or 0 deg flush when closed!
     const pivot = new THREE.Group();
     const dir = op.flipSwing ? -1 : 1;
@@ -842,6 +842,27 @@ function buildOpeningAssembly(
     handle.userData = { archKind: 'opening', archId: op.id, wallId: op.wallId };
     pivot.add(handle);
     grp.add(pivot);
+
+    // Architectural 2D/3D Floor Door Swing Arc
+    const arcPts: THREE.Vector3[] = [];
+    const hingeX = (-innerW * 0.5) * dir;
+    for (let i = 0; i <= 16; i++) {
+      const ang = (i / 16) * (Math.PI * 0.45);
+      const ax = hingeX + dir * Math.cos(ang) * innerW;
+      const az = -Math.sin(ang) * innerW * dir;
+      arcPts.push(new THREE.Vector3(ax, 0.025, az));
+    }
+    const arcLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(arcPts),
+      new THREE.LineBasicMaterial({
+        color: isSelected ? '#38bdf8' : '#94a3b8',
+        transparent: true,
+        opacity: 0.72,
+      })
+    );
+    arcLine.name = '__doorSwingArc';
+    arcLine.raycast = () => {};
+    grp.add(arcLine);
   } else if (op.kind === 'door-double') {
     applyProceduralPatternToMaterial(woodLeafMat, 'wood', 1.2, 2.2);
     const halfLeafW = innerW * 0.5 - 0.008;
@@ -859,6 +880,31 @@ function buildOpeningAssembly(
       leaf.userData = { archKind: 'opening', archId: op.id, wallId: op.wallId };
       pivot.add(leaf);
       grp.add(pivot);
+
+      const swingDir = op.flipSwing ? -1 : 1;
+      const arcPts: THREE.Vector3[] = [];
+      const hingeX = side * (innerW * 0.5);
+      for (let i = 0; i <= 12; i++) {
+        const ang = (i / 12) * (Math.PI * 0.44);
+        arcPts.push(
+          new THREE.Vector3(
+            hingeX - side * Math.cos(ang) * halfLeafW,
+            0.025,
+            -Math.sin(ang) * halfLeafW * swingDir
+          )
+        );
+      }
+      const arcLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(arcPts),
+        new THREE.LineBasicMaterial({
+          color: isSelected ? '#38bdf8' : '#94a3b8',
+          transparent: true,
+          opacity: 0.72,
+        })
+      );
+      arcLine.name = '__doorSwingArc';
+      arcLine.raycast = () => {};
+      grp.add(arcLine);
     }
   } else {
     // Window sill + mullion + sunlight-permeable clear glass!
@@ -1134,7 +1180,11 @@ export class ArchBuilderEngine {
   }
 
   /**
-   * Snaps a candidate XZ point to existing wall endpoints (0.28m magnet) + optional 45°/90° angle lock
+   * Smart Soft-Magnetic Wall Point Snapper v2:
+   * 1) Snaps to existing wall corners (`0.32m` magnet)
+   * 2) Snaps to existing straight wall bodies for T-Junction room splits (`0.26m` magnet)
+   * 3) Soft Magnetic Ortho Guide (`±8.5°` around 0°/90°/180°/270°, `±5°` around 45° diagonals) — NEVER stiff jumps!
+   * 4) Corner Alignment Guides (`alignX` / `alignZ`) with existing room corners!
    */
   public snapWallPoint(
     rawXZ: Vec2XZ,
@@ -1142,13 +1192,22 @@ export class ArchBuilderEngine {
     anchorStart: Vec2XZ | null,
     angleSnap: boolean,
     gridStep: number
-  ): { point: Vec2XZ; snappedEndpoint: boolean; lengthM: number; angleDeg: number } {
+  ): {
+    point: Vec2XZ;
+    snappedEndpoint: boolean;
+    snappedWallBody: boolean;
+    guideLines: Array<{ from: Vec2XZ; to: Vec2XZ }>;
+    lengthM: number;
+    angleDeg: number;
+  } {
     let x = rawXZ.x;
     let z = rawXZ.z;
     let snappedEndpoint = false;
+    let snappedWallBody = false;
+    const guideLines: Array<{ from: Vec2XZ; to: Vec2XZ }> = [];
 
-    // 1. Endpoint & Midpoint Magnet on the active floor
-    const ENDPOINT_RADIUS = 0.28;
+    // 1. Endpoint Magnet on the active floor
+    const ENDPOINT_RADIUS = 0.32;
     let bestDist = ENDPOINT_RADIUS;
     for (const w of this.data.walls) {
       if (w.floorId !== floorId) continue;
@@ -1169,39 +1228,103 @@ export class ArchBuilderEngine {
       }
     }
 
-    // 2. Angle Lock (0°, 45°, 90°, 135°...) + Grid Step when not snapped to an existing vertex
-    if (!snappedEndpoint) {
-      if (anchorStart && angleSnap) {
-        const dx = x - anchorStart.x;
-        const dz = z - anchorStart.z;
-        const rawLen = Math.hypot(dx, dz);
-        if (rawLen > 0.08) {
-          const rawAng = Math.atan2(dz, dx);
-          const stepRad = Math.PI / 4; // 45 deg increments
-          const snappedAng = Math.round(rawAng / stepRad) * stepRad;
-          const stepLen =
-            gridStep > 0
-              ? Math.max(gridStep, Math.round(rawLen / gridStep) * gridStep)
-              : Math.round(rawLen * 20) / 20;
-          x = round3(anchorStart.x + Math.cos(snappedAng) * stepLen);
-          z = round3(anchorStart.z + Math.sin(snappedAng) * stepLen);
-
-          // Re-check perpendicular alignment with existing wall vertices (for closing rectangles cleanly!)
-          for (const w of this.data.walls) {
-            if (w.floorId !== floorId) continue;
-            for (const pt of [w.start, w.end]) {
-              if (Math.abs(x - pt.x) < 0.16 && Math.abs(Math.sin(snappedAng)) < 0.02) {
-                x = pt.x;
-              }
-              if (Math.abs(z - pt.z) < 0.16 && Math.abs(Math.cos(snappedAng)) < 0.02) {
-                z = pt.z;
+    // 2. Soft Ortho Angle Magnet (before T-junction check so orthogonal partition walls hit host walls squarely!)
+    if (!snappedEndpoint && anchorStart) {
+      const dx = x - anchorStart.x;
+      const dz = z - anchorStart.z;
+      const rawLen = Math.hypot(dx, dz);
+      if (rawLen > 0.08) {
+        let ang = Math.atan2(dz, dx);
+        if (angleSnap) {
+          const deg = ((ang * RAD2DEG) % 360 + 360) % 360;
+          const cardinals = [0, 90, 180, 270, 360];
+          const diagonals = [45, 135, 225, 315];
+          let snappedDeg: number | null = null;
+          for (const c of cardinals) {
+            if (Math.abs(deg - c) <= 8.5) {
+              snappedDeg = c % 360;
+              break;
+            }
+          }
+          if (snappedDeg === null) {
+            for (const d of diagonals) {
+              if (Math.abs(deg - d) <= 5.0) {
+                snappedDeg = d;
+                break;
               }
             }
           }
+          if (snappedDeg !== null) {
+            ang = snappedDeg * DEG2RAD;
+          }
         }
-      } else if (gridStep > 0) {
-        x = round3(Math.round(x / gridStep) * gridStep);
-        z = round3(Math.round(z / gridStep) * gridStep);
+        const fineStep = gridStep > 0 ? Math.min(0.1, gridStep) : 0.05;
+        const cleanLen = Math.max(
+          fineStep,
+          Math.round(rawLen / fineStep) * fineStep
+        );
+        x = anchorStart.x + Math.cos(ang) * cleanLen;
+        z = anchorStart.z + Math.sin(ang) * cleanLen;
+      }
+    } else if (!snappedEndpoint && !anchorStart && gridStep > 0) {
+      const fineStep = Math.min(0.25, gridStep);
+      x = Math.round(x / fineStep) * fineStep;
+      z = Math.round(z / fineStep) * fineStep;
+    }
+
+    // 3. T-Junction Wall Body Magnet (snaps cleanly onto interior span of any straight wall on this floor!)
+    if (!snappedEndpoint) {
+      let bestBodyDist = 0.26;
+      for (const w of this.data.walls) {
+        if (w.floorId !== floorId || Math.abs(w.curveBulge) >= 0.04) continue;
+        const wx = w.end.x - w.start.x;
+        const wz = w.end.z - w.start.z;
+        const wLenSq = wx * wx + wz * wz;
+        if (wLenSq < 0.16) continue;
+        const t = ((x - w.start.x) * wx + (z - w.start.z) * wz) / wLenSq;
+        if (t <= 0.06 || t >= 0.94) continue;
+        const projX = w.start.x + wx * t;
+        const projZ = w.start.z + wz * t;
+        if (
+          anchorStart &&
+          Math.hypot(projX - anchorStart.x, projZ - anchorStart.z) < 0.12
+        ) {
+          continue;
+        }
+        const d = Math.hypot(x - projX, z - projZ);
+        if (d < bestBodyDist) {
+          bestBodyDist = d;
+          x = projX;
+          z = projZ;
+          snappedWallBody = true;
+        }
+      }
+    }
+
+    // 4. Smart Alignment Guides with Existing Wall Corners (helps close rooms into crisp rectangles!)
+    if (!snappedEndpoint && !snappedWallBody) {
+      let alignedX = false;
+      let alignedZ = false;
+      for (const w of this.data.walls) {
+        if (w.floorId !== floorId) continue;
+        for (const pt of [w.start, w.end]) {
+          if (
+            anchorStart &&
+            Math.hypot(pt.x - anchorStart.x, pt.z - anchorStart.z) < 0.06
+          ) {
+            continue;
+          }
+          if (!alignedX && Math.abs(x - pt.x) <= 0.16) {
+            x = pt.x;
+            alignedX = true;
+            guideLines.push({ from: { x: pt.x, z: pt.z }, to: { x, z } });
+          }
+          if (!alignedZ && Math.abs(z - pt.z) <= 0.16) {
+            z = pt.z;
+            alignedZ = true;
+            guideLines.push({ from: { x: pt.x, z: pt.z }, to: { x, z } });
+          }
+        }
       }
     }
 
@@ -1215,7 +1338,14 @@ export class ArchBuilderEngine {
         )
       : 0;
 
-    return { point: { x: round3(x), z: round3(z) }, snappedEndpoint, lengthM, angleDeg };
+    return {
+      point: { x: round3(x), z: round3(z) },
+      snappedEndpoint,
+      snappedWallBody,
+      guideLines,
+      lengthM,
+      angleDeg,
+    };
   }
 
   /**
@@ -1272,20 +1402,162 @@ export class ArchBuilderEngine {
       : null;
   }
 
+  /**
+   * Splits any straight wall on `floorId` if `pt` lies strictly along its interior span (`0.05 < t < 0.95`),
+   * remapping any hosted doors/windows proportionally so room partitions form closed loops automatically!
+   */
+  private splitWallsContainingPoint(floorId: string, pt: Vec2XZ): void {
+    const SNAP_TOL = 0.08;
+    const snapshot = [...this.data.walls];
+    for (const w of snapshot) {
+      if (w.floorId !== floorId || Math.abs(w.curveBulge) >= 0.04) continue;
+      const dx = w.end.x - w.start.x;
+      const dz = w.end.z - w.start.z;
+      const lenSq = dx * dx + dz * dz;
+      const len = Math.sqrt(lenSq);
+      if (len < 0.5) continue;
+
+      const t = ((pt.x - w.start.x) * dx + (pt.z - w.start.z) * dz) / lenSq;
+      if (t <= 0.06 || t >= 0.94) continue;
+      if (t * len < 0.22 || (1 - t) * len < 0.22) continue;
+
+      const projX = w.start.x + dx * t;
+      const projZ = w.start.z + dz * t;
+      if (Math.hypot(pt.x - projX, pt.z - projZ) > SNAP_TOL) continue;
+
+      const splitPt: Vec2XZ = { x: round3(projX), z: round3(projZ) };
+      const origEnd: Vec2XZ = { ...w.end };
+      w.end = { ...splitPt };
+
+      const w2: ArchWallSegment = {
+        ...w,
+        id: `wall_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+        start: { ...splitPt },
+        end: origEnd,
+      };
+      this.data.walls.push(w2);
+
+      // Re-assign openings along the two sub-walls
+      for (const op of this.data.openings) {
+        if (op.wallId !== w.id) continue;
+        if (op.offsetRatio < t) {
+          op.offsetRatio = round3(
+            Math.max(0.12, Math.min(0.88, op.offsetRatio / t))
+          );
+        } else {
+          op.wallId = w2.id;
+          op.offsetRatio = round3(
+            Math.max(0.12, Math.min(0.88, (op.offsetRatio - t) / (1 - t)))
+          );
+        }
+      }
+    }
+  }
+
   public addWallSegment(
     floorId: string,
     start: Vec2XZ,
     end: Vec2XZ,
     defaults: WallDrawDefaults = DEFAULT_WALL_DRAW
   ): ArchWallSegment | null {
-    const len = Math.hypot(end.x - start.x, end.z - start.z);
+    const cleanStart = { x: round3(start.x), z: round3(start.z) };
+    const cleanEnd = { x: round3(end.x), z: round3(end.z) };
+    const len = Math.hypot(cleanEnd.x - cleanStart.x, cleanEnd.z - cleanStart.z);
     if (len < 0.2) return null;
+
+    // Avoid exact duplicate overlapping wall on the same floor
+    const dup = this.data.walls.find(
+      (w) =>
+        w.floorId === floorId &&
+        ((Math.hypot(w.start.x - cleanStart.x, w.start.z - cleanStart.z) < 0.08 &&
+          Math.hypot(w.end.x - cleanEnd.x, w.end.z - cleanEnd.z) < 0.08) ||
+          (Math.hypot(w.start.x - cleanEnd.x, w.start.z - cleanEnd.z) < 0.08 &&
+            Math.hypot(w.end.x - cleanStart.x, w.end.z - cleanStart.z) < 0.08))
+    );
+    if (dup) {
+      this.selection = { kind: 'wall', id: dup.id };
+      return dup;
+    }
+
+    // Auto-split any existing walls at T-junction start / end (and X-crossings for straight walls!)
+    if (Math.abs(defaults.curveBulge) < 0.04) {
+      this.splitWallsContainingPoint(floorId, cleanStart);
+      this.splitWallsContainingPoint(floorId, cleanEnd);
+
+      // Check interior X-intersections with existing straight walls so crossing walls split cleanly!
+      const crossPts: Vec2XZ[] = [];
+      const dx1 = cleanEnd.x - cleanStart.x;
+      const dz1 = cleanEnd.z - cleanStart.z;
+      for (const ew of [...this.data.walls]) {
+        if (ew.floorId !== floorId || Math.abs(ew.curveBulge) >= 0.04) continue;
+        const dx2 = ew.end.x - ew.start.x;
+        const dz2 = ew.end.z - ew.start.z;
+        const denom = dx1 * dz2 - dz1 * dx2;
+        if (Math.abs(denom) < 1e-5) continue;
+        const rx = ew.start.x - cleanStart.x;
+        const rz = ew.start.z - cleanStart.z;
+        const t = (rx * dz2 - rz * dx2) / denom;
+        const u = (rx * dz1 - rz * dx1) / denom;
+        if (t > 0.05 && t < 0.95 && u > 0.05 && u < 0.95) {
+          const ix = round3(cleanStart.x + t * dx1);
+          const iz = round3(cleanStart.z + t * dz1);
+          this.splitWallsContainingPoint(floorId, { x: ix, z: iz });
+          crossPts.push({ x: ix, z: iz });
+        }
+      }
+
+      if (crossPts.length > 0) {
+        crossPts.sort(
+          (a, b) =>
+            Math.hypot(a.x - cleanStart.x, a.z - cleanStart.z) -
+            Math.hypot(b.x - cleanStart.x, b.z - cleanStart.z)
+        );
+        const chain = [cleanStart, ...crossPts, cleanEnd];
+        let lastCreated: ArchWallSegment | null = null;
+        for (let i = 0; i < chain.length - 1; i++) {
+          const segLen = Math.hypot(
+            chain[i + 1].x - chain[i].x,
+            chain[i + 1].z - chain[i].z
+          );
+          if (segLen < 0.2) continue;
+          const subW: ArchWallSegment = {
+            id: `wall_${Date.now().toString(36)}_${i}_${Math.random()
+              .toString(36)
+              .slice(2, 5)}`,
+            floorId,
+            start: chain[i],
+            end: chain[i + 1],
+            height:
+              defaults.style === 'half'
+                ? Math.min(defaults.height, 1.1)
+                : defaults.style === 'railing'
+                ? 1.0
+                : defaults.height,
+            thickness: defaults.thickness,
+            style: defaults.style,
+            curveBulge: 0,
+            exteriorColor: defaults.exteriorColor,
+            interiorColor: defaults.interiorColor,
+            exteriorPattern: defaults.exteriorPattern,
+            interiorPattern: defaults.interiorPattern,
+            roughness: 0.78,
+            hasBaseboard: defaults.hasBaseboard,
+          };
+          this.data.walls.push(subW);
+          lastCreated = subW;
+        }
+        if (lastCreated) {
+          this.selection = { kind: 'wall', id: lastCreated.id };
+        }
+        return lastCreated;
+      }
+    }
 
     const wall: ArchWallSegment = {
       id: `wall_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
       floorId,
-      start: { x: round3(start.x), z: round3(start.z) },
-      end: { x: round3(end.x), z: round3(end.z) },
+      start: cleanStart,
+      end: cleanEnd,
       height:
         defaults.style === 'half'
           ? Math.min(defaults.height, 1.1)
@@ -1305,6 +1577,108 @@ export class ArchBuilderEngine {
     this.data.walls.push(wall);
     this.selection = { kind: 'wall', id: wall.id };
     return wall;
+  }
+
+  /**
+   * 1-Drag Room Box Builder: creates all 4 connected walls of a rectangular room in one stroke!
+   */
+  public addRoomBox(
+    floorId: string,
+    cornerA: Vec2XZ,
+    cornerB: Vec2XZ,
+    defaults: WallDrawDefaults = DEFAULT_WALL_DRAW
+  ): number {
+    const minX = round3(Math.min(cornerA.x, cornerB.x));
+    const maxX = round3(Math.max(cornerA.x, cornerB.x));
+    const minZ = round3(Math.min(cornerA.z, cornerB.z));
+    const maxZ = round3(Math.max(cornerA.z, cornerB.z));
+    if (maxX - minX < 0.4 || maxZ - minZ < 0.4) return 0;
+
+    const straightDefaults: WallDrawDefaults = { ...defaults, curveBulge: 0 };
+    const p1: Vec2XZ = { x: minX, z: minZ };
+    const p2: Vec2XZ = { x: maxX, z: minZ };
+    const p3: Vec2XZ = { x: maxX, z: maxZ };
+    const p4: Vec2XZ = { x: minX, z: maxZ };
+
+    let count = 0;
+    if (this.addWallSegment(floorId, p1, p2, straightDefaults)) count++;
+    if (this.addWallSegment(floorId, p2, p3, straightDefaults)) count++;
+    if (this.addWallSegment(floorId, p3, p4, straightDefaults)) count++;
+    if (this.addWallSegment(floorId, p4, p1, straightDefaults)) count++;
+    return count;
+  }
+
+  /**
+   * Copies all walls from `sourceFloorId` onto `targetFloorId` (1-Click Multi-Story Wall Trace!)
+   */
+  public copyWallsFromFloor(sourceFloorId: string, targetFloorId: string): number {
+    if (sourceFloorId === targetFloorId) return 0;
+    const srcWalls = this.data.walls.filter((w) => w.floorId === sourceFloorId);
+    let copied = 0;
+    for (const sw of srcWalls) {
+      const exists = this.data.walls.some(
+        (tw) =>
+          tw.floorId === targetFloorId &&
+          Math.hypot(tw.start.x - sw.start.x, tw.start.z - sw.start.z) < 0.08 &&
+          Math.hypot(tw.end.x - sw.end.x, tw.end.z - sw.end.z) < 0.08
+      );
+      if (exists) continue;
+      this.data.walls.push({
+        ...sw,
+        id: `wall_${Date.now().toString(36)}_${copied}_${Math.random()
+          .toString(36)
+          .slice(2, 5)}`,
+        floorId: targetFloorId,
+        start: { ...sw.start },
+        end: { ...sw.end },
+      });
+      copied++;
+    }
+    return copied;
+  }
+
+  /**
+   * Cleans up all architectural elements belonging to a deleted floor
+   */
+  public removeFloorData(floorId: string): void {
+    this.data.walls = this.data.walls.filter((w) => w.floorId !== floorId);
+    this.data.openings = this.data.openings.filter((o) => o.floorId !== floorId);
+    this.data.stairs = this.data.stairs.filter((s) => s.floorId !== floorId);
+    this.data.roofs = this.data.roofs.filter((r) => r.floorId !== floorId);
+    this.data.roomMetas = this.data.roomMetas.filter((m) => m.floorId !== floorId);
+  }
+
+  public deleteArchElementByKindAndId(kind: string, id: string): boolean {
+    if (kind === 'wall') {
+      const before = this.data.walls.length;
+      this.removeWallById(id);
+      return this.data.walls.length < before;
+    }
+    if (kind === 'opening') {
+      const before = this.data.openings.length;
+      this.data.openings = this.data.openings.filter((o) => o.id !== id);
+      if (this.selection?.kind === 'opening' && this.selection.id === id) {
+        this.selection = null;
+      }
+      return this.data.openings.length < before;
+    }
+    if (kind === 'stair') {
+      const before = this.data.stairs.length;
+      this.data.stairs = this.data.stairs.filter((s) => s.id !== id);
+      if (this.selection?.kind === 'stair' && this.selection.id === id) {
+        this.selection = null;
+      }
+      return this.data.stairs.length < before;
+    }
+    if (kind === 'roof') {
+      const before = this.data.roofs.length;
+      this.data.roofs = this.data.roofs.filter((r) => r.id !== id);
+      if (this.selection?.kind === 'roof' && this.selection.id === id) {
+        this.selection = null;
+      }
+      return this.data.roofs.length < before;
+    }
+    return false;
   }
 
   public spawnWallTemplate(
@@ -2227,6 +2601,11 @@ export class ArchBuilderEngine {
         fStyle.ghost,
         isWallSel
       );
+      const midSample = sampleWallCurvePoint(wall, 0.5);
+      wallGroup.userData.wallMidX = midSample.x;
+      wallGroup.userData.wallMidZ = midSample.z;
+      wallGroup.userData.baseY = fStyle.baseY;
+      wallGroup.userData.fullH = wall.height;
       this.structuralGroup.add(wallGroup);
 
       // Register endpoints for watertight corner joins (full & half walls)
@@ -2336,7 +2715,44 @@ export class ArchBuilderEngine {
       colMesh.position.set(jn.x, jn.baseY + jn.maxH * 0.5, jn.z);
       colMesh.castShadow = true;
       colMesh.receiveShadow = true;
+      colMesh.userData = {
+        archKind: 'corner-col',
+        colX: jn.x,
+        colZ: jn.z,
+        baseY: jn.baseY,
+        fullH: jn.maxH,
+      };
       this.structuralGroup.add(colMesh);
+    }
+
+    // Multi-Story Onion-Skin Lower Floor Trace (subtle cyan guide on Lantai 2+ showing Lantai bawah walls!)
+    if (activeFl && activeFl.elevation > 0.1) {
+      const sortedFl = [...floors].sort((a, b) => a.elevation - b.elevation);
+      const activeIdx = sortedFl.findIndex((f) => f.id === activeFl.id);
+      const lowerFl = activeIdx > 0 ? sortedFl[activeIdx - 1] : null;
+      if (lowerFl) {
+        const lowerWalls = this.data.walls.filter(
+          (w) => w.floorId === lowerFl.id
+        );
+        if (lowerWalls.length > 0) {
+          const tracePts: THREE.Vector3[] = [];
+          const traceY = activeFl.elevation + 0.018;
+          for (const lw of lowerWalls) {
+            tracePts.push(new THREE.Vector3(lw.start.x, traceY, lw.start.z));
+            tracePts.push(new THREE.Vector3(lw.end.x, traceY, lw.end.z));
+          }
+          const traceGeo = new THREE.BufferGeometry().setFromPoints(tracePts);
+          const traceMat = new THREE.LineBasicMaterial({
+            color: '#38bdf8',
+            transparent: true,
+            opacity: 0.34,
+            depthTest: false,
+          });
+          const traceSegs = new THREE.LineSegments(traceGeo, traceMat);
+          traceSegs.raycast = () => {};
+          this.labelsGroup.add(traceSegs);
+        }
+      }
     }
 
     // 4. Build Parametric Stairs (+ Upper Floor Safety Guardrail around cutout)
@@ -2362,6 +2778,96 @@ export class ArchBuilderEngine {
     }
 
     return allRooms;
+  }
+
+  /**
+   * #8 Sims / Architect Life Interior Peek Cutaway:
+   * Hides Smart Roofs and lowers camera-blocking Smart Walls to a crisp 32cm cutaway plinth!
+   */
+  public applyInteriorPeekCutaway(
+    cameraPos: THREE.Vector3,
+    targetPos: THREE.Vector3,
+    enabled: boolean
+  ): void {
+    const camDistXZ = Math.hypot(
+      cameraPos.x - targetPos.x,
+      cameraPos.z - targetPos.z
+    );
+    const toTargetXZ = new THREE.Vector2(
+      targetPos.x - cameraPos.x,
+      targetPos.z - cameraPos.z
+    );
+    if (toTargetXZ.lengthSq() > 1e-5) toTargetXZ.normalize();
+
+    for (const child of this.structuralGroup.children) {
+      const kind = child.userData?.archKind as string | undefined;
+
+      if (kind === 'roof') {
+        child.visible = !enabled;
+        continue;
+      }
+
+      if (kind === 'wall') {
+        const mx = (child.userData.wallMidX as number | undefined) ?? 0;
+        const mz = (child.userData.wallMidZ as number | undefined) ?? 0;
+        const fullH = (child.userData.fullH as number | undefined) ?? 3.0;
+        const dWallXZ = Math.hypot(mx - cameraPos.x, mz - cameraPos.z);
+        const toWallXZ = new THREE.Vector2(mx - cameraPos.x, mz - cameraPos.z);
+        const dot =
+          toWallXZ.lengthSq() > 1e-5
+            ? toWallXZ.clone().normalize().dot(toTargetXZ)
+            : 0;
+
+        const shouldCut =
+          enabled &&
+          !this.isBlueprint2D &&
+          dWallXZ < camDistXZ + 0.35 &&
+          dot > 0.32;
+
+        const cutRatio = shouldCut
+          ? Math.min(1, 0.32 / Math.max(0.4, fullH))
+          : 1;
+
+        for (const sub of child.children) {
+          // wallHolder for straight walls sits at local y = baseY!
+          if (sub.type === 'Group') {
+            sub.scale.y = cutRatio;
+            for (const opChild of sub.children) {
+              if (opChild.type === 'Group') {
+                // Opening assembly: hide tall 3D frame/leaf when cutaway, keep floor swing arc!
+                for (const piece of opChild.children) {
+                  if (piece.name !== '__doorSwingArc') {
+                    piece.visible = !shouldCut;
+                  }
+                }
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      if (kind === 'corner-col') {
+        const cx = (child.userData.colX as number | undefined) ?? 0;
+        const cz = (child.userData.colZ as number | undefined) ?? 0;
+        const baseY = (child.userData.baseY as number | undefined) ?? 0;
+        const fullH = (child.userData.fullH as number | undefined) ?? 3.0;
+        const dColXZ = Math.hypot(cx - cameraPos.x, cz - cameraPos.z);
+        const toColXZ = new THREE.Vector2(cx - cameraPos.x, cz - cameraPos.z);
+        const dot =
+          toColXZ.lengthSq() > 1e-5
+            ? toColXZ.clone().normalize().dot(toTargetXZ)
+            : 0;
+        const shouldCut =
+          enabled &&
+          !this.isBlueprint2D &&
+          dColXZ < camDistXZ + 0.35 &&
+          dot > 0.32;
+        const ratio = shouldCut ? Math.min(1, 0.32 / Math.max(0.4, fullH)) : 1;
+        child.scale.y = ratio;
+        child.position.y = baseY + fullH * ratio * 0.5;
+      }
+    }
   }
 
   private buildSingleWallWithCutouts(
@@ -2509,6 +3015,9 @@ export class ArchBuilderEngine {
       const arcSteps = 16;
       const totalLen = computeWallLength(wall);
       const wallOps = this.data.openings.filter((o) => o.wallId === wall.id);
+      const curvedHolder = new THREE.Group();
+      curvedHolder.position.set(0, baseY, 0);
+      grp.add(curvedHolder);
 
       for (let i = 0; i < arcSteps; i++) {
         const t0 = i / arcSteps;
@@ -2535,12 +3044,16 @@ export class ArchBuilderEngine {
             new THREE.BoxGeometry(segLen, hSlice, wall.thickness),
             dualMaterials
           );
-          m.position.set(mx, baseY + yBottom + hSlice * 0.5, mz);
+          m.position.set(mx, yBottom + hSlice * 0.5, mz);
           m.rotation.y = yaw;
           m.castShadow = true;
           m.receiveShadow = true;
-          m.userData = { archKind: 'wall', archId: wall.id };
-          grp.add(m);
+          m.userData = {
+            archKind: 'wall',
+            archId: wall.id,
+            hasDualWallFaces: true,
+          };
+          curvedHolder.add(m);
         };
 
         if (!hitOp) {
@@ -2557,9 +3070,9 @@ export class ArchBuilderEngine {
         const isOpSel =
           this.selection?.kind === 'opening' && this.selection.id === op.id;
         const opGrp = buildOpeningAssembly(op, wall.thickness, isOpSel);
-        opGrp.position.set(pt.x, baseY + op.sillHeight, pt.z);
+        opGrp.position.set(pt.x, op.sillHeight, pt.z);
         opGrp.rotation.y = -Math.atan2(pt.tz, pt.tx);
-        grp.add(opGrp);
+        curvedHolder.add(opGrp);
       }
 
       return grp;
@@ -2604,7 +3117,11 @@ export class ArchBuilderEngine {
       box.position.set((s0 + s1) * 0.5, (y0 + y1) * 0.5, 0);
       box.castShadow = true;
       box.receiveShadow = true;
-      box.userData = { archKind: 'wall', archId: wall.id };
+      box.userData = {
+        archKind: 'wall',
+        archId: wall.id,
+        hasDualWallFaces: true,
+      };
       wallHolder.add(box);
 
       // Optional Baseboard Skirting along full-ground spans
@@ -2671,10 +3188,31 @@ export class ArchBuilderEngine {
     end: Vec2XZ | null,
     baseY: number,
     defaults: WallDrawDefaults,
-    hoverPoint: Vec2XZ | null
+    hoverPoint: Vec2XZ | null,
+    guideLines?: Array<{ from: Vec2XZ; to: Vec2XZ }>
   ): void {
     disposeObjectTree(this.previewGroup);
     this.previewGroup.clear();
+
+    if (guideLines && guideLines.length > 0) {
+      const gPts: THREE.Vector3[] = [];
+      for (const gl of guideLines) {
+        gPts.push(new THREE.Vector3(gl.from.x, baseY + 0.04, gl.from.z));
+        gPts.push(new THREE.Vector3(gl.to.x, baseY + 0.04, gl.to.z));
+      }
+      const gLine = new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints(gPts),
+        new THREE.LineBasicMaterial({
+          color: '#34d399',
+          transparent: true,
+          opacity: 0.85,
+          depthTest: false,
+        })
+      );
+      gLine.renderOrder = 25;
+      gLine.raycast = () => {};
+      this.previewGroup.add(gLine);
+    }
 
     if (hoverPoint) {
       const ringGeo = new THREE.RingGeometry(0.11, 0.17, 24);
@@ -2758,6 +3296,132 @@ export class ArchBuilderEngine {
     this.previewGroup.add(badge);
   }
 
+  /**
+   * Live Ghost Preview for 1-Drag Room Box (`W × D m · Area m²`)
+   */
+  public updateRoomBoxPreview(
+    cornerA: Vec2XZ | null,
+    cornerB: Vec2XZ | null,
+    baseY: number,
+    defaults: WallDrawDefaults,
+    hoverPoint: Vec2XZ | null
+  ): void {
+    disposeObjectTree(this.previewGroup);
+    this.previewGroup.clear();
+
+    if (hoverPoint && (!cornerA || !cornerB)) {
+      const ringGeo = new THREE.RingGeometry(0.11, 0.17, 24);
+      ringGeo.rotateX(-Math.PI * 0.5);
+      const ring = new THREE.Mesh(
+        ringGeo,
+        new THREE.MeshBasicMaterial({
+          color: '#34d399',
+          transparent: true,
+          opacity: 0.9,
+          depthTest: false,
+        })
+      );
+      ring.position.set(hoverPoint.x, baseY + 0.03, hoverPoint.z);
+      ring.raycast = () => {};
+      this.previewGroup.add(ring);
+    }
+
+    if (!cornerA || !cornerB) return;
+    const minX = Math.min(cornerA.x, cornerB.x);
+    const maxX = Math.max(cornerA.x, cornerB.x);
+    const minZ = Math.min(cornerA.z, cornerB.z);
+    const maxZ = Math.max(cornerA.z, cornerB.z);
+    const spanX = maxX - minX;
+    const spanZ = maxZ - minZ;
+    if (spanX < 0.2 || spanZ < 0.2) return;
+
+    const h =
+      defaults.style === 'half'
+        ? Math.min(defaults.height, 1.1)
+        : defaults.style === 'railing'
+        ? 1.0
+        : defaults.height;
+    const t = defaults.thickness;
+    const cx = (minX + maxX) * 0.5;
+    const cz = (minZ + maxZ) * 0.5;
+
+    const ghostMat = new THREE.MeshBasicMaterial({
+      color: '#34d399',
+      transparent: true,
+      opacity: 0.36,
+      depthWrite: false,
+    });
+    const floorGhost = new THREE.Mesh(
+      new THREE.PlaneGeometry(spanX, spanZ),
+      new THREE.MeshBasicMaterial({
+        color: '#38bdf8',
+        transparent: true,
+        opacity: 0.16,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    floorGhost.rotation.x = -Math.PI * 0.5;
+    floorGhost.position.set(cx, baseY + 0.025, cz);
+    floorGhost.raycast = () => {};
+    this.previewGroup.add(floorGhost);
+
+    const segs: Array<[number, number, number, number, number]> = [
+      [spanX, h, t, cx, minZ],
+      [spanX, h, t, cx, maxZ],
+      [t, h, spanZ, minX, cz],
+      [t, h, spanZ, maxX, cz],
+    ];
+    for (const [sx, sy, sz, px, pz] of segs) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), ghostMat);
+      m.position.set(px, baseY + sy * 0.5, pz);
+      m.raycast = () => {};
+      this.previewGroup.add(m);
+    }
+
+    const area = spanX * spanZ;
+    const badge = makeLabelSprite(
+      `${spanX.toFixed(2)} × ${spanZ.toFixed(2)} m`,
+      `${area.toFixed(1)} m²`,
+      {
+        bg: 'rgba(6, 78, 59, 0.92)',
+        border: '#34d399',
+        subColor: '#a7f3d0',
+      }
+    );
+    badge.position.set(cx, baseY + h + 0.45, cz);
+    this.previewGroup.add(badge);
+  }
+
+  /**
+   * #12 Live Adjacent Wall Length Labels shown while dragging a Corner Node!
+   */
+  public updateCornerDragDimensions(
+    floorId: string,
+    nodeXZ: Vec2XZ,
+    baseY: number
+  ): void {
+    disposeObjectTree(this.previewGroup);
+    this.previewGroup.clear();
+
+    for (const w of this.data.walls) {
+      if (w.floorId !== floorId) continue;
+      const hitStart = Math.hypot(w.start.x - nodeXZ.x, w.start.z - nodeXZ.z) < 0.1;
+      const hitEnd = Math.hypot(w.end.x - nodeXZ.x, w.end.z - nodeXZ.z) < 0.1;
+      if (!hitStart && !hitEnd) continue;
+
+      const len = computeWallLength(w);
+      const mid = sampleWallCurvePoint(w, 0.5);
+      const badge = makeLabelSprite(`${len.toFixed(2)} m`, undefined, {
+        bg: 'rgba(12, 74, 110, 0.94)',
+        border: '#38bdf8',
+        scale: 0.88,
+      });
+      badge.position.set(mid.x, baseY + w.height + 0.32, mid.z);
+      this.previewGroup.add(badge);
+    }
+  }
+
   public updateOpeningHoverPreview(
     wall: ArchWallSegment | null,
     offsetRatio: number,
@@ -2793,6 +3457,40 @@ export class ArchBuilderEngine {
     ghost.rotation.y = yaw;
     ghost.raycast = () => {};
     this.previewGroup.add(ghost);
+
+    // Live 2D Door Swing Arc Preview while sliding/placing a door!
+    if (kind.startsWith('door')) {
+      const effW = Math.min(preset.width, computeWallLength(wall) - 0.2);
+      const arcHolder = new THREE.Group();
+      arcHolder.position.set(pt.x, baseY + 0.04, pt.z);
+      arcHolder.rotation.y = yaw;
+
+      const pts: THREE.Vector3[] = [];
+      const radius = kind === 'door-double' ? effW * 0.5 : effW;
+      const hingeX = -effW * 0.5;
+      pts.push(new THREE.Vector3(hingeX, 0, 0));
+      for (let i = 0; i <= 16; i++) {
+        const ang = (i / 16) * (Math.PI * 0.48);
+        pts.push(
+          new THREE.Vector3(
+            hingeX + Math.cos(ang) * radius,
+            0,
+            -Math.sin(ang) * radius
+          )
+        );
+      }
+      const arcLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({
+          color: '#34d399',
+          depthTest: false,
+        })
+      );
+      arcLine.renderOrder = 25;
+      arcLine.raycast = () => {};
+      arcHolder.add(arcLine);
+      this.previewGroup.add(arcHolder);
+    }
   }
 
   public clearPreview(): void {

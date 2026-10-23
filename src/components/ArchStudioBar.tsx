@@ -3,16 +3,26 @@ import {
   BrickWall,
   Check,
   DoorOpen,
+  Eraser,
   Home,
   Layers2,
   MousePointer,
   PaintBucket,
+  RotateCw,
   Ruler,
+  SlidersHorizontal,
+  SquareDashed,
   Sun,
+  Trash2,
   X,
 } from 'lucide-react';
 import { StudioStrings } from '../i18n/translations';
-import { ArchBuildPhase, ArchSubTool } from '../types/studio';
+import {
+  ArchBuildPhase,
+  ArchSelection,
+  ArchSubTool,
+  PendingArchCommit,
+} from '../types/studio';
 
 interface ArchStudioBarProps {
   t: StudioStrings;
@@ -21,9 +31,17 @@ interface ArchStudioBarProps {
   isBlueprint2D: boolean;
   onToggleBlueprint2D: (next: boolean) => void;
   archTool: ArchSubTool;
+  onSetArchTool: (tool: ArchSubTool) => void;
   onResetToSelectTool: () => void;
   detectedRoomCount: number;
   onCommitExactWallLength?: (meters: number) => void;
+  pendingArchCommit?: PendingArchCommit | null;
+  onConfirmPendingCommit?: () => void;
+  onCancelPendingCommit?: () => void;
+  archSelection?: ArchSelection;
+  onRotateSelectedArch?: () => void;
+  onDeleteSelectedArch?: () => void;
+  onOpenSelectedArchProps?: () => void;
 }
 
 export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
@@ -33,9 +51,17 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
   isBlueprint2D,
   onToggleBlueprint2D,
   archTool,
+  onSetArchTool,
   onResetToSelectTool,
   detectedRoomCount,
   onCommitExactWallLength,
+  pendingArchCommit,
+  onConfirmPendingCommit,
+  onCancelPendingCommit,
+  archSelection,
+  onRotateSelectedArch,
+  onDeleteSelectedArch,
+  onOpenSelectedArchProps,
 }) => {
   const [exactLenDraft, setExactLenDraft] = useState('3.0');
 
@@ -76,8 +102,12 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
   const activeHint =
     archTool === 'draw-wall'
       ? t.archDrawWallHint
+      : archTool === 'draw-room'
+      ? t.archDrawRoomHint
       : archTool === 'place-opening'
       ? t.archPlaceOpeningHint
+      : archTool === 'erase-arch'
+      ? t.archEraseHint
       : archTool === 'measure'
       ? t.archMeasureHint
       : null;
@@ -88,6 +118,11 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
       onCommitExactWallLength(val);
     }
   };
+
+  const canRotateSel =
+    archSelection?.kind === 'opening' ||
+    archSelection?.kind === 'roof' ||
+    archSelection?.kind === 'stair';
 
   return (
     <div className="arch-studio-hud" onPointerDown={(e) => e.stopPropagation()}>
@@ -136,11 +171,104 @@ export const ArchStudioBar: React.FC<ArchStudioBarProps> = ({
             </button>
           );
         })}
+
+        <span className="arch-strip-divider" />
+
+        {/* #6 Quick Eraser Tool (`erase-arch`) */}
+        <button
+          type="button"
+          className={`arch-phase-btn is-eraser ${
+            archTool === 'erase-arch' ? 'active' : ''
+          }`}
+          onClick={() =>
+            onSetArchTool(archTool === 'erase-arch' ? 'select' : 'erase-arch')
+          }
+          title={t.archToolQuickErase}
+        >
+          <Eraser size={14} />
+          <span>{t.archToolQuickErase}</span>
+        </button>
       </div>
 
-      {activeHint && (
+      {/* #2 Optional Confirm Before Commit Floating Bar */}
+      {pendingArchCommit && (
+        <div className="arch-pending-commit-bar">
+          <button
+            type="button"
+            className="arch-commit-ok-btn"
+            onClick={onConfirmPendingCommit}
+          >
+            <Check size={14} />
+            <span>{t.archConfirmPlaceBtn}</span>
+          </button>
+          <button
+            type="button"
+            className="arch-commit-cancel-btn"
+            onClick={onCancelPendingCommit}
+          >
+            <X size={14} />
+            <span>{t.archCancelPlaceBtn}</span>
+          </button>
+        </div>
+      )}
+
+      {/* #12 Selected Arch Element Floating Quick-Action Bar */}
+      {!pendingArchCommit && archTool === 'select' && archSelection && (
+        <div className="arch-quick-action-bar">
+          {canRotateSel && onRotateSelectedArch && (
+            <button
+              type="button"
+              className="arch-qa-btn"
+              onClick={onRotateSelectedArch}
+              title={
+                archSelection.kind === 'opening'
+                  ? t.archOpenFlipSwing
+                  : t.archQuickRotate90
+              }
+            >
+              <RotateCw size={13} />
+              <span>
+                {archSelection.kind === 'opening'
+                  ? t.archOpenFlipSwing
+                  : t.archQuickRotate90}
+              </span>
+            </button>
+          )}
+          {onOpenSelectedArchProps && (
+            <button
+              type="button"
+              className="arch-qa-btn"
+              onClick={onOpenSelectedArchProps}
+            >
+              <SlidersHorizontal size={13} />
+              <span>{t.properties}</span>
+            </button>
+          )}
+          {onDeleteSelectedArch && (
+            <button
+              type="button"
+              className="arch-qa-btn danger"
+              onClick={onDeleteSelectedArch}
+              title={t.delete}
+            >
+              <Trash2 size={13} />
+              <span>{t.delete}</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {activeHint && !pendingArchCommit && (
         <div className="arch-tool-hint-pill">
-          {archTool === 'measure' ? <Ruler size={13} /> : <BrickWall size={13} />}
+          {archTool === 'measure' ? (
+            <Ruler size={13} />
+          ) : archTool === 'draw-room' ? (
+            <SquareDashed size={13} />
+          ) : archTool === 'erase-arch' ? (
+            <Eraser size={13} />
+          ) : (
+            <BrickWall size={13} />
+          )}
           <span>{activeHint}</span>
 
           {archTool === 'draw-wall' && onCommitExactWallLength && (

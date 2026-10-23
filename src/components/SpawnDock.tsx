@@ -3,6 +3,7 @@ import {
   Boxes,
   Building2,
   ChevronUp,
+  Download,
   Info,
   Pencil,
   Plus,
@@ -11,6 +12,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import {
@@ -206,6 +208,8 @@ interface CatalogDrawerProps {
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onEditCustomAsset?: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
+  onExportAssetsPack?: () => void;
+  onImportAssetsPackFile?: (file: File) => void;
 }
 
 const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
@@ -221,9 +225,12 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   onSpawnCustomAsset,
   onEditCustomAsset,
   onDeleteCustomAsset,
+  onExportAssetsPack,
+  onImportAssetsPackFile,
 }) => {
   const t = TRANSLATIONS[language];
   const isHouse = studioMode === 'house';
+  const packInputRef = useRef<HTMLInputElement | null>(null);
   const [catalogView, setCatalogView] = useState<CatalogTabMode>(initialTab);
   const [subcat, setSubcat] = useState<ShapeSubcategory>('all');
   const [modCat, setModCat] = useState<'all' | ModularCategory>('all');
@@ -487,21 +494,59 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
           )}
 
           {catalogView === 'custom' && (
-            <div className="basic-shapes-tabs" role="tablist">
-              {ASSET_CATEGORY_ORDER.map((ac) => (
-                <button
-                  key={ac}
-                  type="button"
-                  role="tab"
-                  aria-selected={assetCat === ac}
-                  className={`basic-subcat-tab ${
-                    assetCat === ac ? 'active' : ''
-                  }`}
-                  onClick={() => setAssetCat(ac)}
-                >
-                  {getAssetCategoryLabel(ac)}
-                </button>
-              ))}
+            <div className="custom-assets-toolbar">
+              <div className="basic-shapes-tabs" role="tablist">
+                {ASSET_CATEGORY_ORDER.map((ac) => (
+                  <button
+                    key={ac}
+                    type="button"
+                    role="tab"
+                    aria-selected={assetCat === ac}
+                    className={`basic-subcat-tab ${
+                      assetCat === ac ? 'active' : ''
+                    }`}
+                    onClick={() => setAssetCat(ac)}
+                  >
+                    {getAssetCategoryLabel(ac)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="custom-pack-actions">
+                <input
+                  ref={packInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f && onImportAssetsPackFile) {
+                      onImportAssetsPackFile(f);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+                {onImportAssetsPackFile && (
+                  <button
+                    type="button"
+                    className="custom-pack-btn"
+                    onClick={() => packInputRef.current?.click()}
+                  >
+                    <Upload size={13} />
+                    <span>{t.importAssetsPackBtn}</span>
+                  </button>
+                )}
+                {onExportAssetsPack && customAssets.length > 0 && (
+                  <button
+                    type="button"
+                    className="custom-pack-btn primary"
+                    onClick={onExportAssetsPack}
+                  >
+                    <Download size={13} />
+                    <span>{t.exportAssetsPackBtn}</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -712,6 +757,8 @@ interface SpawnDockProps {
   onSpawnCustomAsset: (asset: CustomAssetRecord) => void;
   onEditCustomAsset?: (asset: CustomAssetRecord) => void;
   onDeleteCustomAsset?: (id: string) => void;
+  onExportAssetsPack?: () => void;
+  onImportAssetsPackFile?: (file: File) => void;
 }
 
 export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
@@ -723,6 +770,8 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
   onSpawnCustomAsset,
   onEditCustomAsset,
   onDeleteCustomAsset,
+  onExportAssetsPack,
+  onImportAssetsPackFile,
 }) => {
   const t = TRANSLATIONS[language];
   const isHouse = studioMode === 'house';
@@ -834,6 +883,8 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
         onSpawnCustomAsset={onSpawnCustomAsset}
         onEditCustomAsset={onEditCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
+        onExportAssetsPack={onExportAssetsPack}
+        onImportAssetsPackFile={onImportAssetsPackFile}
       />
     </>
   );
@@ -854,6 +905,8 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
   onSpawnCustomAsset,
   onEditCustomAsset,
   onDeleteCustomAsset,
+  onExportAssetsPack,
+  onImportAssetsPackFile,
   objectCount,
   drawerOpen,
   onToggleDrawer,
@@ -957,6 +1010,8 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
         onSpawnCustomAsset={onSpawnCustomAsset}
         onEditCustomAsset={onEditCustomAsset}
         onDeleteCustomAsset={onDeleteCustomAsset}
+        onExportAssetsPack={onExportAssetsPack}
+        onImportAssetsPackFile={onImportAssetsPackFile}
       />
     </>
   );

@@ -31,8 +31,10 @@ import { TRANSLATIONS } from './i18n/translations';
 import {
   deleteCustomAssetRecord,
   deleteProjectRecord,
+  downloadCustomAssetsPack,
   downloadProjectBackup,
   duplicateProjectRecord,
+  importCustomAssetsPackFile,
   importProjectBackupFile,
   listCustomAssets,
   listProjects,
@@ -43,6 +45,7 @@ import {
   saveProjectRecord,
 } from './services/projectStorage';
 import {
+  AlignDistributeAction,
   AppScreen,
   ArchBuildPhase,
   ArchDetectedRoom,
@@ -77,6 +80,7 @@ import {
   ObjectPointLightConfig,
   ObjectSubdivisionSettings,
   PaintInteractionMode,
+  PendingArchCommit,
   PlacementValidationStatus,
   PrimitiveKind,
   ProceduralPatternKind,
@@ -158,6 +162,7 @@ function computeProjectContentSignature(
         o.kind,
         o.name,
         o.visible ? 1 : 0,
+        o.locked ? 1 : 0,
         o.groupId || '',
         o.floorId || '',
         o.surfaceRule || '',
@@ -410,6 +415,9 @@ export const App: React.FC = () => {
   });
   const [activeOpeningKind, setActiveOpeningKind] =
     useState<ArchOpeningKind>('door-single');
+  const [isArchActivelyDrawing, setIsArchActivelyDrawing] = useState(false);
+  const [pendingArchCommit, setPendingArchCommit] =
+    useState<PendingArchCommit | null>(null);
 
   // Collapsible sidebars + Fullscreen state
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false);
@@ -711,6 +719,8 @@ export const App: React.FC = () => {
           setArchTool(state.archTool);
           setIsBlueprint2D(state.isBlueprint2D);
           setCameraLensFov(state.cameraLensFov);
+          setIsArchActivelyDrawing(state.isArchActivelyDrawing);
+          setPendingArchCommit(state.pendingArchCommit);
         },
         onDragFeedback: (feedback) => {
           setDragFeedback(feedback);
@@ -1301,6 +1311,88 @@ export const App: React.FC = () => {
   const handleChangeFloorViewMode = useCallback((mode: FloorViewMode) => {
     engineRef.current?.setFloorViewMode(mode);
   }, []);
+
+  const handleCopyLowerFloorWalls = useCallback(() => {
+    const copied = engineRef.current?.copyLowerFloorWallsToActiveFloor() ?? 0;
+    if (copied > 0) {
+      showToast(`${t.archCopiedLowerWallsToast} (+${copied})`);
+    }
+  }, [showToast, t.archCopiedLowerWallsToast]);
+
+  const handleConfirmPendingArchCommit = useCallback(() => {
+    engineRef.current?.confirmPendingArchCommit();
+  }, []);
+
+  const handleCancelPendingArchCommit = useCallback(() => {
+    engineRef.current?.cancelPendingArchCommit();
+  }, []);
+
+  const handleRotateSelectedArch90 = useCallback(() => {
+    engineRef.current?.rotateSelectedArchElement90();
+  }, []);
+
+  const handleOpenSelectedArchProps = useCallback(() => {
+    if (!archSelection) return;
+    if (archSelection.kind === 'wall') setActiveArchPhase('walls');
+    else if (archSelection.kind === 'opening' || archSelection.kind === 'stair')
+      setActiveArchPhase('openings');
+    else if (archSelection.kind === 'roof') setActiveArchPhase('roofs');
+    else if (archSelection.kind === 'room') setActiveArchPhase('finishing');
+  }, [archSelection]);
+
+  const handleToggleObjectLock = useCallback((id: string) => {
+    engineRef.current?.toggleObjectLocked(id);
+  }, []);
+
+  const handleAlignDistribute = useCallback(
+    (action: AlignDistributeAction) => {
+      const moved = engineRef.current?.alignOrDistributeSelected(action) ?? 0;
+      if (moved > 0) {
+        showToast(t.alignedToast);
+      }
+    },
+    [showToast, t.alignedToast]
+  );
+
+  const handleSetExactDimensions = useCallback(
+    (
+      size: [number, number, number],
+      proportional: boolean,
+      changedAxis?: 0 | 1 | 2
+    ) => {
+      engineRef.current?.setSelectedExactDimensions(
+        size,
+        proportional,
+        changedAxis
+      );
+    },
+    []
+  );
+
+  const selectedExactDimensions = useMemo(() => {
+    if (!selectedId) return null;
+    return engineRef.current?.getSelectedCombinedDimensions() ?? null;
+  }, [objects, selectedId, selectedIds]);
+
+  const handleExportAssetsPack = useCallback(async () => {
+    const count = await downloadCustomAssetsPack();
+    if (count > 0) {
+      showToast(`${t.assetsPackExportedToast} (${count})`);
+    }
+  }, [showToast, t.assetsPackExportedToast]);
+
+  const handleImportAssetsPack = useCallback(
+    async (file: File) => {
+      try {
+        const added = await importCustomAssetsPackFile(file);
+        await refreshLibraries();
+        showToast(`${t.assetsPackImportedToast} (+${added})`);
+      } catch {
+        showToast(t.import3DFailedToast);
+      }
+    },
+    [refreshLibraries, showToast, t.assetsPackImportedToast, t.import3DFailedToast]
+  );
 
   const handleAssignObjectFloor = useCallback(
     (objectId: string, floorId: string, moveY = true) => {
@@ -2302,9 +2394,17 @@ export const App: React.FC = () => {
                 isBlueprint2D={isBlueprint2D}
                 onToggleBlueprint2D={handleToggleBlueprint2D}
                 archTool={archTool}
+                onSetArchTool={handleSetArchTool}
                 onResetToSelectTool={() => handleSetArchTool('select')}
                 detectedRoomCount={detectedRooms.length}
                 onCommitExactWallLength={handleCommitExactWallLength}
+                pendingArchCommit={pendingArchCommit}
+                onConfirmPendingCommit={handleConfirmPendingArchCommit}
+                onCancelPendingCommit={handleCancelPendingArchCommit}
+                archSelection={archSelection}
+                onRotateSelectedArch={handleRotateSelectedArch90}
+                onDeleteSelectedArch={handleDeleteSelectedArch}
+                onOpenSelectedArchProps={handleOpenSelectedArchProps}
               />
 
               {activeArchPhase && (
@@ -2339,6 +2439,7 @@ export const App: React.FC = () => {
                   onChangeLensFov={handleChangeLensFov}
                   onExportBlueprintPNG={handleExportBlueprintPNG}
                   activeFloor={floors.find((f) => f.id === activeFloorId)}
+                  isActivelyDrawing={isArchActivelyDrawing}
                 />
               )}
             </>
@@ -2371,6 +2472,7 @@ export const App: React.FC = () => {
               onRemoveFloor={handleRemoveFloor}
               onUpdateFloor={handleUpdateFloor}
               onChangeViewMode={handleChangeFloorViewMode}
+              onCopyLowerFloorWalls={handleCopyLowerFloorWalls}
               onClose={() => setFloorWidgetOpen(false)}
             />
           )}
@@ -2552,6 +2654,8 @@ export const App: React.FC = () => {
               onSpawnCustomAsset={handleSpawnCustomAsset}
               onEditCustomAsset={handleEditCustomAsset}
               onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
+              onExportAssetsPack={handleExportAssetsPack}
+              onImportAssetsPackFile={(f) => void handleImportAssetsPack(f)}
             />
           )}
 
@@ -2635,6 +2739,10 @@ export const App: React.FC = () => {
             onUpdateSurfaceRule={handleUpdateSurfaceRule}
             onResetImportedMaterial={handleResetImportedMaterial}
             onUpdatePointLight={handleUpdatePointLight}
+            onToggleObjectLock={handleToggleObjectLock}
+            onAlignDistribute={handleAlignDistribute}
+            selectedExactDimensions={selectedExactDimensions}
+            onSetExactDimensions={handleSetExactDimensions}
           />
         )}
 
@@ -2676,6 +2784,10 @@ export const App: React.FC = () => {
             onUpdateSurfaceRule={handleUpdateSurfaceRule}
             onResetImportedMaterial={handleResetImportedMaterial}
             onUpdatePointLight={handleUpdatePointLight}
+            onToggleObjectLock={handleToggleObjectLock}
+            onAlignDistribute={handleAlignDistribute}
+            selectedExactDimensions={selectedExactDimensions}
+            onSetExactDimensions={handleSetExactDimensions}
           />
         )}
       </main>
@@ -2690,6 +2802,8 @@ export const App: React.FC = () => {
           onSpawnCustomAsset={handleSpawnCustomAsset}
           onEditCustomAsset={handleEditCustomAsset}
           onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
+          onExportAssetsPack={handleExportAssetsPack}
+          onImportAssetsPackFile={(f) => void handleImportAssetsPack(f)}
           objectCount={objects.length}
           drawerOpen={mobileDrawerOpen}
           onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}

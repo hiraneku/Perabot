@@ -24,10 +24,15 @@ import {
   Building2,
   Link2,
   Lightbulb,
+  Lock,
+  Unlock,
+  Ruler,
+  AlignHorizontalJustifyCenter,
 } from 'lucide-react';
 import { getLocalizedShapeMeta } from '../i18n/shapeTranslations';
 import { TRANSLATIONS } from '../i18n/translations';
 import {
+  AlignDistributeAction,
   AppLanguage,
   BuildingFloorLayer,
   DEFAULT_MODIFIER_SETTINGS,
@@ -191,6 +196,14 @@ interface InspectorPanelProps {
     patch: Partial<ObjectPointLightConfig>,
     commitHistory?: boolean
   ) => void;
+  onToggleObjectLock?: (id: string) => void;
+  onAlignDistribute?: (action: AlignDistributeAction) => void;
+  selectedExactDimensions?: [number, number, number] | null;
+  onSetExactDimensions?: (
+    size: [number, number, number],
+    proportional: boolean,
+    changedAxis?: 0 | 1 | 2
+  ) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -231,12 +244,17 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onUpdateSurfaceRule,
   onResetImportedMaterial,
   onUpdatePointLight,
+  onToggleObjectLock,
+  onAlignDistribute,
+  selectedExactDimensions,
+  onSetExactDimensions,
 }) => {
   const t = TRANSLATIONS[language];
   const [mobileSection, setMobileSection] = useState<'inspector' | 'outliner'>(
     'inspector'
   );
   const [uniformScale, setUniformScale] = useState(false);
+  const [lockExactDims, setLockExactDims] = useState(false);
 
   const selected = objects.find((o) => o.id === selectedId) ?? null;
 
@@ -423,6 +441,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       {obj.modelAssetId && (
                         <span className="group-tag-badge">3D</span>
                       )}
+                      {obj.locked && (
+                        <span className="group-tag-badge locked">LOCK</span>
+                      )}
                       {obj.subdivision &&
                         isSubdivisionActive(obj.subdivision) && (
                           <span className="subdiv-mini-tag">
@@ -436,6 +457,20 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       className="outliner-actions"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {onToggleObjectLock && (
+                        <button
+                          type="button"
+                          className={`tiny-icon-btn ${obj.locked ? 'active' : ''}`}
+                          title={obj.locked ? t.unlockObjectTip : t.lockObjectTip}
+                          onClick={() => onToggleObjectLock(obj.id)}
+                        >
+                          {obj.locked ? (
+                            <Lock size={13} />
+                          ) : (
+                            <Unlock size={13} />
+                          )}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="tiny-icon-btn"
@@ -454,6 +489,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         type="button"
                         className="tiny-icon-btn danger"
                         title={t.delete}
+                        disabled={Boolean(obj.locked)}
                         onClick={() => onDeleteObject(obj.id)}
                       >
                         <Trash2 size={13} />
@@ -579,20 +615,107 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             </div>
           )}
 
-          {/* #6 Multi-Selection Summary & Quick Group Bar */}
+          {/* #6 Multi-Selection Summary & Quick Group Bar + #13 Align & Distribute */}
           {selectedIds.length >= 2 && (
-            <div className="group-Banner-controls">
-              <span className="multi-sel-summary">
-                {selectedIds.length} {t.multiSelectedCount}
-              </span>
-              <button
-                type="button"
-                className="group-ctrl-pill active"
-                onClick={onGroupSceneObjects}
-              >
-                <Link2 size={13} />
-                <span>{t.selGroupSelected}</span>
-              </button>
+            <div className="multi-align-card">
+              <div className="group-Banner-controls">
+                <span className="multi-sel-summary">
+                  {selectedIds.length} {t.multiSelectedCount}
+                </span>
+                <button
+                  type="button"
+                  className="group-ctrl-pill active"
+                  onClick={onGroupSceneObjects}
+                >
+                  <Link2 size={13} />
+                  <span>{t.selGroupSelected}</span>
+                </button>
+              </div>
+
+              {onAlignDistribute && (
+                <div className="align-distribute-box">
+                  <div className="align-distribute-head">
+                    <AlignHorizontalJustifyCenter size={13} />
+                    <span>{t.alignDistributeTitle}</span>
+                  </div>
+                  <div className="align-distribute-grid">
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-min-x')}
+                    >
+                      {t.alignLeftX}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-center-x')}
+                    >
+                      {t.alignCenterX}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-max-x')}
+                    >
+                      {t.alignRightX}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-min-z')}
+                    >
+                      {t.alignFrontZ}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-center-z')}
+                    >
+                      {t.alignCenterZ}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-max-z')}
+                    >
+                      {t.alignBackZ}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-min-y')}
+                    >
+                      {t.alignBottomY}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onAlignDistribute('align-max-y')}
+                    >
+                      {t.alignTopY}
+                    </button>
+                    {selectedIds.length >= 3 && (
+                      <>
+                        <button
+                          type="button"
+                          className="align-chip-btn accent"
+                          onClick={() => onAlignDistribute('distribute-x')}
+                        >
+                          {t.distributeEvenX}
+                        </button>
+                        <button
+                          type="button"
+                          className="align-chip-btn accent"
+                          onClick={() => onAlignDistribute('distribute-z')}
+                        >
+                          {t.distributeEvenZ}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -813,6 +936,82 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       />
                     </div>
                   </div>
+
+                  {/* #15 Exact Meter Dimensions (`P×T×L m` World Bounding Box) */}
+                  {selectedExactDimensions && onSetExactDimensions && (
+                    <div className="transform-group-card">
+                      <div className="transform-card-header">
+                        <span className="transform-card-title">
+                          <Ruler size={13} />
+                          <span>{t.exactDimTitle}</span>
+                        </span>
+                        <button
+                          type="button"
+                          className={`transform-lock-chip ${
+                            lockExactDims ? 'active' : ''
+                          }`}
+                          onClick={() => setLockExactDims((prev) => !prev)}
+                        >
+                          {lockExactDims
+                            ? t.exactDimProportional
+                            : t.uniformScaleFree}
+                        </button>
+                      </div>
+                      <div className="vec3-grid">
+                        <AxisInput
+                          axis="X"
+                          value={selectedExactDimensions[0]}
+                          step={0.05}
+                          min={0.02}
+                          onChange={(v) =>
+                            onSetExactDimensions(
+                              [
+                                v,
+                                selectedExactDimensions[1],
+                                selectedExactDimensions[2],
+                              ],
+                              lockExactDims,
+                              0
+                            )
+                          }
+                        />
+                        <AxisInput
+                          axis="Y"
+                          value={selectedExactDimensions[1]}
+                          step={0.05}
+                          min={0.02}
+                          onChange={(v) =>
+                            onSetExactDimensions(
+                              [
+                                selectedExactDimensions[0],
+                                v,
+                                selectedExactDimensions[2],
+                              ],
+                              lockExactDims,
+                              1
+                            )
+                          }
+                        />
+                        <AxisInput
+                          axis="Z"
+                          value={selectedExactDimensions[2]}
+                          step={0.05}
+                          min={0.02}
+                          onChange={(v) =>
+                            onSetExactDimensions(
+                              [
+                                selectedExactDimensions[0],
+                                selectedExactDimensions[1],
+                                v,
+                              ],
+                              lockExactDims,
+                              2
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Buat Rumah Exclusive: #12 Story Floor Assignment & #4 Surface-Aware Rule */}
                   {studioMode === 'house' && (
