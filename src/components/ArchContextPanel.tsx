@@ -1365,6 +1365,47 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                   </button>
                 </div>
 
+                <div className="arch-advanced-number-row">
+                  <span>{lang === 'en' ? 'Roof base elevation' : lang === 'ja' ? '屋根基準高さ' : 'Ketinggian dasar atap'}</span>
+                  <div className="arch-inline-val">
+                    <input
+                      type="number"
+                      aria-label={lang === 'en' ? 'Roof base elevation in meters' : lang === 'ja' ? '屋根基準高さ (m)' : 'Ketinggian dasar atap dalam meter'}
+                      min={-10}
+                      max={60}
+                      step={0.05}
+                      value={selectedRoof.baseY}
+                      onChange={(e) => onUpdateRoof(selectedRoof.id, { baseY: parseFloat(e.target.value) || 0 }, false)}
+                      onBlur={() => onUpdateRoof(selectedRoof.id, {}, true)}
+                    />
+                    <small>m</small>
+                  </div>
+                </div>
+
+                <div className="arch-slider-group">
+                  <div className="arch-slider-head">
+                    <span>{lang === 'en' ? 'Roof rotation' : lang === 'ja' ? '屋根の回転' : 'Rotasi atap'}</span>
+                    <strong>{Math.round(selectedRoof.rotationY)}°</strong>
+                  </div>
+                  <div className="arch-inline-val" style={{ gap: 8 }}>
+                    <input
+                      type="range"
+                      min={-180}
+                      max={180}
+                      step={1}
+                      value={selectedRoof.rotationY}
+                      onChange={(e) => onUpdateRoof(selectedRoof.id, { rotationY: parseFloat(e.target.value) }, false)}
+                      onMouseUp={() => onUpdateRoof(selectedRoof.id, {}, true)}
+                      onTouchEnd={() => onUpdateRoof(selectedRoof.id, {}, true)}
+                    />
+                    <button type="button" className="arch-mini-reset"
+                      aria-label={lang === 'en' ? 'Rotate roof 90 degrees' : lang === 'ja' ? '屋根を90度回転' : 'Putar atap 90 derajat'}
+                      onClick={() => onUpdateRoof(selectedRoof.id, { rotationY: ((selectedRoof.rotationY + 90) % 360 + 360) % 360 }, true)}>
+                      <RotateCw size={13} /> 90°
+                    </button>
+                  </div>
+                </div>
+
                 <div className="arch-swatch-row">
                   {ARCH_ROOF_SWATCHES.map((hex) => (
                     <button
@@ -1392,6 +1433,16 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                     }
                   />
                 </div>
+
+                <label className="arch-advanced-row">
+                  <span>{lang === 'en' ? 'Fascia / edge trim' : lang === 'ja' ? '破風・縁取り色' : 'Warna lis tepi / fasia'}</span>
+                  <input
+                    type="color"
+                    aria-label={lang === 'en' ? 'Fascia color' : lang === 'ja' ? '破風色' : 'Warna fasia'}
+                    value={selectedRoof.fasciaColor}
+                    onChange={(e) => onUpdateRoof(selectedRoof.id, { fasciaColor: e.target.value }, true)}
+                  />
+                </label>
 
                 {/* Roof Surface Pattern */}
                 <div className="pattern-chip-grid" style={{ marginTop: 6 }}>

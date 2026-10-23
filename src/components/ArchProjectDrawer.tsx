@@ -33,6 +33,8 @@ import {
   AppLanguage,
   ArchDocumentKind,
   ArchHouseData,
+  ArchReviewNote,
+  ArchSelection,
   ArchWorkflowTab,
   BriefTemplateId,
   BuildingFloorLayer,
@@ -101,6 +103,7 @@ interface ArchProjectDrawerProps {
   t: StudioStrings;
   projectName: string;
   archData: ArchHouseData;
+  archSelection: ArchSelection;
   floors: BuildingFloorLayer[];
   activeFloorId: string;
   floorViewMode: FloorViewMode;
@@ -116,6 +119,7 @@ interface ArchProjectDrawerProps {
   onUpdateCatalog: (next: ConstructionMaterialDef[]) => void;
   onUpdateSite: (next: SitePlanningData) => void;
   onUpdateDocSettings: (next: DocumentationExportSettings) => void;
+  onUpdateReviewNotes: (next: ArchReviewNote[]) => void;
   onUpdateRoomType: (roomId: string, roomType: RoomSemanticType) => void;
   onAutoAssignDefaultMaterials: () => void;
   onShiftBuildingOnSite: (dx: number, dz: number) => void;
@@ -164,6 +168,7 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
   t,
   projectName,
   archData,
+  archSelection,
   floors,
   activeFloorId,
   floorViewMode,
@@ -179,6 +184,7 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
   onUpdateCatalog,
   onUpdateSite,
   onUpdateDocSettings,
+  onUpdateReviewNotes,
   onUpdateRoomType,
   onAutoAssignDefaultMaterials,
   onShiftBuildingOnSite,
@@ -191,10 +197,11 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
   // Read-only Alternative Inspection state (System 3: inspect without overwriting active model!)
   const [inspectedAltId, setInspectedAltId] = useState<string | null>(null);
 
-  // Validation filter state (System 4)
+  // Validation and durable design-review notes
   const [valCategoryFilter, setValCategoryFilter] = useState<
     ValidationCategory | 'all'
   >('all');
+  const [reviewDraft, setReviewDraft] = useState('');
 
   // New Alternative form state (System 3)
   const [newAltName, setNewAltName] = useState('');
@@ -410,6 +417,21 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
     valCategoryFilter === 'all'
       ? valSummary.findings
       : valSummary.findings.filter((f) => f.category === valCategoryFilter);
+  const reviewNotes = archData.reviewNotes ?? [];
+  const selectedReviewTarget = archSelection
+    ? { targetDomain: archSelection.kind, targetId: archSelection.id }
+    : { targetDomain: 'project' as const, targetId: undefined };
+  const getReviewTargetLabel = (note: ArchReviewNote) => {
+    if (note.targetDomain === 'project') return lang === 'en' ? 'Project' : lang === 'ja' ? 'プロジェクト' : 'Proyek';
+    const source = note.targetDomain === 'wall' ? archData.walls
+      : note.targetDomain === 'opening' ? archData.openings
+      : note.targetDomain === 'stair' ? archData.stairs
+      : note.targetDomain === 'roof' ? archData.roofs : [];
+    const item = source.find((x) => x.id === note.targetId);
+    if (item && 'name' in item) return item.name;
+    if (note.targetDomain === 'room') return docTarget.analysis.detectedRooms.find((r) => r.id === note.targetId)?.name ?? 'Room';
+    return note.targetId ?? note.targetDomain;
+  };
 
   const scheduleRows =
     activeTab === 'docs' && docSettings.selectedDocKind === 'door-window-schedule'
@@ -419,6 +441,30 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
           lang,
         })
       : [];
+
+  const handleAddReviewNote = () => {
+    const body = reviewDraft.trim();
+    if (!body || isReadOnlyInspect) return;
+    const note: ArchReviewNote = {
+      id: `review_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+      ...selectedReviewTarget,
+      body,
+      resolved: false,
+      createdAt: new Date().toISOString(),
+    };
+    onUpdateReviewNotes([note, ...reviewNotes]);
+    setReviewDraft('');
+  };
+
+  const handlePatchReviewNote = (id: string, patch: Partial<ArchReviewNote>) => {
+    if (isReadOnlyInspect) return;
+    onUpdateReviewNotes(reviewNotes.map((note) => note.id === id ? { ...note, ...patch } : note));
+  };
+
+  const handleDeleteReviewNote = (id: string) => {
+    if (isReadOnlyInspect) return;
+    onUpdateReviewNotes(reviewNotes.filter((note) => note.id !== id));
+  };
 
   /* ---- Brief Handlers ---- */
   const handleApplyBriefTemplate = (tplId: BriefTemplateId) => {
@@ -2033,6 +2079,78 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
                 ))}
               </div>
             )}
+
+            <div className="arch-wf-card">
+              <div className="arch-wf-card-title">
+                {lang === 'en' ? 'Design review notes' : lang === 'ja' ? '設計レビューのメモ' : 'Catatan tinjauan desain'}
+              </div>
+              <p className="arch-wf-disclaimer">
+                {lang === 'en'
+                  ? `Attach notes to the selected ${archSelection?.kind ?? 'project'}; notes are saved with this project.`
+                  : lang === 'ja'
+                  ? `選択中の${archSelection?.kind ?? 'プロジェクト'}にメモを添付します。メモはプロジェクトに保存されます。`
+                  : `Catatan akan ditautkan ke ${archSelection ? `${archSelection.kind} terpilih` : 'proyek'} dan tersimpan bersama proyek.`}
+              </p>
+              <textarea
+                value={reviewDraft}
+                onChange={(e) => setReviewDraft(e.target.value)}
+                rows={3}
+                maxLength={1200}
+                disabled={isReadOnlyInspect}
+                placeholder={lang === 'en' ? 'Note an adjustment, decision, or question…' : lang === 'ja' ? '修正・決定・質問を記録…' : 'Catat revisi, keputusan, atau pertanyaan…'}
+                style={{ width: '100%', resize: 'vertical', minHeight: 72 }}
+              />
+              <div className="arch-wf-row-between" style={{ marginTop: 8 }}>
+                <span className="arch-wf-subcell">{reviewDraft.length}/1200</span>
+                <button
+                  type="button"
+                  className="arch-wf-primary-btn"
+                  disabled={isReadOnlyInspect || !reviewDraft.trim()}
+                  onClick={handleAddReviewNote}
+                >
+                  <Plus size={13} /> {lang === 'en' ? 'Add note' : lang === 'ja' ? 'メモを追加' : 'Tambah catatan'}
+                </button>
+              </div>
+              {reviewNotes.length > 0 && (
+                <div className="arch-wf-req-list" style={{ marginTop: 10 }}>
+                  {reviewNotes.map((note) => (
+                    <div key={note.id} className="arch-wf-finding-card">
+                      <div className="arch-wf-row-between">
+                        <strong>{getReviewTargetLabel(note)}</strong>
+                        <span className={`arch-wf-sev-pill ${note.resolved ? 'info' : 'warning'}`}>
+                          {note.resolved
+                            ? (lang === 'en' ? 'Resolved' : lang === 'ja' ? '完了' : 'Selesai')
+                            : (lang === 'en' ? 'Open' : lang === 'ja' ? '未完了' : 'Terbuka')}
+                        </span>
+                      </div>
+                      <p className="arch-wf-finding-desc">{note.body}</p>
+                      <div className="arch-wf-inline-actions">
+                        {note.targetDomain !== 'project' && note.targetId && (
+                          <button type="button" className="arch-wf-mini-btn"
+                            onClick={() => onFocusElement(note.targetDomain as Exclude<ArchReviewNote['targetDomain'], 'project'>, note.targetId!)}>
+                            <Crosshair size={12} /> {t.briefFocusBtn}
+                          </button>
+                        )}
+                        {!isReadOnlyInspect && (
+                          <>
+                            <button type="button" className="arch-wf-mini-btn"
+                              onClick={() => handlePatchReviewNote(note.id, { resolved: !note.resolved })}>
+                              <CheckCircle2 size={12} /> {note.resolved
+                                ? (lang === 'en' ? 'Reopen' : lang === 'ja' ? '再開' : 'Buka kembali')
+                                : (lang === 'en' ? 'Resolve' : lang === 'ja' ? '完了にする' : 'Tandai selesai')}
+                            </button>
+                            <button type="button" className="arch-wf-mini-btn"
+                              onClick={() => handleDeleteReviewNote(note.id)}>
+                              <Trash2 size={12} /> {lang === 'en' ? 'Delete' : lang === 'ja' ? '削除' : 'Hapus'}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

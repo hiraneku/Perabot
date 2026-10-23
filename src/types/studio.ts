@@ -921,6 +921,15 @@ export interface SunEnvironmentSettings {
   cameraFov: number; // 46 (standard) | 64 (wide) | 78 (ultra interior)
 }
 
+export interface ArchReviewNote {
+  id: string;
+  targetDomain: 'wall' | 'opening' | 'room' | 'stair' | 'roof' | 'project';
+  targetId?: string;
+  body: string;
+  resolved: boolean;
+  createdAt: string;
+}
+
 export interface ArchHouseData {
   walls: ArchWallSegment[];
   openings: ArchOpeningItem[];
@@ -932,6 +941,8 @@ export interface ArchHouseData {
   materialCatalog?: ConstructionMaterialDef[];
   site?: SitePlanningData;
   docSettings?: DocumentationExportSettings;
+  /** Optional durable design-review comments; missing in legacy project files. */
+  reviewNotes?: ArchReviewNote[];
 }
 
 export type ArchSelection =
@@ -1386,6 +1397,7 @@ export function createEmptyArchHouseData(): ArchHouseData {
     brief: createDefaultProjectBrief(),
     site: createDefaultSitePlanningData(),
     docSettings: createDefaultDocSettings(),
+    reviewNotes: [],
   };
 }
 

@@ -50,6 +50,7 @@ import {
   ArchBuildPhase,
   ArchDetectedRoom,
   ArchHouseData,
+  ArchReviewNote,
   ArchOpeningItem,
   ArchOpeningKind,
   ArchRoofItem,
@@ -2165,6 +2166,10 @@ export const App: React.FC = () => {
     []
   );
 
+  const handleUpdateArchReviewNotes = useCallback((notes: ArchReviewNote[]) => {
+    engineRef.current?.updateArchReviewNotes(notes);
+  }, []);
+
   const handleAutoAssignDefaultMaterials = useCallback(() => {
     const count = engineRef.current?.assignDefaultMaterialsToUnassigned() ?? 0;
     if (count > 0) {
@@ -2969,6 +2974,7 @@ export const App: React.FC = () => {
                 t={t}
                 projectName={activeProject.name}
                 archData={archData}
+                archSelection={archSelection}
                 floors={floors}
                 activeFloorId={activeFloorId}
                 floorViewMode={floorViewMode}
@@ -2986,6 +2992,7 @@ export const App: React.FC = () => {
                 onUpdateCatalog={handleUpdateArchMaterialCatalog}
                 onUpdateSite={handleUpdateArchSite}
                 onUpdateDocSettings={handleUpdateArchDocSettings}
+                onUpdateReviewNotes={handleUpdateArchReviewNotes}
                 onUpdateRoomType={(roomId: string, roomType: RoomSemanticType) =>
                   handleUpdateArchRoomMeta(roomId, { roomType }, true)
                 }

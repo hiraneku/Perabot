@@ -65,7 +65,7 @@ import {
   duplicateDesignAlternative,
   runIntegratedProjectAnalysis,
 } from '../src/engine/archAnalysis/alternativesService';
-import { migrateSerializedProjectFile } from '../src/engine/archAnalysis/schemaMigration';
+import { cloneArchHouseData, migrateSerializedProjectFile } from '../src/engine/archAnalysis/schemaMigration';
 import {
   exportPrintableArchitecturalReportHTML,
   generateDoorWindowSchedule,
@@ -562,6 +562,22 @@ describe('System 6 & Schema Migration / Regressions', () => {
     assert.ok(html.includes('Villa Nusantara'));
     assert.ok(html.includes('Material-Only Scope'));
     assert.ok(html.includes('48.00 m²'));
+  });
+
+  it('persists element-anchored review notes through independent architectural snapshots', () => {
+    const project = createEmptyArchHouseData();
+    project.reviewNotes = [{
+      id: 'note-1', targetDomain: 'wall', targetId: 'wall-1',
+      body: 'Align this wall with the stair landing.', resolved: false,
+      createdAt: '2026-10-23T00:00:00.000Z',
+    }];
+    const copy = cloneArchHouseData(project);
+    assert.deepEqual(copy.reviewNotes, project.reviewNotes);
+    copy.reviewNotes![0].resolved = true;
+    assert.equal(project.reviewNotes[0].resolved, false,
+      'Editing a review snapshot must not mutate the active project note');
+    const serialized = JSON.parse(JSON.stringify(project)) as ArchHouseData;
+    assert.deepEqual(serialized.reviewNotes, project.reviewNotes);
   });
 
   it('migrates legacy v1 project files seamlessly and preserves standing Grid OFF defaults + all translations', () => {

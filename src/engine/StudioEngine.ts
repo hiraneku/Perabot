@@ -45,6 +45,7 @@ import {
   AlignDistributeAction,
   ArchDetectedRoom,
   ArchHouseData,
+  ArchReviewNote,
   ArchOpeningItem,
   ArchOpeningKind,
   ArchRoofItem,
@@ -1914,6 +1915,14 @@ export class StudioEngine {
     const cur = this.archEngine.getData();
     cur.docSettings = nextDocSettings;
     this.archEngine.setData(cur);
+    this.emitState();
+  }
+
+  public updateArchReviewNotes(notes: ArchReviewNote[]): void {
+    const cur = this.archEngine.getData();
+    cur.reviewNotes = notes;
+    this.archEngine.setData(cur);
+    this.pushHistorySnapshot();
     this.emitState();
   }
 

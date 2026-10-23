@@ -131,6 +131,9 @@ export function cloneArchHouseData(
     docSettings: src?.docSettings
       ? { ...defaultsDoc, ...src.docSettings }
       : defaultsDoc,
+    reviewNotes: Array.isArray(src?.reviewNotes)
+      ? src.reviewNotes.map((note) => ({ ...note }))
+      : [],
   };
 }
 
