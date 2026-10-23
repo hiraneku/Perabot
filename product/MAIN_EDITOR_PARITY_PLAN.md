@@ -20,6 +20,10 @@ Do not duplicate these. Extend them where appropriate. Existing features are not
 6. **Animation and rigging** — timeline, keyframes, channels/dope sheet, interpolation, transform animation, armatures/weights and playback.
 7. **Geometry nodes, compositing, rendering, workspaces** — non-destructive node graphs, render settings/output and extensible editor/workspace layout.
 
+## Stage 2 production workflow decision
+
+The user deferred the Asset Browser / user-managed asset library for now. Do not start that work or add built-in furniture/material preset catalogs. Other production tracks remain in scope, but build on existing capabilities instead of duplicating them: model import/export already exists; smart autosave and `.perabot` backups already exist; Studio Photo captures still images but is not a render queue; theme and UI density settings exist but are not saved custom workspaces. Prioritize reliability, render workflow, format fidelity, customizable workspaces, and mobile performance as incremental deliverables.
+
 ## Mobile-first acceptance criteria for every track
 
 - Every core action works by touch; no required hover, right-click or keyboard shortcut.

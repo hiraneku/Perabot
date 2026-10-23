@@ -389,6 +389,7 @@ export const App: React.FC = () => {
   const lastSavedSigRef = useRef<string>('');
   const dirtySinceRef = useRef<number | null>(null);
   const autoSaveTimerRef = useRef<number | null>(null);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   // Studio Scene State
   const [objects, setObjects] = useState<SceneObjectData[]>([]);
@@ -698,6 +699,15 @@ export const App: React.FC = () => {
   // Smart Auto-Save: Persist current project only when genuinely dirty (or forced)
   const persistCurrentProjectNow = useCallback(
     async (options?: { overrideName?: string; force?: boolean }) => {
+      // Serialize overlapping timer/pagehide/manual saves. Each queued save snapshots the
+      // latest engine state only after the previous IndexedDB write has completed.
+      const previousSave = saveQueueRef.current;
+      let releaseSave!: () => void;
+      saveQueueRef.current = new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+      await previousSave;
+      try {
       const proj = activeProjectRef.current;
       const engine = engineRef.current;
       if (!proj || !engine) return;
@@ -739,9 +749,6 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Mark signature BEFORE updating state so state updates never trigger a re-save loop
-      lastSavedSigRef.current = nextSig;
-      dirtySinceRef.current = null;
       setSaveState('saving');
 
       const hasArchStructure = Boolean(
@@ -791,8 +798,18 @@ export const App: React.FC = () => {
 
       activeProjectRef.current = updated;
       await saveProjectRecord(updated);
+      // Commit the signature only after persistence resolves; failures stay visibly dirty.
+      lastSavedSigRef.current = nextSig;
+      dirtySinceRef.current = null;
       setActiveProject(updated);
       setSaveState('saved');
+      } catch (error) {
+        console.error('Project autosave failed', error);
+        dirtySinceRef.current ??= Date.now();
+        setSaveState('dirty');
+      } finally {
+        releaseSave();
+      }
     },
     []
   );
