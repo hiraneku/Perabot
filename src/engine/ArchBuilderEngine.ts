@@ -34,6 +34,7 @@ import {
   computeAdvancedWallLength,
   computeFloorWallJunctions,
   FloorWallJunctionPlan,
+  createAdvancedWallDistanceSampler,
   sampleAdvancedWallPath,
   WallEndTrimSpec,
 } from './WallGeometryEngine';
@@ -205,10 +206,15 @@ export function detectClosedRoomsOnFloor(
   for (const w of floorWalls) {
     const chord = Math.hypot(w.end.x - w.start.x, w.end.z - w.start.z);
     if (chord < 0.15) continue;
-    const steps = isWallCurvedPath(w) ? 14 : 1;
-    let prev = sampleWallCurvePoint(w, 0);
+    // Curved room edges feed the floor slab outline. Sample by physical distance densely
+    // enough for a smooth perimeter, but keep points farther apart than SNAP_EPS below.
+    const steps = isWallCurvedPath(w)
+      ? Math.min(36, Math.max(16, Math.ceil(computeAdvancedWallLength(w) / 0.18)))
+      : 1;
+    const samplePath = createAdvancedWallDistanceSampler(w);
+    let prev = samplePath(0);
     for (let s = 1; s <= steps; s++) {
-      const cur = sampleWallCurvePoint(w, s / steps);
+      const cur = samplePath(s / steps);
       rawSegs.push({ ax: prev.x, az: prev.z, bx: cur.x, bz: cur.z });
       prev = cur;
     }

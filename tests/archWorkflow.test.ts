@@ -1009,6 +1009,23 @@ describe('Advanced Wall Editing & Transform Constraints', () => {
     withoutOpening.bodyGeo.dispose();
   });
 
+  it('keeps the detected room/floor perimeter smooth and continuous along a curved wall', () => {
+    const walls = [
+      makeWall('room-arc', { x: -2, z: -2 }, { x: 2, z: -2 }, {
+        pathMode: 'circular-arc', curveBulge: 0.55,
+      }),
+      makeWall('room-side-r', { x: 2, z: -2 }, { x: 2, z: 2 }),
+      makeWall('room-side-t', { x: 2, z: 2 }, { x: -2, z: 2 }),
+      makeWall('room-side-l', { x: -2, z: 2 }, { x: -2, z: -2 }),
+    ];
+    const rooms = detectClosedRoomsOnFloor(walls, 'floor_1', [], 'Room');
+    assert.equal(rooms.length, 1);
+    assert.ok(rooms[0].polygon.length >= 20,
+      'Floor polygon should preserve enough curve samples to avoid a broken/chorded outline');
+    assert.ok(rooms[0].perimeterM > 16,
+      'Room perimeter must follow the curved wall instead of its straight chord');
+  });
+
   it('continues baseboard geometry through both rounded corner profiles when enabled', () => {
     for (const style of ['rounded-inner', 'rounded-outer'] as const) {
       const build = (hasBaseboard: boolean) => {
@@ -1025,6 +1042,24 @@ describe('Advanced Wall Editing & Transform Constraints', () => {
       const trimOff = build(false);
       assert.ok(trimOn.getAttribute('position').count > trimOff.getAttribute('position').count,
         `${style} must include a continuous lower skirting bridge`);
+      const horizontalAreaAt = (geo: THREE.BufferGeometry, y: number) => {
+        const pos = geo.getAttribute('position');
+        let area = 0;
+        for (let i = 0; i + 2 < pos.count; i += 3) {
+          if (Math.abs(pos.getY(i) - y) > 1e-5 || Math.abs(pos.getY(i + 1) - y) > 1e-5 || Math.abs(pos.getY(i + 2) - y) > 1e-5) continue;
+          const ax = pos.getX(i), az = pos.getZ(i);
+          const bx = pos.getX(i + 1), bz = pos.getZ(i + 1);
+          const cx = pos.getX(i + 2), cz = pos.getZ(i + 2);
+          area += Math.abs((bx - ax) * (cz - az) - (bz - az) * (cx - ax)) * 0.5;
+        }
+        return area;
+      };
+      const shoeArea = horizontalAreaAt(trimOn, 0.085);
+      const wallFootprintArea = horizontalAreaAt(trimOff, 3);
+      assert.ok(shoeArea > wallFootprintArea,
+        `${style} baseboard must offset OUT from the wall, not invert into its thickness`);
+      assert.ok(shoeArea - wallFootprintArea < 0.3,
+        `${style} skirting offset must stay modest and avoid geometric spikes`);
       trimOn.dispose();
       trimOff.dispose();
     }

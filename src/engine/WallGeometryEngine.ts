@@ -2280,7 +2280,11 @@ export function buildCornerFilletGeometry(
   }
 
   // Endpoints on Wall A & Wall B at `pullback`
-  const aInX = vertex.x + tAx * pullback + inNormAx * hA;
+  const centerAX = vertex.x + tAx * pullback;
+  const centerAZ = vertex.z + tAz * pullback;
+  const centerBX = vertex.x + tBx * pullback;
+  const centerBZ = vertex.z + tBz * pullback;
+  const aInX = centerAX + inNormAx * hA;
   const aInZ = vertex.z + tAz * pullback + inNormAz * hA;
   const aOutX = vertex.x + tAx * pullback + outNormAx * hA;
   const aOutZ = vertex.z + tAz * pullback + outNormAz * hA;
@@ -2375,20 +2379,64 @@ export function buildCornerFilletGeometry(
     wallA.hasBaseboard && wallB.hasBaseboard &&
     wallA.style === 'full' && wallB.style === 'full'
   ) {
-    const center = rawPts.reduce(
-      (sum, point) => ({ x: sum.x + point.x / rawPts.length, z: sum.z + point.z / rawPts.length }),
-      { x: 0, z: 0 }
-    );
-    const skirtingRing = rawPts.map((point) => {
-      const dx = point.x - center.x;
-      const dz = point.z - center.z;
-      const radius = Math.max(1e-6, Math.hypot(dx, dz));
+    const offset = 0.012;
+    let rawArea2 = 0;
+    for (let i = 0; i < rawPts.length; i++) {
+      const next = rawPts[(i + 1) % rawPts.length];
+      rawArea2 += rawPts[i].x * next.z - next.x * rawPts[i].z;
+    }
+    // The inside/outside fillet rings do not share a guaranteed winding; choose the
+    // geometric exterior per-ring so the shoe expands outwards for BOTH profiles.
+    const outwardSign = rawArea2 >= 0 ? 1 : -1;
+    const skirtingRing = rawPts.map((point, i) => {
+      const prev = rawPts[(i - 1 + rawPts.length) % rawPts.length];
+      const next = rawPts[(i + 1) % rawPts.length];
+      const pnx = point.x - prev.x;
+      const pnz = point.z - prev.z;
+      const nnx = next.x - point.x;
+      const nnz = next.z - point.z;
+      const plen = Math.max(1e-8, Math.hypot(pnx, pnz));
+      const nlen = Math.max(1e-8, Math.hypot(nnx, nnz));
+      const prevNx = outwardSign * pnz / plen;
+      const prevNz = outwardSign * -pnx / plen;
+      const nextNx = outwardSign * nnz / nlen;
+      const nextNz = outwardSign * -nnx / nlen;
+      let mx = prevNx + nextNx;
+      let mz = prevNz + nextNz;
+      const mlen = Math.hypot(mx, mz);
+      if (mlen < 1e-6) {
+        mx = nextNx;
+        mz = nextNz;
+      } else {
+        mx /= mlen;
+        mz /= mlen;
+      }
+      const projection = Math.max(0.25, Math.abs(mx * prevNx + mz * prevNz));
+      // Bound the miter at tight/near-collinear vertices to prevent spikes.
+      const distance = Math.min(offset / projection, offset * 2.5);
       return {
-        x: point.x + dx / radius * 0.014,
-        z: point.z + dz / radius * 0.014,
+        x: point.x + mx * distance,
+        z: point.z + mz * distance,
         edgeMat: 0 as const,
       };
     });
+    // Pin the four endpoint vertices to the exact outward-offset cross-sections used by
+    // emitSpanSegment(extraHalfT), so the bridge meets both wall baseboards flush.
+    const endpointPins = [
+      { source: { x: aOutX, z: aOutZ }, target: { x: centerAX + outNormAx * (hA + offset), z: centerAZ + outNormAz * (hA + offset) } },
+      { source: { x: aInX, z: aInZ }, target: { x: centerAX + inNormAx * (hA + offset), z: centerAZ + inNormAz * (hA + offset) } },
+      { source: { x: bOutX, z: bOutZ }, target: { x: centerBX + outNormBx * (hB + offset), z: centerBZ + outNormBz * (hB + offset) } },
+      { source: { x: bInX, z: bInZ }, target: { x: centerBX + inNormBx * (hB + offset), z: centerBZ + inNormBz * (hB + offset) } },
+    ];
+    for (let i = 0; i < rawPts.length; i++) {
+      for (const pin of endpointPins) {
+        if (Math.hypot(rawPts[i].x - pin.source.x, rawPts[i].z - pin.source.z) < 1e-6) {
+          skirtingRing[i].x = pin.target.x;
+          skirtingRing[i].z = pin.target.z;
+          break;
+        }
+      }
+    }
     collector.addExtrudedPolygonBlock(skirtingRing, 0, 0.085);
   }
 
