@@ -12,6 +12,9 @@
   "include": [
     "src/types/**/*.ts",
     "src/i18n/**/*.ts",
+    "src/engine/BooleanCSGEngine.ts",
+    "src/engine/CustomProfileEngine.ts",
+    "src/engine/modelExporter.ts",
     "src/engine/proceduralTextures.ts",
     "src/engine/ArchBuilderEngine.ts",
     "src/engine/blueprintExporter.ts",

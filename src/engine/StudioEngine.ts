@@ -30,7 +30,16 @@ import {
   normalizeModifierSettings,
   syncMeshMirrorTwins,
 } from './ModifierEngine';
-import { applyProceduralPatternToMaterial } from './proceduralTextures';
+import {
+  applyProceduralPatternToMaterial,
+  applyTriplanarWorldSpaceUVs,
+} from './proceduralTextures';
+import { performBooleanCSG } from './BooleanCSGEngine';
+import {
+  buildCustomProfileGeometry,
+  cloneCustomProfileData,
+} from './CustomProfileEngine';
+import { serializeGroupToOBJString } from './modelExporter';
 import {
   AlignDistributeAction,
   ArchDetectedRoom,
@@ -50,10 +59,14 @@ import {
   BuildingFloorLayer,
   ConstructionMaterialDef,
   createEmptyArchHouseData,
+  CsgBooleanMode,
+  CsgOperandData,
   CustomAssetPart,
+  CustomProfileData,
   DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
   DEFAULT_MODIFIER_SETTINGS,
+  DEFAULT_SECTION_CUT_CONFIG,
   DEFAULT_SNAP_SETTINGS,
   DEFAULT_SUBDIVISION_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
@@ -67,6 +80,7 @@ import {
   GridSettings,
   isSubdivisionActive,
   LightingMood,
+  LiveSectionCutConfig,
   normalizeSubdivisionSettings,
   ObjectModifierSettings,
   ObjectPointLightConfig,
@@ -94,6 +108,8 @@ import {
   ValidationAutoFixAction,
   Vec2XZ,
   Vec3,
+  ViewportShadingMode,
+  WalkthroughInteractPrompt,
   WallDrawDefaults,
 } from '../types/studio';
 
@@ -154,11 +170,23 @@ export interface StudioEngineCallbacks {
     wallChainActive: boolean;
     isArchActivelyDrawing: boolean;
     pendingArchCommit: PendingArchCommit | null;
+    viewportShading: ViewportShadingMode;
+    sectionCut: LiveSectionCutConfig;
+    universalMeasureActive: boolean;
+    measuredSpan: { total: number; dx: number; dy: number; dz: number } | null;
+    walkPrompt: WalkthroughInteractPrompt | null;
+    walkGhostMode: boolean;
+    walkEyeHeight: number;
   }) => void;
   onDragFeedback: (feedback: DragFeedback) => void;
   onEyedropperSample?: (sample: PaintBrushPayload, objectName: string) => void;
   onPaintApplied?: (objectName: string) => void;
   onBoxSelectRect?: (rect: BoxSelectRect | null) => void;
+  onTouchLoupeChange?: (state: {
+    active: boolean;
+    clientX: number;
+    clientY: number;
+  }) => void;
 }
 
 const RAD2DEG = 180 / Math.PI;
@@ -299,6 +327,10 @@ export class StudioEngine {
   private walkYaw = 0;
   private walkPitch = 0;
   private walkJoystick = { x: 0, y: 0 }; // x = strafe (-1..1), y = forward (-1..1)
+  private walkLookVelocity = { x: 0, y: 0 }; // dual-joystick look pad (-1..1)
+  private walkGhostMode = false;
+  private walkEyeHeight = 1.65;
+  private activeWalkPrompt: WalkthroughInteractPrompt | null = null;
   private walkKeys = new Set<string>();
   private isWalkLooking = false;
   private walkLookPrev = { x: 0, y: 0 };
@@ -306,6 +338,25 @@ export class StudioEngine {
     pos: THREE.Vector3;
     target: THREE.Vector3;
   } | null = null;
+
+  // Viewport Shading, Live 3D Section Cut, Universal 3D Measure & Touch Loupe
+  private viewportShading: ViewportShadingMode = 'shaded';
+  private clayMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#f4f1ea'),
+    roughness: 0.84,
+    metalness: 0.02,
+  });
+  private technicalMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#f8fafc'),
+    roughness: 0.58,
+    metalness: 0.02,
+    flatShading: true,
+  });
+  private sectionCut: LiveSectionCutConfig = { ...DEFAULT_SECTION_CUT_CONFIG };
+  private activeClipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 2.2);
+  private universalMeasureActive = false;
+  private universalMeasureGroup = new THREE.Group();
+  private contactShadowMesh: THREE.Mesh | null = null;
 
   // Paint / Eyedropper viewport interaction
   private paintMode: PaintInteractionMode = 'none';
@@ -383,6 +434,7 @@ export class StudioEngine {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.06;
+    this.renderer.localClippingEnabled = true;
     this.renderer.autoClear = false;
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
@@ -395,10 +447,43 @@ export class StudioEngine {
 
     this.scene.add(this.gridSystem.group);
 
+    // Subtle soft radial Contact Ground Shadow Plane for grounded furniture & architectural legs
+    if (typeof document !== 'undefined') {
+      const aoCanvas = document.createElement('canvas');
+      aoCanvas.width = 128;
+      aoCanvas.height = 128;
+      const aoCtx = aoCanvas.getContext('2d');
+      if (aoCtx) {
+        const grad = aoCtx.createRadialGradient(64, 64, 6, 64, 64, 62);
+        grad.addColorStop(0, 'rgba(2, 6, 23, 0.24)');
+        grad.addColorStop(0.55, 'rgba(2, 6, 23, 0.08)');
+        grad.addColorStop(1, 'rgba(2, 6, 23, 0)');
+        aoCtx.fillStyle = grad;
+        aoCtx.fillRect(0, 0, 128, 128);
+        const aoTex = new THREE.CanvasTexture(aoCanvas);
+        const aoMat = new THREE.MeshBasicMaterial({
+          map: aoTex,
+          transparent: true,
+          depthWrite: false,
+          opacity: 0.72,
+        });
+        this.contactShadowMesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(14, 14),
+          aoMat
+        );
+        this.contactShadowMesh.rotation.x = -Math.PI * 0.5;
+        this.contactShadowMesh.position.y = 0.002;
+        this.contactShadowMesh.raycast = () => {};
+        this.scene.add(this.contactShadowMesh);
+      }
+    }
+
+    this.universalMeasureGroup.name = '__universalMeasureGroup';
     this.objectGroup.name = 'PerabotSceneObjects';
     this.repeatPreviewGroup.name = '__repeatPreviewGroup';
     this.scene.add(this.archEngine.structuralGroup);
     this.scene.add(this.archEngine.overlayGroup);
+    this.scene.add(this.universalMeasureGroup);
     this.scene.add(this.objectGroup);
     this.scene.add(this.repeatPreviewGroup);
     this.scene.add(this.snapVisualizer.group);
@@ -433,6 +518,13 @@ export class StudioEngine {
       const isDragging = Boolean(event.value);
       this.orbitControls.enabled =
         !isDragging && !this.walkthroughEnabled && !this.terrainSculpt.active;
+      if (!isDragging) {
+        this.callbacks.onTouchLoupeChange?.({
+          active: false,
+          clientX: 0,
+          clientY: 0,
+        });
+      }
       if (isDragging) {
         this.wasGizmoDragging = true;
         if (this.selectedId) {
@@ -1456,6 +1548,7 @@ export class StudioEngine {
         | 'floorPattern'
         | 'floorMaterialId'
         | 'ceilingVisible'
+        | 'isVoid'
       >
     >,
     commitHistory = true
@@ -2722,12 +2815,137 @@ export class StudioEngine {
     this.walkJoystick = { x, y };
   }
 
-  private handleWalkKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this.studioMode === 'house') {
-      this.cancelArchChain();
+  public setWalkLookVelocity(x: number, y: number): void {
+    this.walkLookVelocity = { x, y };
+  }
+
+  public setWalkGhostMode(enabled: boolean): void {
+    this.walkGhostMode = enabled;
+    this.emitState();
+  }
+
+  public setWalkEyeHeight(heightM: number): void {
+    this.walkEyeHeight = Math.max(0.95, Math.min(2.1, heightM));
+    this.emitState();
+  }
+
+  public teleportWalkToFloor(floorId: string): void {
+    const fl = this.floors.find((f) => f.id === floorId);
+    if (!fl) return;
+    this.activeFloorId = fl.id;
+    this.camera.position.y = fl.elevation + this.walkEyeHeight;
+    this.emitState();
+  }
+
+  public triggerWalkInteract(): boolean {
+    if (!this.walkthroughEnabled || !this.activeWalkPrompt) return false;
+    if (this.activeWalkPrompt.kind === 'door') {
+      const toggled = this.archEngine.toggleDoorOpen(this.activeWalkPrompt.id);
+      if (toggled !== null) {
+        this.rebuildArchitecture();
+        this.refreshWalkProximityPrompt();
+        this.emitState();
+        return true;
+      }
+    } else if (this.activeWalkPrompt.kind === 'light') {
+      const mesh = this.meshMap.get(this.activeWalkPrompt.id);
+      if (mesh) {
+        const prev = mesh.userData.pointLight as
+          | ObjectPointLightConfig
+          | undefined;
+        const nextEnabled = !(prev?.enabled ?? false);
+        this.updateObjectPointLight(
+          this.activeWalkPrompt.id,
+          { enabled: nextEnabled },
+          false
+        );
+        this.refreshWalkProximityPrompt();
+        this.emitState();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private refreshWalkProximityPrompt(): void {
+    if (!this.walkthroughEnabled) {
+      if (this.activeWalkPrompt !== null) {
+        this.activeWalkPrompt = null;
+        this.emitState();
+      }
       return;
     }
+
+    const footY = this.camera.position.y - this.walkEyeHeight;
+    let nextPrompt: WalkthroughInteractPrompt | null = null;
+
+    if (this.studioMode === 'house') {
+      const nearDoor = this.archEngine.findNearestDoorInRange(
+        this.camera.position.x,
+        this.camera.position.z,
+        footY,
+        this.floors,
+        2.25
+      );
+      if (nearDoor) {
+        nextPrompt = {
+          kind: 'door',
+          id: nearDoor.id,
+          label: nearDoor.kind === 'door-double' ? 'Pintu Ganda' : 'Pintu',
+          isOpenOrOn: nearDoor.isOpen,
+        };
+      }
+    }
+
+    if (!nextPrompt) {
+      let bestDist = 2.4;
+      for (const [id, mesh] of this.meshMap.entries()) {
+        if (!mesh.visible) continue;
+        const pl = mesh.userData.pointLight as
+          | ObjectPointLightConfig
+          | undefined;
+        if (!pl && (mesh.userData.userEmissiveIntensity ?? 0) <= 0.1) continue;
+        const d = mesh.position.distanceTo(this.camera.position);
+        if (d < bestDist) {
+          bestDist = d;
+          nextPrompt = {
+            kind: 'light',
+            id,
+            label: mesh.name,
+            isOpenOrOn: Boolean(pl?.enabled),
+          };
+        }
+      }
+    }
+
+    const prevKey = this.activeWalkPrompt
+      ? `${this.activeWalkPrompt.kind}:${this.activeWalkPrompt.id}:${this.activeWalkPrompt.isOpenOrOn}`
+      : '';
+    const nextKey = nextPrompt
+      ? `${nextPrompt.kind}:${nextPrompt.id}:${nextPrompt.isOpenOrOn}`
+      : '';
+    if (prevKey !== nextKey) {
+      this.activeWalkPrompt = nextPrompt;
+      this.emitState();
+    }
+  }
+
+  private handleWalkKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape') {
+      if (this.universalMeasureActive) {
+        this.setUniversalMeasureMode(false);
+        return;
+      }
+      if (this.studioMode === 'house') {
+        this.cancelArchChain();
+        return;
+      }
+    }
     if (!this.walkthroughEnabled) return;
+    if (e.key.toLowerCase() === 'e' || e.key.toLowerCase() === 'f') {
+      this.triggerWalkInteract();
+      return;
+    }
     this.walkKeys.add(e.key.toLowerCase());
   };
 
@@ -2742,7 +2960,7 @@ export class StudioEngine {
   }
 
   private sampleWalkFloorHeight(x: number, z: number, currentEyeY: number): number {
-    const currentFootY = currentEyeY - 1.65;
+    const currentFootY = currentEyeY - this.walkEyeHeight;
     if (this.studioMode === 'house') {
       const archElev = this.archEngine.sampleWalkthroughFloorElevation(
         x,
@@ -2779,6 +2997,21 @@ export class StudioEngine {
   }
 
   private updateWalkthroughStep(delta: number): void {
+    // Smooth Dual-Joystick Right Look Pad rotation
+    if (
+      Math.abs(this.walkLookVelocity.x) > 0.02 ||
+      Math.abs(this.walkLookVelocity.y) > 0.02
+    ) {
+      this.walkYaw -= this.walkLookVelocity.x * 2.1 * delta;
+      this.walkPitch = Math.max(
+        -Math.PI * 0.44,
+        Math.min(
+          Math.PI * 0.44,
+          this.walkPitch + this.walkLookVelocity.y * 1.55 * delta
+        )
+      );
+    }
+
     let moveForward = this.walkJoystick.y;
     let moveRight = this.walkJoystick.x;
 
@@ -2809,8 +3042,8 @@ export class StudioEngine {
       this.camera.position.addScaledVector(forwardVec, normF * speed);
       this.camera.position.addScaledVector(rightVec, normR * speed);
 
-      if (this.studioMode === 'house') {
-        const footY = this.camera.position.y - 1.65;
+      if (this.studioMode === 'house' && !this.walkGhostMode) {
+        const footY = this.camera.position.y - this.walkEyeHeight;
         const resolved = this.archEngine.resolveWalkthroughMovement(
           prevX,
           prevZ,
@@ -2829,9 +3062,11 @@ export class StudioEngine {
       this.camera.position.z,
       this.camera.position.y
     );
-    const desiredEyeY = targetFloorY + 1.65;
-    this.camera.position.y += (desiredEyeY - this.camera.position.y) * Math.min(1, delta * 10);
+    const desiredEyeY = targetFloorY + this.walkEyeHeight;
+    this.camera.position.y +=
+      (desiredEyeY - this.camera.position.y) * Math.min(1, delta * 10);
     this.applyWalkCameraRotation();
+    this.refreshWalkProximityPrompt();
   }
 
   /* =========================================================
@@ -2939,9 +3174,11 @@ export class StudioEngine {
    * Extracts either the selected object/group (or all visible scene objects) normalized
    * around (0, minY=0, 0) for saving to "Koleksi Propertiku" (Custom Assets).
    */
-  public extractPartsForCustomAsset(): {
+  public extractPartsForCustomAsset(bundleEntireModelingScene = false): {
     defaultName: string;
     parts: CustomAssetPart[];
+    dimensions: Vec3;
+    thumbnailDataUrl: string;
   } | null {
     const allObjs = this.serializeAllObjects().filter((o) => o.visible);
     if (allObjs.length === 0) return null;
@@ -2949,7 +3186,10 @@ export class StudioEngine {
     let targetObjs: SceneObjectData[] = [];
     let defaultName = 'Properti Kustom';
 
-    if (this.selectedIds.length >= 2) {
+    if (bundleEntireModelingScene) {
+      targetObjs = allObjs;
+      defaultName = allObjs[0]?.groupName || allObjs[0]?.name || defaultName;
+    } else if (this.selectedIds.length >= 2) {
       const selSet = new Set<string>(this.selectedIds);
       const groupSet = new Set<string>();
       for (const o of allObjs) {
@@ -2968,11 +3208,6 @@ export class StudioEngine {
         if (sel.groupId && !this.editSinglePartMode) {
           targetObjs = allObjs.filter((o) => o.groupId === sel.groupId);
           defaultName = sel.groupName || sel.name;
-        } else if (allObjs.length > 1) {
-          // If user built a multi-part furniture piece on the modeling canvas without grouping yet,
-          // include only selected if single, or if they want whole scene when nothing else:
-          targetObjs = [sel];
-          defaultName = sel.name;
         } else {
           targetObjs = [sel];
           defaultName = sel.name;
@@ -2994,8 +3229,16 @@ export class StudioEngine {
       }
     }
     const center = new THREE.Vector3();
+    const boxSize = new THREE.Vector3();
     totalBox.getCenter(center);
+    totalBox.getSize(boxSize);
     const minY = Number.isFinite(totalBox.min.y) ? totalBox.min.y : 0;
+
+    const dimensions: Vec3 = {
+      x: round3(Math.max(0.05, boxSize.x)),
+      y: round3(Math.max(0.05, boxSize.y)),
+      z: round3(Math.max(0.05, boxSize.z)),
+    };
 
     const parts: CustomAssetPart[] = targetObjs.map((o) => ({
       name: o.name,
@@ -3016,7 +3259,18 @@ export class StudioEngine {
       flatShading: o.flatShading,
       proceduralPattern: o.proceduralPattern,
       patternScale: o.patternScale,
+      patternRotationDeg: o.patternRotationDeg,
+      patternWorldScale: o.patternWorldScale,
       modifiers: o.modifiers ? { ...o.modifiers } : undefined,
+      csgOperations: o.csgOperations
+        ? o.csgOperations.map((op) => ({
+            ...op,
+            relativeMatrix: [...op.relativeMatrix],
+          }))
+        : undefined,
+      customProfile: o.customProfile
+        ? cloneCustomProfileData(o.customProfile)
+        : undefined,
       subdivision: { ...o.subdivision },
       archRole: o.archRole ?? 'prop',
       modelAssetId: o.modelAssetId,
@@ -3026,7 +3280,95 @@ export class StudioEngine {
       pointLight: o.pointLight ? { ...o.pointLight } : undefined,
     }));
 
-    return { defaultName, parts };
+    const thumbnailDataUrl = this.renderIsolatedPrefabThumbnail(
+      targetObjs.map((o) => o.id),
+      totalBox
+    );
+
+    return { defaultName, parts, dimensions, thumbnailDataUrl };
+  }
+
+  /**
+   * Renders a crisp, isolated 3D isometric thumbnail of ONLY the target prefab objects
+   * framed by true 3D bounding-sphere radius (`d = (R / sin(fov/2)) * 1.28`)!
+   */
+  private renderIsolatedPrefabThumbnail(
+    targetIds: string[],
+    worldBox: THREE.Box3
+  ): string {
+    try {
+      const targetSet = new Set(targetIds);
+      const savedMeshVis = new Map<THREE.Mesh, boolean>();
+      for (const [id, m] of this.meshMap.entries()) {
+        savedMeshVis.set(m, m.visible);
+        m.visible = targetSet.has(id);
+      }
+
+      const prevGrid = this.gridSystem.group.visible;
+      const prevArch = this.archEngine.structuralGroup.visible;
+      const prevArchOv = this.archEngine.overlayGroup.visible;
+      const prevAo = this.contactShadowMesh?.visible ?? false;
+      const prevHelper = this.transformControls.getHelper().visible;
+      const prevCamPos = this.camera.position.clone();
+      const prevCamQuat = this.camera.quaternion.clone();
+      const prevAspect = this.camera.aspect;
+
+      this.gridSystem.group.visible = false;
+      this.archEngine.structuralGroup.visible = false;
+      this.archEngine.overlayGroup.visible = false;
+      if (this.contactShadowMesh) this.contactShadowMesh.visible = false;
+      this.transformControls.getHelper().visible = false;
+
+      const sphere = new THREE.Sphere();
+      worldBox.getBoundingSphere(sphere);
+      const radius = Math.max(0.25, sphere.radius);
+      const halfFovRad = (this.camera.fov * 0.5) * DEG2RAD;
+      const dist = (radius / Math.sin(halfFovRad)) * 1.28;
+      const isoDir = new THREE.Vector3(0.68, 0.52, 0.72).normalize();
+      this.camera.position.copy(sphere.center).addScaledVector(isoDir, dist);
+      this.camera.aspect = 1;
+      this.camera.updateProjectionMatrix();
+      this.camera.lookAt(sphere.center);
+
+      const prevSize = new THREE.Vector2();
+      this.renderer.getSize(prevSize);
+      const prevPr = this.renderer.getPixelRatio();
+      const prevBg = this.scene.background;
+      const prevFog = this.scene.fog;
+      const prevAlpha = this.renderer.getClearAlpha();
+      const prevClear = new THREE.Color();
+      this.renderer.getClearColor(prevClear);
+
+      this.scene.background = null;
+      this.scene.fog = null;
+      this.renderer.setClearColor(0x000000, 0);
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(256, 256, false);
+      this.renderer.clear();
+      this.renderer.render(this.scene, this.camera);
+      const url = this.renderer.domElement.toDataURL('image/webp', 0.92);
+
+      // Restore everything cleanly
+      for (const [m, vis] of savedMeshVis.entries()) m.visible = vis;
+      this.gridSystem.group.visible = prevGrid;
+      this.archEngine.structuralGroup.visible = prevArch;
+      this.archEngine.overlayGroup.visible = prevArchOv;
+      if (this.contactShadowMesh) this.contactShadowMesh.visible = prevAo;
+      this.transformControls.getHelper().visible = prevHelper;
+      this.scene.background = prevBg;
+      this.scene.fog = prevFog;
+      this.renderer.setClearColor(prevClear, prevAlpha);
+      this.renderer.setPixelRatio(prevPr);
+      this.renderer.setSize(prevSize.x, prevSize.y, false);
+      this.camera.position.copy(prevCamPos);
+      this.camera.quaternion.copy(prevCamQuat);
+      this.camera.aspect = prevAspect;
+      this.camera.updateProjectionMatrix();
+
+      return url;
+    } catch {
+      return this.captureThumbnailDataUrl();
+    }
   }
 
   /* =========================================================
@@ -3793,6 +4135,37 @@ export class StudioEngine {
       this.wasMultiTouchGesture ||
       performance.now() < this.multiTouchCooldownUntil
     ) {
+      this.callbacks.onTouchLoupeChange?.({
+        active: false,
+        clientX: 0,
+        clientY: 0,
+      });
+      return;
+    }
+
+    // Touch Precision Loupe ("Kaca Pembesar Presisi Sentuh") when dragging gizmos, surface-sliding, or drawing walls!
+    if (event.pointerType === 'touch') {
+      const precisionTouchActive =
+        Boolean(this.transformControls.dragging) ||
+        this.isSurfaceSliding ||
+        Boolean(this.activeArchDrag) ||
+        this.isArchDragDrawing;
+      this.callbacks.onTouchLoupeChange?.({
+        active: precisionTouchActive,
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
+    }
+
+    if (
+      this.universalMeasureActive &&
+      this.measureStart &&
+      !this.measureEnd
+    ) {
+      const hoverPt = this.raycastPrecisionMeasurePoint(event);
+      if (hoverPt) {
+        this.renderUniversalMeasureOverlay(this.measureStart, hoverPt);
+      }
       return;
     }
 
@@ -4090,6 +4463,13 @@ export class StudioEngine {
 
   private handlePointerUp = (event: PointerEvent): void => {
     this.activePointers.delete(event.pointerId);
+    if (event.pointerType === 'touch') {
+      this.callbacks.onTouchLoupeChange?.({
+        active: false,
+        clientX: 0,
+        clientY: 0,
+      });
+    }
 
     // #1 Multi-Touch & Pinch-Zoom Guard: never fire single-click/draw actions on multi-touch lift!
     if (this.wasMultiTouchGesture) {
@@ -4417,6 +4797,26 @@ export class StudioEngine {
       if (this.viewHelper.handleClick(event)) {
         return;
       }
+    }
+
+    // Universal 3D Laser Tape Measure (`Mode Modeling` & `Buat Rumah`)
+    if (this.universalMeasureActive) {
+      if (event.button === 2) {
+        this.clearUniversalMeasure();
+        return;
+      }
+      const pt = this.raycastPrecisionMeasurePoint(event);
+      if (!pt) return;
+      if (!this.measureStart || this.measureEnd) {
+        this.measureStart = pt;
+        this.measureEnd = null;
+        this.renderUniversalMeasureOverlay(pt, null);
+      } else {
+        this.measureEnd = pt;
+        this.renderUniversalMeasureOverlay(this.measureStart, pt);
+      }
+      this.emitState();
+      return;
     }
 
     // Architect Life × Blender Viewport Tool Clicks (`house` mode)
@@ -4889,6 +5289,8 @@ export class StudioEngine {
       this.updateInteriorPeekVisibility();
     }
 
+    this.updateSmartLightPool();
+
     this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
     if (!this.walkthroughEnabled) {
@@ -5074,7 +5476,18 @@ export class StudioEngine {
         flatShading: p.flatShading,
         proceduralPattern: p.proceduralPattern,
         patternScale: p.patternScale,
+        patternRotationDeg: p.patternRotationDeg,
+        patternWorldScale: p.patternWorldScale,
         modifiers: p.modifiers ? { ...p.modifiers } : undefined,
+        csgOperations: p.csgOperations
+          ? p.csgOperations.map((op) => ({
+              ...op,
+              relativeMatrix: [...op.relativeMatrix],
+            }))
+          : undefined,
+        customProfile: p.customProfile
+          ? cloneCustomProfileData(p.customProfile)
+          : undefined,
         subdivision: { ...(p.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
         visible: true,
         groupId: gid,
@@ -5144,7 +5557,18 @@ export class StudioEngine {
         flatShading: p.flatShading,
         proceduralPattern: p.proceduralPattern,
         patternScale: p.patternScale,
+        patternRotationDeg: p.patternRotationDeg,
+        patternWorldScale: p.patternWorldScale,
         modifiers: p.modifiers ? { ...p.modifiers } : undefined,
+        csgOperations: p.csgOperations
+          ? p.csgOperations.map((op) => ({
+              ...op,
+              relativeMatrix: [...op.relativeMatrix],
+            }))
+          : undefined,
+        customProfile: p.customProfile
+          ? cloneCustomProfileData(p.customProfile)
+          : undefined,
         subdivision: { ...(p.subdivision ?? DEFAULT_SUBDIVISION_SETTINGS) },
         visible: true,
         groupId: gid,
@@ -5524,14 +5948,45 @@ export class StudioEngine {
       gridLinesGeometry = built.gridLinesGeometry;
       stats = built.stats;
     } else {
-      const baseGeo = this.getOrCreateBaseGeometry(data.kind);
+      const customBase = data.customProfile
+        ? buildCustomProfileGeometry(data.customProfile)
+        : null;
+      const baseGeo = customBase ?? this.getOrCreateBaseGeometry(data.kind);
       const built = buildSubdividedGeometry(baseGeo, subdiv);
       geometry = applyGeometryDeformModifiers(built.geometry, modifiers);
       if (geometry !== built.geometry) {
         built.geometry.dispose();
       }
+
+      // Replay non-destructive 3D Boolean CSG operations (`subtract`, `union`, `intersect`)
+      if (data.csgOperations && data.csgOperations.length > 0) {
+        for (const op of data.csgOperations) {
+          const opCustom = op.customProfile
+            ? buildCustomProfileGeometry(op.customProfile)
+            : null;
+          const opBase = opCustom ?? this.getOrCreateBaseGeometry(op.kind);
+          const opSub = normalizeSubdivisionSettings(op.subdivision);
+          const opBuilt = buildSubdividedGeometry(opBase, opSub);
+          opBuilt.gridLinesGeometry?.dispose();
+          const opDef = applyGeometryDeformModifiers(
+            opBuilt.geometry,
+            normalizeModifierSettings(op.modifiers)
+          );
+          if (opDef !== opBuilt.geometry) {
+            opBuilt.geometry.dispose();
+          }
+          const relMat = new THREE.Matrix4().fromArray(op.relativeMatrix);
+          const nextGeo = performBooleanCSG(geometry, opDef, relMat, op.op);
+          geometry.dispose();
+          opDef.dispose();
+          if (opCustom) opCustom.dispose();
+          geometry = nextGeo;
+        }
+      }
+
       gridLinesGeometry = built.gridLinesGeometry;
       stats = computeGeometryStats(baseGeo, geometry, subdiv, false);
+      if (customBase) customBase.dispose();
     }
 
     const opacity = data.opacity !== undefined ? data.opacity : 1;
@@ -5540,6 +5995,12 @@ export class StudioEngine {
     const flatShading = Boolean(data.flatShading);
     const procPattern = data.proceduralPattern ?? 'none';
     const patScale = data.patternScale ?? 1;
+    const patRotDeg = data.patternRotationDeg ?? 0;
+    const patWorldScale = data.patternWorldScale !== false;
+
+    if (!importedEntry && procPattern !== 'none' && patWorldScale) {
+      applyTriplanarWorldSpaceUVs(geometry, data.scale, 1.0);
+    }
 
     const baseMaterial = new THREE.MeshStandardMaterial({
       color: new THREE.Color(data.color),
@@ -5551,20 +6012,28 @@ export class StudioEngine {
       emissive: new THREE.Color(emissiveHex),
       emissiveIntensity,
       flatShading,
+      clippingPlanes: this.sectionCut.enabled ? [this.activeClipPlane] : undefined,
+      clipShadows: true,
     });
     if (procPattern !== 'none') {
       applyProceduralPatternToMaterial(
         baseMaterial,
         procPattern,
         patScale,
-        patScale
+        patScale,
+        patRotDeg
       );
     }
 
-    const mesh = new THREE.Mesh(
-      geometry,
-      importedEntry ? this.hiddenFaceMaterial : baseMaterial
-    );
+    const activeDisplayMat = importedEntry
+      ? this.hiddenFaceMaterial
+      : this.viewportShading === 'clay'
+      ? this.clayMaterial
+      : this.viewportShading === 'technical'
+      ? this.technicalMaterial
+      : baseMaterial;
+
+    const mesh = new THREE.Mesh(geometry, activeDisplayMat);
     mesh.name = data.name;
     mesh.castShadow = !importedEntry && opacity > 0.35;
     mesh.receiveShadow = !importedEntry;
@@ -5587,7 +6056,18 @@ export class StudioEngine {
       userEmissiveIntensity: emissiveIntensity,
       proceduralPattern: procPattern,
       patternScale: patScale,
+      patternRotationDeg: patRotDeg,
+      patternWorldScale: patWorldScale,
       modifiers: { ...modifiers },
+      csgOperations: data.csgOperations
+        ? data.csgOperations.map((op) => ({
+            ...op,
+            relativeMatrix: [...op.relativeMatrix],
+          }))
+        : undefined,
+      customProfile: data.customProfile
+        ? cloneCustomProfileData(data.customProfile)
+        : undefined,
       subdivision: { ...subdiv },
       subdivStats: stats,
       groupId: data.groupId ?? null,
@@ -5631,37 +6111,105 @@ export class StudioEngine {
     return mesh;
   }
 
+  private isNightOrEveningEnvironment(): boolean {
+    if (this.studioMode === 'house') {
+      const sun = this.archEngine.getData().sun;
+      if (sun.sunOverride) {
+        return sun.hour < 6.4 || sun.hour > 17.4;
+      }
+    }
+    return (
+      this.currentLightingMood === 'night' ||
+      this.currentLightingMood === 'sunset'
+    );
+  }
+
   private syncMeshPointLight(
     mesh: THREE.Mesh,
     cfg?: ObjectPointLightConfig
   ): void {
     const existing = mesh.getObjectByName('__customPointLight') as
       | THREE.PointLight
+      | THREE.SpotLight
       | undefined;
+    const existingTarget = mesh.getObjectByName('__customSpotTarget');
+
     if (!cfg || !cfg.enabled) {
       if (existing) {
         mesh.remove(existing);
         existing.dispose();
+      }
+      if (existingTarget) {
+        mesh.remove(existingTarget);
       }
       mesh.userData.pointLight = cfg ? { ...cfg } : undefined;
       return;
     }
 
     mesh.userData.pointLight = { ...cfg };
-    if (existing) {
-      existing.color.set(cfg.color);
-      existing.intensity = cfg.intensity;
-      existing.distance = cfg.distance;
-    } else {
-      const light = new THREE.PointLight(
-        new THREE.Color(cfg.color),
-        cfg.intensity,
-        cfg.distance,
-        1.75
+    const wantSpot = cfg.lightType === 'spot';
+    const isExistingSpot = Boolean(existing && (existing as THREE.SpotLight).isSpotLight);
+
+    if (existing && wantSpot !== isExistingSpot) {
+      mesh.remove(existing);
+      existing.dispose();
+      if (existingTarget) mesh.remove(existingTarget);
+    }
+
+    const activeIntensity =
+      cfg.autoNightOnly && !this.isNightOrEveningEnvironment()
+        ? 0
+        : cfg.intensity;
+
+    const currentLight = mesh.getObjectByName('__customPointLight') as
+      | THREE.PointLight
+      | THREE.SpotLight
+      | undefined;
+
+    if (wantSpot) {
+      const angleRad = THREE.MathUtils.degToRad(
+        Math.max(18, Math.min(85, cfg.coneAngleDeg ?? 52)) * 0.5
       );
-      light.name = '__customPointLight';
-      light.castShadow = false;
-      mesh.add(light);
+      if (currentLight && (currentLight as THREE.SpotLight).isSpotLight) {
+        const sp = currentLight as THREE.SpotLight;
+        sp.color.set(cfg.color);
+        sp.intensity = activeIntensity;
+        sp.distance = cfg.distance;
+        sp.angle = angleRad;
+      } else {
+        const sp = new THREE.SpotLight(
+          new THREE.Color(cfg.color),
+          activeIntensity,
+          cfg.distance,
+          angleRad,
+          0.46,
+          1.7
+        );
+        sp.name = '__customPointLight';
+        sp.castShadow = false;
+        const target = new THREE.Object3D();
+        target.name = '__customSpotTarget';
+        target.position.set(0, -4, 0);
+        mesh.add(target);
+        sp.target = target;
+        mesh.add(sp);
+      }
+    } else {
+      if (currentLight && !(currentLight as THREE.SpotLight).isSpotLight) {
+        currentLight.color.set(cfg.color);
+        currentLight.intensity = activeIntensity;
+        currentLight.distance = cfg.distance;
+      } else {
+        const light = new THREE.PointLight(
+          new THREE.Color(cfg.color),
+          activeIntensity,
+          cfg.distance,
+          1.75
+        );
+        light.name = '__customPointLight';
+        light.castShadow = false;
+        mesh.add(light);
+      }
     }
   }
 
@@ -6361,6 +6909,14 @@ export class StudioEngine {
         Math.max(0.05, patch.scale.y),
         Math.max(0.05, patch.scale.z)
       );
+      if (
+        !mesh.userData.modelAssetId &&
+        mesh.userData.proceduralPattern &&
+        mesh.userData.proceduralPattern !== 'none' &&
+        mesh.userData.patternWorldScale !== false
+      ) {
+        applyTriplanarWorldSpaceUVs(mesh.geometry, mesh.scale, 1.0);
+      }
       if (!mesh.userData.modelAssetId && mesh.userData.modifiers) {
         syncMeshMirrorTwins(
           mesh,
@@ -6455,6 +7011,8 @@ export class StudioEngine {
       flatShading: boolean;
       proceduralPattern: ProceduralPatternKind;
       patternScale: number;
+      patternRotationDeg: number;
+      patternWorldScale: boolean;
       visible: boolean;
     }>,
     recordHistory = true
@@ -6477,16 +7035,35 @@ export class StudioEngine {
     }
     if (
       patch.proceduralPattern !== undefined ||
-      patch.patternScale !== undefined
+      patch.patternScale !== undefined ||
+      patch.patternRotationDeg !== undefined ||
+      patch.patternWorldScale !== undefined
     ) {
       const nextPat =
         patch.proceduralPattern ??
         ((mesh.userData.proceduralPattern as ProceduralPatternKind) ?? 'none');
       const nextScale =
         patch.patternScale ?? ((mesh.userData.patternScale as number) ?? 1);
+      const nextRot =
+        patch.patternRotationDeg ??
+        ((mesh.userData.patternRotationDeg as number) ?? 0);
+      const nextWorld =
+        patch.patternWorldScale ??
+        (mesh.userData.patternWorldScale !== false);
       mesh.userData.proceduralPattern = nextPat;
       mesh.userData.patternScale = nextScale;
-      applyProceduralPatternToMaterial(mat, nextPat, nextScale, nextScale);
+      mesh.userData.patternRotationDeg = nextRot;
+      mesh.userData.patternWorldScale = nextWorld;
+      if (!mesh.userData.modelAssetId && nextPat !== 'none' && nextWorld) {
+        applyTriplanarWorldSpaceUVs(mesh.geometry, mesh.scale, 1.0);
+      }
+      applyProceduralPatternToMaterial(
+        mat,
+        nextPat,
+        nextScale,
+        nextScale,
+        nextRot
+      );
     }
     if (patch.opacity !== undefined) {
       const op = Math.max(0.08, Math.min(1, patch.opacity));
@@ -6981,13 +7558,24 @@ export class StudioEngine {
     };
   }
 
-  public async exportScene(format: 'glb' | 'gltf'): Promise<{ blob: Blob; filename: string }> {
+  public async exportScene(
+    format: 'glb' | 'gltf' | 'obj',
+    onlySelected = false
+  ): Promise<{ blob: Blob; filename: string }> {
     const exportScene = new THREE.Scene();
     exportScene.name = 'PerabotScene';
 
-    for (const mesh of this.meshMap.values()) {
+    const selectedFilter =
+      onlySelected && this.selectedIds.length > 0
+        ? new Set(this.selectedIds)
+        : onlySelected && this.selectedId
+        ? new Set([this.selectedId])
+        : null;
+
+    for (const [id, mesh] of this.meshMap.entries()) {
       const userVis = mesh.userData.userVisible !== false;
       if (!userVis) continue;
+      if (selectedFilter && !selectedFilter.has(id)) continue;
 
       const visualRoot = mesh.getObjectByName('__importedVisualRoot');
       if (visualRoot) {
@@ -7054,6 +7642,7 @@ export class StudioEngine {
 
     // Export Architectural Structure (Smart Walls, Cutout Doors/Windows, Room Floors, Stairs, Roofs)
     if (
+      !selectedFilter &&
       this.studioMode === 'house' &&
       this.archEngine.structuralGroup.children.length > 0
     ) {
@@ -7082,6 +7671,36 @@ export class StudioEngine {
         }
       });
       exportScene.add(archExportRoot);
+    }
+
+    if (format === 'obj') {
+      exportScene.updateMatrixWorld(true);
+      const exportGroup = new THREE.Group();
+      for (const ch of [...exportScene.children]) {
+        exportGroup.add(ch);
+      }
+      exportGroup.updateMatrixWorld(true);
+      // Bake transforms for OBJ Wavefront output
+      exportGroup.traverse((n) => {
+        const m = n as THREE.Mesh;
+        if (m.isMesh && m.geometry) {
+          m.geometry.applyMatrix4(m.matrixWorld);
+        }
+      });
+      const objText = serializeGroupToOBJString(exportGroup);
+      exportGroup.traverse((obj) => {
+        if ((obj as THREE.Mesh).isMesh) {
+          const m = obj as THREE.Mesh;
+          m.geometry.dispose();
+          if (Array.isArray(m.material)) m.material.forEach((mat) => mat.dispose());
+          else m.material?.dispose();
+        }
+      });
+      const timestamp = new Date().toISOString().slice(0, 10);
+      return {
+        blob: new Blob([objText], { type: 'text/plain;charset=utf-8' }),
+        filename: `perabot-model-${timestamp}.obj`,
+      };
     }
 
     const exporter = new GLTFExporter();
@@ -7163,9 +7782,21 @@ export class StudioEngine {
         'none',
       patternScale:
         (mesh.userData.patternScale as number | undefined) ?? 1,
+      patternRotationDeg:
+        (mesh.userData.patternRotationDeg as number | undefined) ?? 0,
+      patternWorldScale: mesh.userData.patternWorldScale !== false,
       modifiers: mesh.userData.modifiers
         ? { ...(mesh.userData.modifiers as ObjectModifierSettings) }
         : { ...DEFAULT_MODIFIER_SETTINGS },
+      csgOperations: mesh.userData.csgOperations
+        ? (mesh.userData.csgOperations as CsgOperandData[]).map((op) => ({
+            ...op,
+            relativeMatrix: [...op.relativeMatrix],
+          }))
+        : undefined,
+      customProfile: mesh.userData.customProfile
+        ? cloneCustomProfileData(mesh.userData.customProfile as CustomProfileData)
+        : undefined,
       subdivision: { ...subdiv },
       visible: userVisible,
       locked: Boolean(mesh.userData.userLocked),
@@ -7444,16 +8075,41 @@ export class StudioEngine {
       pendingArchCommit: this.pendingArchCommit
         ? { ...this.pendingArchCommit }
         : null,
+      viewportShading: this.viewportShading,
+      sectionCut: { ...this.sectionCut },
+      universalMeasureActive: this.universalMeasureActive,
+      measuredSpan:
+        this.measureStart && this.measureEnd
+          ? {
+              total: round3(this.measureStart.distanceTo(this.measureEnd)),
+              dx: round3(Math.abs(this.measureEnd.x - this.measureStart.x)),
+              dy: round3(Math.abs(this.measureEnd.y - this.measureStart.y)),
+              dz: round3(Math.abs(this.measureEnd.z - this.measureStart.z)),
+            }
+          : null,
+      walkPrompt: this.activeWalkPrompt ? { ...this.activeWalkPrompt } : null,
+      walkGhostMode: this.walkGhostMode,
+      walkEyeHeight: this.walkEyeHeight,
     });
   }
 
   /**
-   * Studio HD Photo / Render Snapshot (`1920x1080` or `2048x2048`, optional `.PNG` transparent background,
-   * automatically hiding all editor gizmos, grids, badges, and selection emissive tint during capture!)
+   * Studio HD Photo / Render Snapshot (`1920x1080`, `2048x2048`, or `3840x2160` 4K UHD,
+   * optional `.PNG` transparent background, optional Architectural Two-Point Perspective!)
    */
   public captureStudioSnapshot(options: StudioSnapshotOptions): string {
-    const targetW = options.resolution === '2k-square' ? 2048 : 1920;
-    const targetH = options.resolution === '2k-square' ? 2048 : 1080;
+    const targetW =
+      options.resolution === '4k-uhd'
+        ? 3840
+        : options.resolution === '2k-square'
+        ? 2048
+        : 1920;
+    const targetH =
+      options.resolution === '4k-uhd'
+        ? 2160
+        : options.resolution === '2k-square'
+        ? 2048
+        : 1080;
 
     const prevSize = new THREE.Vector2();
     this.renderer.getSize(prevSize);
@@ -7497,14 +8153,26 @@ export class StudioEngine {
       }
     }
 
+    const prevCamPos = this.camera.position.clone();
+    const prevCamQuat = this.camera.quaternion.clone();
+    const prevShading = this.viewportShading;
+
     try {
       this.gridSystem.group.visible = false;
       gizmoHelper.visible = false;
       this.archEngine.overlayGroup.visible = false;
+      this.universalMeasureGroup.visible = false;
       this.snapVisualizer.group.visible = false;
       this.protractorVisualizer.group.visible = false;
       this.surfaceNormalVisualizer.group.visible = false;
       this.validationVisualizer.group.visible = false;
+
+      if (
+        options.shadingOverride &&
+        options.shadingOverride !== prevShading
+      ) {
+        this.setViewportShadingMode(options.shadingOverride, false);
+      }
 
       if (options.transparentBg) {
         this.scene.background = null;
@@ -7515,12 +8183,51 @@ export class StudioEngine {
       this.renderer.setPixelRatio(1);
       this.renderer.setSize(targetW, targetH, false);
       this.camera.aspect = targetW / targetH;
-      this.camera.updateProjectionMatrix();
+
+      // True Architectural Two-Point Perspective: level camera pitch to 0 so all vertical edges
+      // are 100% plumb parallel, and shift frustum vertically (`setViewOffset`) to keep framing!
+      if (options.twoPointPerspective && !this.isBlueprint2D) {
+        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(
+          this.camera.quaternion
+        );
+        const pitchRad = Math.asin(Math.max(-0.85, Math.min(0.85, fwd.y)));
+        const horizFwd = new THREE.Vector3(fwd.x, 0, fwd.z);
+        if (horizFwd.lengthSq() > 1e-4) {
+          horizFwd.normalize();
+          const lookAtTarget = this.camera.position.clone().add(horizFwd);
+          this.camera.lookAt(lookAtTarget);
+          const halfFovTan = Math.tan((this.camera.fov * 0.5) * DEG2RAD);
+          const shiftRatio = Math.tan(-pitchRad) / (2 * halfFovTan);
+          const offsetY = Math.round(shiftRatio * targetH);
+          this.camera.setViewOffset(
+            targetW,
+            targetH,
+            0,
+            offsetY,
+            targetW,
+            targetH
+          );
+        } else {
+          this.camera.updateProjectionMatrix();
+        }
+      } else {
+        this.camera.updateProjectionMatrix();
+      }
 
       this.renderer.clear();
       this.renderer.render(this.scene, this.camera);
       return this.renderer.domElement.toDataURL('image/png');
     } finally {
+      this.camera.clearViewOffset();
+      this.camera.position.copy(prevCamPos);
+      this.camera.quaternion.copy(prevCamQuat);
+      if (
+        options.shadingOverride &&
+        options.shadingOverride !== prevShading
+      ) {
+        this.setViewportShadingMode(prevShading, false);
+      }
+      this.universalMeasureGroup.visible = true;
       this.gridSystem.group.visible = prevStates.grid;
       gizmoHelper.visible = prevStates.gizmo;
       this.archEngine.overlayGroup.visible = prevStates.archOverlay;
@@ -7542,6 +8249,437 @@ export class StudioEngine {
       this.camera.aspect = prevAspect;
       this.camera.updateProjectionMatrix();
     }
+  }
+
+  public getCanvasElement(): HTMLCanvasElement {
+    return this.renderer.domElement;
+  }
+
+  /**
+   * Smart 12-Light Distance Pool + Automatic Day/Night Lamp Switching (`autoNightOnly`)
+   * Ensures smooth 60 FPS shader performance on mobile even with 30+ custom interior lamps!
+   */
+  private updateSmartLightPool(): void {
+    const entries: Array<{
+      light: THREE.PointLight | THREE.SpotLight;
+      cfg: ObjectPointLightConfig;
+      distSq: number;
+    }> = [];
+    const isNight = this.isNightOrEveningEnvironment();
+
+    for (const mesh of this.meshMap.values()) {
+      if (!mesh.visible) continue;
+      const cfg = mesh.userData.pointLight as ObjectPointLightConfig | undefined;
+      if (!cfg || !cfg.enabled) continue;
+      const light = mesh.getObjectByName('__customPointLight') as
+        | THREE.PointLight
+        | THREE.SpotLight
+        | undefined;
+      if (!light) continue;
+      const distSq = mesh.position.distanceToSquared(this.camera.position);
+      entries.push({ light, cfg, distSq });
+    }
+
+    if (entries.length === 0) return;
+    entries.sort((a, b) => a.distSq - b.distSq);
+
+    const MAX_ACTIVE_SHADER_LIGHTS = 12;
+    entries.forEach((entry, idx) => {
+      const allowedByPool = idx < MAX_ACTIVE_SHADER_LIGHTS;
+      const allowedByTime = !entry.cfg.autoNightOnly || isNight;
+      entry.light.visible = allowedByPool && allowedByTime;
+      entry.light.intensity = allowedByTime ? entry.cfg.intensity : 0;
+    });
+  }
+
+  /**
+   * Non-destructive Viewport Shading Mode (`shaded` | `clay` | `technical`)
+   */
+  public setViewportShadingMode(
+    mode: ViewportShadingMode,
+    emit = true
+  ): void {
+    this.viewportShading = mode;
+    this.clayMaterial.clippingPlanes = this.sectionCut.enabled
+      ? [this.activeClipPlane]
+      : null;
+    this.technicalMaterial.clippingPlanes = this.sectionCut.enabled
+      ? [this.activeClipPlane]
+      : null;
+
+    for (const mesh of this.meshMap.values()) {
+      if (mesh.userData.modelAssetId) continue;
+      const baseMat = mesh.userData.baseMaterial as THREE.MeshStandardMaterial;
+      mesh.material =
+        mode === 'clay'
+          ? this.clayMaterial
+          : mode === 'technical'
+          ? this.technicalMaterial
+          : baseMat;
+    }
+
+    if (this.studioMode === 'house') {
+      this.archEngine.structuralGroup.traverse((n) => {
+        const m = n as THREE.Mesh;
+        if (!m.isMesh || m.userData?.archKind === 'ceiling') return;
+        if (!m.userData.__origArchMat) {
+          m.userData.__origArchMat = m.material;
+        }
+        m.material =
+          mode === 'clay'
+            ? this.clayMaterial
+            : mode === 'technical'
+            ? this.technicalMaterial
+            : (m.userData.__origArchMat as THREE.Material);
+      });
+    }
+
+    if (emit) this.emitState();
+  }
+
+  /**
+   * Live 3D Section Plane Cutaway (`X`, `Y`, or `Z` axis + position + flip)
+   * Works in BOTH Mode Modeling (inspecting internal furniture joinery) and Buat Rumah!
+   */
+  public setLiveSectionCut(patch: Partial<LiveSectionCutConfig>): void {
+    this.sectionCut = { ...this.sectionCut, ...patch };
+    const sign = this.sectionCut.flip ? 1 : -1;
+    const normal =
+      this.sectionCut.axis === 'x'
+        ? new THREE.Vector3(sign, 0, 0)
+        : this.sectionCut.axis === 'z'
+        ? new THREE.Vector3(0, 0, sign)
+        : new THREE.Vector3(0, sign, 0);
+    // Plane equation: normal.dot(p) + constant >= 0 is kept!
+    this.activeClipPlane.set(normal, -sign * this.sectionCut.position);
+
+    const planes = this.sectionCut.enabled ? [this.activeClipPlane] : null;
+    this.renderer.clippingPlanes = planes ?? [];
+    this.clayMaterial.clippingPlanes = planes;
+    this.technicalMaterial.clippingPlanes = planes;
+
+    for (const mesh of this.meshMap.values()) {
+      const bm = mesh.userData.baseMaterial as
+        | THREE.MeshStandardMaterial
+        | undefined;
+      if (bm) {
+        bm.clippingPlanes = planes;
+        bm.clipShadows = true;
+        bm.needsUpdate = true;
+      }
+    }
+
+    this.emitState();
+  }
+
+  /**
+   * Universal 3D Laser Tape Measure (`Mode Modeling` & `Buat Rumah`)
+   */
+  public setUniversalMeasureMode(active: boolean): void {
+    this.universalMeasureActive = active;
+    if (!active) {
+      this.clearUniversalMeasure(false);
+    }
+    this.renderer.domElement.style.cursor = active ? 'crosshair' : 'default';
+    this.emitState();
+  }
+
+  public clearUniversalMeasure(emit = true): void {
+    this.measureStart = null;
+    this.measureEnd = null;
+    for (const ch of [...this.universalMeasureGroup.children]) {
+      this.universalMeasureGroup.remove(ch);
+      if ((ch as THREE.Mesh).geometry) (ch as THREE.Mesh).geometry.dispose();
+    }
+    if (emit) this.emitState();
+  }
+
+  private raycastPrecisionMeasurePoint(
+    event: PointerEvent
+  ): THREE.Vector3 | null {
+    const rawPt = this.raycastAnyScenePoint(event);
+    if (!rawPt) return null;
+
+    // Snap cleanly to the nearest object corner/vertex within 0.14m for CAD-grade furniture & room measuring!
+    let bestPt = rawPt;
+    let bestDist = 0.14;
+    const vTmp = new THREE.Vector3();
+
+    for (const mesh of this.meshMap.values()) {
+      if (!mesh.visible) continue;
+      const box = this.computeWorldBounds(mesh);
+      if (box.distanceToPoint(rawPt) > 0.25) continue;
+      const pos = mesh.geometry.getAttribute('position');
+      if (!pos || pos.count > 2400) continue;
+      mesh.updateMatrixWorld(true);
+      for (let i = 0; i < pos.count; i++) {
+        vTmp.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(mesh.matrixWorld);
+        const d = vTmp.distanceTo(rawPt);
+        if (d < bestDist) {
+          bestDist = d;
+          bestPt = vTmp.clone();
+        }
+      }
+    }
+    return bestPt;
+  }
+
+  private renderUniversalMeasureOverlay(
+    p1: THREE.Vector3 | null,
+    p2: THREE.Vector3 | null
+  ): void {
+    for (const ch of [...this.universalMeasureGroup.children]) {
+      this.universalMeasureGroup.remove(ch);
+      if ((ch as THREE.Mesh).geometry) (ch as THREE.Mesh).geometry.dispose();
+    }
+    if (!p1) return;
+
+    const dotGeo = new THREE.SphereGeometry(0.055, 12, 12);
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: '#facc15',
+      depthTest: false,
+    });
+    const m1 = new THREE.Mesh(dotGeo, dotMat);
+    m1.position.copy(p1);
+    m1.renderOrder = 30;
+    m1.raycast = () => {};
+    this.universalMeasureGroup.add(m1);
+
+    if (!p2) return;
+    const m2 = new THREE.Mesh(dotGeo.clone(), dotMat);
+    m2.position.copy(p2);
+    m2.renderOrder = 30;
+    m2.raycast = () => {};
+    this.universalMeasureGroup.add(m2);
+
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+    const line = new THREE.Line(
+      lineGeo,
+      new THREE.LineBasicMaterial({ color: '#facc15', depthTest: false })
+    );
+    line.renderOrder = 30;
+    line.raycast = () => {};
+    this.universalMeasureGroup.add(line);
+
+    if (typeof document !== 'undefined') {
+      const dist = p1.distanceTo(p2);
+      const c = document.createElement('canvas');
+      c.width = 280;
+      c.height = 84;
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.roundRect(4, 4, 272, 76, 16);
+        ctx.fill();
+        ctx.stroke();
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#fef08a';
+        ctx.font = '800 28px system-ui, sans-serif';
+        ctx.fillText(`${dist.toFixed(3)} m`, 140, 40);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '600 16px system-ui, sans-serif';
+        ctx.fillText(
+          `ΔX ${Math.abs(p2.x - p1.x).toFixed(2)} · ΔY ${Math.abs(
+            p2.y - p1.y
+          ).toFixed(2)} · ΔZ ${Math.abs(p2.z - p1.z).toFixed(2)}`,
+          140,
+          66
+        );
+        const tex = new THREE.CanvasTexture(c);
+        const sprite = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: tex,
+            depthTest: false,
+            transparent: true,
+          })
+        );
+        const mid = p1.clone().add(p2).multiplyScalar(0.5);
+        sprite.position.set(mid.x, mid.y + 0.24, mid.z);
+        sprite.scale.set(1.25, 0.38, 1);
+        sprite.renderOrder = 31;
+        sprite.raycast = () => {};
+        this.universalMeasureGroup.add(sprite);
+      }
+    }
+  }
+
+  /**
+   * Executes a true 3D CSG Boolean (`subtract` / `union` / `intersect`) using the first selected
+   * object as Target A and the remaining selected objects as Cutters/Operands B!
+   */
+  public applyBooleanCSGSelected(mode: CsgBooleanMode): boolean {
+    if (this.selectedIds.length < 2) return false;
+    const targetId = this.selectedIds[0];
+    const targetData = this.serializeObject(targetId);
+    const targetMesh = this.meshMap.get(targetId);
+    if (
+      !targetData ||
+      !targetMesh ||
+      targetData.locked ||
+      targetData.modelAssetId
+    ) {
+      return false;
+    }
+
+    targetMesh.updateMatrixWorld(true);
+    const invTargetWorld = targetMesh.matrixWorld.clone().invert();
+    const nextOps: CsgOperandData[] = targetData.csgOperations
+      ? targetData.csgOperations.map((op) => ({
+          ...op,
+          relativeMatrix: [...op.relativeMatrix],
+        }))
+      : [];
+
+    const consumedIds: string[] = [];
+    for (let i = 1; i < this.selectedIds.length; i++) {
+      const opId = this.selectedIds[i];
+      const opData = this.serializeObject(opId);
+      const opMesh = this.meshMap.get(opId);
+      if (!opData || !opMesh || opData.locked || opData.modelAssetId) continue;
+
+      opMesh.updateMatrixWorld(true);
+      const relMat = new THREE.Matrix4().multiplyMatrices(
+        invTargetWorld,
+        opMesh.matrixWorld
+      );
+      nextOps.push({
+        id: `csg_${Date.now()}_${i}`,
+        op: mode,
+        kind: opData.kind,
+        relativeMatrix: relMat.toArray(),
+        subdivision: { ...opData.subdivision },
+        modifiers: opData.modifiers ? { ...opData.modifiers } : undefined,
+        customProfile: opData.customProfile
+          ? cloneCustomProfileData(opData.customProfile)
+          : undefined,
+      });
+      consumedIds.push(opId);
+    }
+
+    if (consumedIds.length === 0) return false;
+
+    this.transformControls.detach();
+
+    // Remove consumed cutter meshes cleanly
+    for (const cid of consumedIds) {
+      const cm = this.meshMap.get(cid);
+      if (cm) {
+        this.disposeMesh(cm);
+        this.objectGroup.remove(cm);
+        this.meshMap.delete(cid);
+      }
+    }
+
+    // Rebuild Target A with the updated non-destructive CSG operation stack
+    this.disposeMesh(targetMesh);
+    this.objectGroup.remove(targetMesh);
+    const rebuiltData: SceneObjectData = {
+      ...targetData,
+      csgOperations: nextOps,
+    };
+    const rebuiltMesh = this.buildMeshFromData(rebuiltData);
+    this.objectGroup.add(rebuiltMesh);
+    this.meshMap.set(targetId, rebuiltMesh);
+
+    this.selectedIds = [targetId];
+    this.selectedId = targetId;
+    this.updateSeamlessTouchFaces();
+    this.reattachTransformAfterSelectionChange();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  public clearObjectCSG(id: string): boolean {
+    const data = this.serializeObject(id);
+    const mesh = this.meshMap.get(id);
+    if (!data || !mesh || !data.csgOperations?.length) return false;
+
+    this.transformControls.detach();
+    this.disposeMesh(mesh);
+    this.objectGroup.remove(mesh);
+
+    const cleanData: SceneObjectData = {
+      ...data,
+      csgOperations: undefined,
+    };
+    const cleanMesh = this.buildMeshFromData(cleanData);
+    this.objectGroup.add(cleanMesh);
+    this.meshMap.set(id, cleanMesh);
+
+    this.updateSeamlessTouchFaces();
+    this.reattachTransformAfterSelectionChange();
+    this.pushHistorySnapshot();
+    this.emitState();
+    return true;
+  }
+
+  /**
+   * Spawns a new bespoke 2D-to-3D Lathe or Extrude object OR updates an existing custom-profile object in place!
+   */
+  public spawnOrUpdateCustomProfile(
+    profile: CustomProfileData,
+    targetId?: string | null,
+    customName?: string
+  ): string {
+    if (targetId && this.meshMap.has(targetId)) {
+      const prevData = this.serializeObject(targetId)!;
+      const oldMesh = this.meshMap.get(targetId)!;
+      this.transformControls.detach();
+      this.disposeMesh(oldMesh);
+      this.objectGroup.remove(oldMesh);
+
+      const updated: SceneObjectData = {
+        ...prevData,
+        name: customName?.trim() || prevData.name,
+        customProfile: cloneCustomProfileData(profile),
+      };
+      const nextMesh = this.buildMeshFromData(updated);
+      this.objectGroup.add(nextMesh);
+      this.meshMap.set(targetId, nextMesh);
+      this.selectObject(targetId, false);
+      this.pushHistorySnapshot();
+      this.emitState();
+      return targetId;
+    }
+
+    const [sx, sz] = this.findCleanSpawnXZ(0.8);
+    const groundY = this.gridSystem.sampleHeight(sx, sz);
+    const id = `profile-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const defaultLabel =
+      customName?.trim() ||
+      (profile.mode === 'lathe' ? 'Profil Bubut 360°' : 'Profil Extrude 3D');
+
+    const newData: SceneObjectData = {
+      id,
+      name: defaultLabel,
+      kind: profile.mode === 'lathe' ? 'cylinder' : 'cube',
+      position: { x: round3(sx), y: round3(groundY + 0.5), z: round3(sz) },
+      rotation: { x: 0, y: 0, z: 0 },
+      scale: { x: 1, y: 1, z: 1 },
+      color: '#d6c7b2',
+      roughness: 0.48,
+      metalness: 0.08,
+      opacity: 1,
+      emissive: '#000000',
+      emissiveIntensity: 0,
+      flatShading: false,
+      subdivision: { ...DEFAULT_SUBDIVISION_SETTINGS },
+      customProfile: cloneCustomProfileData(profile),
+      visible: true,
+      archRole: 'prop',
+    };
+
+    const mesh = this.buildMeshFromData(newData);
+    this.objectGroup.add(mesh);
+    this.meshMap.set(id, mesh);
+    this.selectObject(id, false);
+    this.pushHistorySnapshot();
+    this.emitState();
+    return id;
   }
 
   private disposeMesh(mesh: THREE.Mesh): void {

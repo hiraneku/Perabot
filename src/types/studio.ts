@@ -112,6 +112,54 @@ export interface GlobalAppSettings {
   orbitSensitivity: number; // 0.5 .. 2.0
   uiDensity: UiDensity;
   lightingMood: LightingMood;
+  touchLoupe?: boolean;
+}
+
+export type ViewportShadingMode = 'shaded' | 'clay' | 'technical';
+
+export interface LiveSectionCutConfig {
+  enabled: boolean;
+  axis: 'x' | 'y' | 'z';
+  position: number; // -20 .. +20 meters
+  flip: boolean;
+}
+
+export const DEFAULT_SECTION_CUT_CONFIG: LiveSectionCutConfig = {
+  enabled: false,
+  axis: 'y',
+  position: 2.2,
+  flip: false,
+};
+
+export type CsgBooleanMode = 'subtract' | 'union' | 'intersect';
+
+export type CustomProfileMode = 'lathe' | 'extrude';
+
+export interface CustomProfileData {
+  mode: CustomProfileMode;
+  points: Array<{ x: number; y: number }>;
+  segments: number; // 12 .. 64 for lathe, curve subdivisions for extrude
+  depth: number; // extrusion thickness when mode === 'extrude'
+  smooth: boolean; // Catmull-Rom spline interpolation
+  hollowThickness?: number; // 0 = solid, 0.02..0.18 = hollow shell for lathe vases/bowls
+}
+
+export interface CsgOperandData {
+  id: string;
+  op: CsgBooleanMode;
+  kind: PrimitiveKind;
+  /** 16-element column-major 4x4 transform of operand in target mesh's local unscaled/unit space */
+  relativeMatrix: number[];
+  subdivision?: ObjectSubdivisionSettings;
+  modifiers?: ObjectModifierSettings;
+  customProfile?: CustomProfileData;
+}
+
+export interface WalkthroughInteractPrompt {
+  kind: 'door' | 'light';
+  id: string;
+  label: string;
+  isOpenOrOn: boolean;
 }
 
 export type ArchitecturalRole = 'wall' | 'floor' | 'roof' | 'opening' | 'prop';
@@ -361,8 +409,10 @@ export type CustomAssetCategory =
   | 'other';
 
 export interface StudioSnapshotOptions {
-  resolution: '1080p' | '2k-square';
+  resolution: '1080p' | '2k-square' | '4k-uhd';
   transparentBg: boolean;
+  twoPointPerspective?: boolean;
+  shadingOverride?: ViewportShadingMode;
 }
 
 export interface ObjectPointLightConfig {
@@ -370,6 +420,10 @@ export interface ObjectPointLightConfig {
   color: string;
   intensity: number; // 0.3 .. 6.0
   distance: number; // 2 .. 20m
+  lightType?: 'point' | 'spot';
+  kelvin?: number; // 2200 .. 6500K
+  coneAngleDeg?: number; // 20 .. 85 deg when lightType === 'spot'
+  autoNightOnly?: boolean;
 }
 
 export type ArchBuildPhase =
@@ -489,6 +543,8 @@ export interface ArchRoomMeta {
   floorPattern?: ProceduralPatternKind;
   floorMaterialId?: string;
   ceilingVisible: boolean;
+  /** Open double-height atrium / mezzanine void (punches floor slab & ceiling below) */
+  isVoid?: boolean;
 }
 
 export interface ArchDetectedRoom {
@@ -505,6 +561,7 @@ export interface ArchDetectedRoom {
   floorPattern?: ProceduralPatternKind;
   floorMaterialId?: string;
   ceilingVisible: boolean;
+  isVoid?: boolean;
 }
 
 export interface ArchStairItem {
@@ -673,11 +730,21 @@ export interface SiteOutdoorZone {
   surfaceMaterialId?: string;
 }
 
+export type SiteShapePreset =
+  | 'rect'
+  | 'trapezoid'
+  | 'hook-corner'
+  | 'l-lot'
+  | 'custom-poly';
+
 export interface SitePlanningData {
   enabled: boolean;
   width: number; // X span in meters (e.g. 15m)
   depth: number; // Z span in meters (e.g. 20m)
-  center: Vec2XZ; // World XZ center of the rectangular site plot
+  center: Vec2XZ; // World XZ center of the site plot
+  shapePreset?: SiteShapePreset;
+  /** Optional custom non-rectangular parcel vertices in world XZ (CW or CCW) */
+  polygon?: Vec2XZ[];
   setbacksEnabled: boolean;
   setbacks: SiteSetbacks;
   entranceSide: SiteEdgeSide;
@@ -730,6 +797,7 @@ export type ArchDocumentKind =
   | 'floor-plan'
   | 'site-plan'
   | 'elevation'
+  | 'section'
   | 'door-window-schedule'
   | 'material-report'
   | 'validation-report';
@@ -739,6 +807,8 @@ export type ElevationViewDirection = 'front' | 'rear' | 'left' | 'right';
 export interface DocumentationExportSettings {
   selectedDocKind: ArchDocumentKind;
   elevationDirection: ElevationViewDirection;
+  sectionAxis?: 'x' | 'z';
+  sectionOffset?: number;
   showDimensions: boolean;
   showRoomLabels: boolean;
   showSetbacks: boolean;
@@ -813,8 +883,12 @@ export interface SceneObjectData {
   flatShading: boolean;
   proceduralPattern?: ProceduralPatternKind;
   patternScale?: number;
+  patternRotationDeg?: number;
+  patternWorldScale?: boolean;
   subdivision: ObjectSubdivisionSettings;
   modifiers?: ObjectModifierSettings;
+  csgOperations?: CsgOperandData[];
+  customProfile?: CustomProfileData;
   visible: boolean;
   locked?: boolean;
   groupId?: string | null;
@@ -915,8 +989,12 @@ export interface CustomAssetPart {
   flatShading: boolean;
   proceduralPattern?: ProceduralPatternKind;
   patternScale?: number;
+  patternRotationDeg?: number;
+  patternWorldScale?: boolean;
   subdivision: ObjectSubdivisionSettings;
   modifiers?: ObjectModifierSettings;
+  csgOperations?: CsgOperandData[];
+  customProfile?: CustomProfileData;
   pointLight?: ObjectPointLightConfig;
   archRole?: ArchitecturalRole;
   modelAssetId?: string;
@@ -930,6 +1008,7 @@ export interface CustomAssetRecord {
   name: string;
   category?: CustomAssetCategory;
   thumbnailDataUrl: string;
+  dimensions?: Vec3; // Physical bounding box (W x H x D in meters)
   createdAt: number;
   updatedAt?: number;
   parts: CustomAssetPart[];
@@ -953,6 +1032,7 @@ export const DEFAULT_GLOBAL_SETTINGS: GlobalAppSettings = {
   orbitSensitivity: 1.0,
   uiDensity: 'comfortable',
   lightingMood: 'morning',
+  touchLoupe: true,
 };
 
 export const STUDIO_THEMES: Array<{
@@ -1166,6 +1246,7 @@ export function createDefaultSitePlanningData(): SitePlanningData {
     width: 15,
     depth: 20,
     center: { x: 0, z: 0 },
+    shapePreset: 'rect',
     setbacksEnabled: true,
     setbacks: {
       front: 3.0,
@@ -1183,6 +1264,8 @@ export function createDefaultDocSettings(): DocumentationExportSettings {
   return {
     selectedDocKind: 'floor-plan',
     elevationDirection: 'front',
+    sectionAxis: 'x',
+    sectionOffset: 0,
     showDimensions: true,
     showRoomLabels: true,
     showSetbacks: true,

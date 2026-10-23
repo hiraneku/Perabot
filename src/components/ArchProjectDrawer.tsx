@@ -59,6 +59,7 @@ import {
   SiteEdgeSide,
   SiteOutdoorZone,
   SitePlanningData,
+  SiteShapePreset,
   ValidationAutoFixAction,
   ValidationCategory,
 } from '../types/studio';
@@ -79,6 +80,11 @@ import {
   getMaterialDisplayName,
 } from '../engine/archAnalysis/materialTakeoff';
 import {
+  computePolygonAreaXZ,
+  resolveSiteBoundaryPolygon,
+} from '../engine/archAnalysis/geometryMetrics';
+import {
+  exportBuildingSectionPNG,
   exportElevationDrawingPNG,
   exportFloorBlueprintPNG,
   exportPrintableArchitecturalReportHTML,
@@ -370,6 +376,19 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
         download: false,
       });
       setDocPreviewUrl(url);
+    } else if (kind === 'section') {
+      const url = exportBuildingSectionPNG({
+        projectName,
+        axis: docSettings.sectionAxis ?? 'x',
+        offsetMeters: docSettings.sectionOffset ?? 0,
+        archData: docTarget.archData,
+        floors: docTarget.floors,
+        detectedRooms: docTarget.analysis.detectedRooms,
+        paperTheme: docSettings.paperTheme,
+        sourceLabel: docTarget.label,
+        download: false,
+      });
+      setDocPreviewUrl(url);
     } else {
       setDocPreviewUrl('');
     }
@@ -607,6 +626,18 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
         direction: docSettings.elevationDirection,
         archData: docTarget.archData,
         floors: docTarget.floors,
+        paperTheme: docSettings.paperTheme,
+        sourceLabel: docTarget.label,
+        download: true,
+      });
+    } else if (kind === 'section') {
+      exportBuildingSectionPNG({
+        projectName,
+        axis: docSettings.sectionAxis ?? 'x',
+        offsetMeters: docSettings.sectionOffset ?? 0,
+        archData: docTarget.archData,
+        floors: docTarget.floors,
+        detectedRooms: docTarget.analysis.detectedRooms,
         paperTheme: docSettings.paperTheme,
         sourceLabel: docTarget.label,
         download: true,
@@ -1141,7 +1172,10 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
                 <div className="arch-wf-stat-box">
                   <span>{t.siteAreaSummaryLabel}</span>
                   <strong>
-                    {(site.width * site.depth).toFixed(1)} m²
+                    {computePolygonAreaXZ(resolveSiteBoundaryPolygon(site)).toFixed(
+                      1
+                    )}{' '}
+                    m²
                   </strong>
                 </div>
                 <div className="arch-wf-stat-box">
@@ -1157,9 +1191,46 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
                   <span>{t.siteOpenAreaLabel}</span>
                   <strong>
                     {effectiveAnalysis.siteMetrics.remainingSiteAreaSqm !== null
-                      ? `${effectiveAnalysis.siteMetrics.remainingSiteAreaSqm.toFixed(1)} m²`
+                      ? `${effectiveAnalysis.siteMetrics.remainingSiteAreaSqm.toFixed(
+                          1
+                        )} m²`
                       : '—'}
                   </strong>
+                </div>
+              </div>
+
+              <div className="arch-wf-field" style={{ marginBottom: 8 }}>
+                <span>{t.siteShapeLabel}</span>
+                <div className="arch-wf-chip-wrap" style={{ marginTop: 4 }}>
+                  {(
+                    [
+                      ['rect', t.siteShapeRect],
+                      ['trapezoid', t.siteShapeTrapezoid],
+                      ['hook-corner', t.siteShapeHook],
+                      ['l-lot', t.siteShapeLLot],
+                    ] as Array<[SiteShapePreset, string]>
+                  ).map(([presetId, lbl]) => (
+                    <button
+                      key={presetId}
+                      type="button"
+                      disabled={isReadOnlyInspect}
+                      className={`arch-wf-chip-btn ${
+                        (site.shapePreset ?? 'rect') === presetId
+                          ? 'active'
+                          : ''
+                      }`}
+                      onClick={() =>
+                        onUpdateSite({
+                          ...site,
+                          enabled: true,
+                          shapePreset: presetId,
+                          polygon: undefined,
+                        })
+                      }
+                    >
+                      {lbl}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -2265,6 +2336,7 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
                     ['floor-plan', t.docKindFloorPlan],
                     ['site-plan', t.docKindSitePlan],
                     ['elevation', t.docKindElevation],
+                    ['section', t.docKindSection],
                     ['door-window-schedule', t.docKindSchedule],
                     ['material-report', t.docKindMaterialReport],
                     ['validation-report', t.docKindValidationReport],
@@ -2324,9 +2396,50 @@ export const ArchProjectDrawer: React.FC<ArchProjectDrawerProps> = ({
                   </label>
                 )}
 
+                {docSettings.selectedDocKind === 'section' && (
+                  <>
+                    <label className="arch-wf-field">
+                      <span>Axis</span>
+                      <select
+                        value={docSettings.sectionAxis ?? 'x'}
+                        onChange={(e) =>
+                          onUpdateDocSettings({
+                            ...docSettings,
+                            sectionAxis: e.target.value as 'x' | 'z',
+                          })
+                        }
+                      >
+                        <option value="x">{t.docSectionAxisAA}</option>
+                        <option value="z">{t.docSectionAxisBB}</option>
+                      </select>
+                    </label>
+
+                    <label className="arch-wf-field">
+                      <span>
+                        {t.docSectionOffsetLabel}:{' '}
+                        {(docSettings.sectionOffset ?? 0).toFixed(1)}m
+                      </span>
+                      <input
+                        type="range"
+                        min={-8}
+                        max={8}
+                        step={0.25}
+                        value={docSettings.sectionOffset ?? 0}
+                        onChange={(e) =>
+                          onUpdateDocSettings({
+                            ...docSettings,
+                            sectionOffset: parseFloat(e.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                  </>
+                )}
+
                 {(docSettings.selectedDocKind === 'floor-plan' ||
                   docSettings.selectedDocKind === 'site-plan' ||
-                  docSettings.selectedDocKind === 'elevation') && (
+                  docSettings.selectedDocKind === 'elevation' ||
+                  docSettings.selectedDocKind === 'section') && (
                   <label className="arch-wf-field">
                     <span>Theme</span>
                     <select

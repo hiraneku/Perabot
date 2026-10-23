@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import * as THREE from 'three';
 
 import {
   ArchHouseData,
@@ -7,6 +8,7 @@ import {
   ArchRoofItem,
   ArchWallSegment,
   createDefaultBuildingFloors,
+  createDefaultSitePlanningData,
   createEmptyArchHouseData,
   CURRENT_PROJECT_SCHEMA_VERSION,
   DEFAULT_GRID_SETTINGS,
@@ -16,14 +18,24 @@ import {
 } from '../src/types/studio';
 import { TRANSLATIONS } from '../src/i18n/translations';
 import {
+  ArchBuilderEngine,
   detectAllRoomsAcrossFloors,
   detectClosedRoomsOnFloor,
 } from '../src/engine/ArchBuilderEngine';
+import { performBooleanCSG } from '../src/engine/BooleanCSGEngine';
+import {
+  buildCustomProfileGeometry,
+  PROFILE_STARTER_TEMPLATES,
+} from '../src/engine/CustomProfileEngine';
+import { serializeGroupToOBJString } from '../src/engine/modelExporter';
+import { applyTriplanarWorldSpaceUVs } from '../src/engine/proceduralTextures';
 import {
   calcWallCenterlineLength,
+  computePolygonAreaXZ,
   computeSingleRoofQuantities,
   computeSingleWallQuantities,
   computeSitePlacementMetrics,
+  resolveSiteBoundaryPolygon,
 } from '../src/engine/archAnalysis/geometryMetrics';
 import {
   buildProjectBriefFromTemplate,
@@ -590,5 +602,132 @@ describe('System 6 & Schema Migration / Regressions', () => {
       'Ruang'
     );
     assert.equal(rooms.length, 2);
+  });
+
+  it('9. executes 3D CSG Boolean operations (subtract, union, intersect) deterministically', () => {
+    const targetGeo = new THREE.BoxGeometry(2, 1, 2);
+    const cutterGeo = new THREE.BoxGeometry(1, 2, 1);
+    const identity = new THREE.Matrix4();
+
+    // Subtract central hole
+    const carved = performBooleanCSG(targetGeo, cutterGeo, identity, 'subtract');
+    carved.computeBoundingBox();
+    assert.ok(carved.attributes.position.count >= 24);
+    assert.ok(Math.abs((carved.boundingBox?.max.x ?? 0) - 1) < 1e-4);
+
+    // Union offset box
+    const shiftRight = new THREE.Matrix4().makeTranslation(1.5, 0, 0);
+    const united = performBooleanCSG(targetGeo, cutterGeo, shiftRight, 'union');
+    united.computeBoundingBox();
+    assert.ok(Math.abs((united.boundingBox?.max.x ?? 0) - 2.0) < 1e-4);
+
+    // Intersect overlap
+    const intersected = performBooleanCSG(
+      targetGeo,
+      cutterGeo,
+      identity,
+      'intersect'
+    );
+    intersected.computeBoundingBox();
+    assert.ok(Math.abs((intersected.boundingBox?.max.x ?? 0) - 0.5) < 1e-4);
+    assert.ok(Math.abs((intersected.boundingBox?.max.y ?? 0) - 0.5) < 1e-4);
+  });
+
+  it('10. builds custom 2D-to-3D Lathe & Extrude profiles with outward normals and valid bounds', () => {
+    // Hollow ceramic vase (Lathe)
+    const vaseTpl = PROFILE_STARTER_TEMPLATES.find((t) => t.id === 'ceramic-vase')!;
+    const vaseGeo = buildCustomProfileGeometry(vaseTpl.data);
+    vaseGeo.computeBoundingBox();
+    assert.ok(vaseGeo.attributes.position.count > 100);
+    assert.ok(vaseGeo.attributes.normal.count === vaseGeo.attributes.position.count);
+    assert.ok((vaseGeo.boundingBox?.max.y ?? 0) > 0.35);
+
+    // Crown molding (Linear Extrude)
+    const moldTpl = PROFILE_STARTER_TEMPLATES.find((t) => t.id === 'crown-molding')!;
+    const moldGeo = buildCustomProfileGeometry(moldTpl.data);
+    moldGeo.computeBoundingBox();
+    const depthSpan =
+      (moldGeo.boundingBox?.max.z ?? 0) - (moldGeo.boundingBox?.min.z ?? 0);
+    assert.ok(Math.abs(depthSpan - moldTpl.data.depth) < 1e-3);
+  });
+
+  it('11. projects physical world-space UVs without stretching and exports valid Wavefront .OBJ', () => {
+    const plank = new THREE.BoxGeometry(1, 1, 1);
+    applyTriplanarWorldSpaceUVs(plank, new THREE.Vector3(4, 0.2, 1), 1.0);
+    const uv = plank.getAttribute('uv');
+    let maxU = -Infinity;
+    let minU = Infinity;
+    for (let i = 0; i < uv.count; i++) {
+      maxU = Math.max(maxU, uv.getX(i));
+      minU = Math.min(minU, uv.getX(i));
+    }
+    // 4m wide plank should span 4.0 UV units instead of 1.0!
+    assert.ok(Math.abs(maxU - minU - 4.0) < 1e-3);
+
+    const grp = new THREE.Group();
+    const m = new THREE.Mesh(plank, new THREE.MeshStandardMaterial());
+    m.name = 'Papan Kayu Jati';
+    grp.add(m);
+    const objStr = serializeGroupToOBJString(grp);
+    assert.ok(objStr.includes('o Papan_Kayu_Jati'));
+    assert.ok(objStr.includes('\nv '));
+    assert.ok(objStr.includes('\nvt '));
+    assert.ok(objStr.includes('\nvn '));
+    assert.ok(objStr.includes('\nf '));
+  });
+
+  it('12. resolves polygon site parcels, multi-wing L-shaped Auto-Roof, and void room preservation', () => {
+    const baseSite = createDefaultSitePlanningData();
+    assert.equal(
+      Math.round(computePolygonAreaXZ(resolveSiteBoundaryPolygon(baseSite))),
+      Math.round(baseSite.width * baseSite.depth)
+    );
+
+    const trapArea = computePolygonAreaXZ(
+      resolveSiteBoundaryPolygon({ ...baseSite, shapePreset: 'trapezoid' })
+    );
+    const lLotArea = computePolygonAreaXZ(
+      resolveSiteBoundaryPolygon({ ...baseSite, shapePreset: 'l-lot' })
+    );
+    assert.ok(trapArea > 0 && trapArea < baseSite.width * baseSite.depth);
+    assert.ok(lLotArea > 0 && lLotArea < baseSite.width * baseSite.depth);
+
+    // Multi-wing Auto-Roof on L-shaped house + stairwell/void room preservation
+    const floors = createDefaultBuildingFloors('id');
+    floors.push({
+      id: 'floor_2',
+      name: 'Lantai 2',
+      elevation: 3,
+      height: 3,
+      visible: true,
+    });
+    const lHouse = createEmptyArchHouseData();
+    // L-shaped perimeter on floor_1: (0,0)->(8,0)->(8,4)->(4,4)->(4,8)->(0,8)->(0,0)
+    lHouse.walls = [
+      makeWall('lw1', { x: 0, z: 0 }, { x: 8, z: 0 }),
+      makeWall('lw2', { x: 8, z: 0 }, { x: 8, z: 4 }),
+      makeWall('lw3', { x: 8, z: 4 }, { x: 4, z: 4 }),
+      makeWall('lw4', { x: 4, z: 4 }, { x: 4, z: 8 }),
+      makeWall('lw5', { x: 4, z: 8 }, { x: 0, z: 8 }),
+      makeWall('lw6', { x: 0, z: 8 }, { x: 0, z: 0 }),
+    ];
+    lHouse.roomMetas = [
+      {
+        id: 'rm_void_test',
+        floorId: 'floor_2',
+        centroid: { x: 2, z: 2 },
+        name: 'Void Mezzanine',
+        roomType: 'living',
+        floorColor: '#cbd5e1',
+        ceilingVisible: true,
+        isVoid: true,
+      },
+    ];
+    const eng = new ArchBuilderEngine(lHouse);
+    const roof = eng.generateAutoRoof(floors, 'floor_1', 'gable', 'Atap L');
+    assert.ok(roof !== null);
+    // L-shape decomposes into >= 2 roof wings instead of 1 giant bounding box!
+    assert.ok(eng.getData().roofs.length >= 2);
+    assert.equal(eng.getData().roomMetas[0].isVoid, true);
   });
 });

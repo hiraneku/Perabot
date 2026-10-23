@@ -357,9 +357,111 @@ export interface SitePlacementMetrics {
 }
 
 /**
- * Computes the building footprint envelope in World XZ meters and compares it against the
- * rectangular Site Definition (`+Z = Front`, `-Z = Rear`, `-X = Left`, `+X = Right`).
+ * Resolves the world XZ boundary polygon for any site shape preset (`rect`, `trapezoid`, `hook-corner`, `l-lot`, `custom-poly`).
  */
+export function resolveSiteBoundaryPolygon(site: SitePlanningData): Vec2XZ[] {
+  const sw = Math.max(1, site.width);
+  const sd = Math.max(1, site.depth);
+  const cx = site.center.x;
+  const cz = site.center.z;
+  const hx = sw * 0.5;
+  const hz = sd * 0.5;
+
+  const preset = site.shapePreset ?? 'rect';
+  if (preset === 'custom-poly' && site.polygon && site.polygon.length >= 3) {
+    return site.polygon.map((p) => ({ x: round3(p.x), z: round3(p.z) }));
+  }
+
+  if (preset === 'trapezoid') {
+    // Narrower rear (-Z = 68% width) flaring out to full street frontage (+Z = 100% width)
+    const rearHx = hx * 0.68;
+    return [
+      { x: round3(cx - rearHx), z: round3(cz - hz) },
+      { x: round3(cx + rearHx), z: round3(cz - hz) },
+      { x: round3(cx + hx), z: round3(cz + hz) },
+      { x: round3(cx - hx), z: round3(cz + hz) },
+    ];
+  }
+
+  if (preset === 'hook-corner') {
+    // Corner / Hook parcel with 45-deg street visibility chamfer on Front-Right (+X, +Z)
+    const cutX = Math.min(hx * 0.55, 3.5);
+    const cutZ = Math.min(hz * 0.55, 3.5);
+    return [
+      { x: round3(cx - hx), z: round3(cz - hz) },
+      { x: round3(cx + hx), z: round3(cz - hz) },
+      { x: round3(cx + hx), z: round3(cz + hz - cutZ) },
+      { x: round3(cx + hx - cutX), z: round3(cz + hz) },
+      { x: round3(cx - hx), z: round3(cz + hz) },
+    ];
+  }
+
+  if (preset === 'l-lot') {
+    // L-shaped residential parcel
+    return [
+      { x: round3(cx - hx), z: round3(cz - hz) },
+      { x: round3(cx + hx * 0.25), z: round3(cz - hz) },
+      { x: round3(cx + hx * 0.25), z: round3(cz - hz * 0.1) },
+      { x: round3(cx + hx), z: round3(cz - hz * 0.1) },
+      { x: round3(cx + hx), z: round3(cz + hz) },
+      { x: round3(cx - hx), z: round3(cz + hz) },
+    ];
+  }
+
+  return [
+    { x: round3(cx - hx), z: round3(cz - hz) },
+    { x: round3(cx + hx), z: round3(cz - hz) },
+    { x: round3(cx + hx), z: round3(cz + hz) },
+    { x: round3(cx - hx), z: round3(cz + hz) },
+  ];
+}
+
+export function computePolygonAreaXZ(poly: Vec2XZ[]): number {
+  if (poly.length < 3) return 0;
+  let sum = 0;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    sum += a.x * b.z - b.x * a.z;
+  }
+  return Math.abs(sum) * 0.5;
+}
+
+function isPointInsideOrOnPolygonXZ(
+  px: number,
+  pz: number,
+  poly: Vec2XZ[],
+  eps = 0.025
+): boolean {
+  // Check distance to boundary edges first (tolerance eps)
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const lenSq = dx * dx + dz * dz;
+    const t =
+      lenSq > 1e-8
+        ? Math.max(0, Math.min(1, ((px - a.x) * dx + (pz - a.z) * dz) / lenSq))
+        : 0;
+    const cx = a.x + dx * t;
+    const cz = a.z + dz * t;
+    if (Math.hypot(px - cx, pz - cz) <= eps) return true;
+  }
+
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x,
+      zi = poly[i].z;
+    const xj = poly[j].x,
+      zj = poly[j].z;
+    const intersect =
+      zi > pz !== zj > pz &&
+      px < ((xj - xi) * (pz - zi)) / (zj - zi + 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
 export function computeSitePlacementMetrics(
   archData: ArchHouseData,
   objects: SceneObjectData[],
@@ -460,9 +562,10 @@ export function computeSitePlacementMetrics(
       };
 
   if (!site || !site.enabled) {
+    const disabledPoly = site ? resolveSiteBoundaryPolygon(site) : [];
     return {
       siteEnabled: false,
-      siteAreaSqm: site ? round3(Math.max(1, site.width) * Math.max(1, site.depth)) : 0,
+      siteAreaSqm: site ? round3(computePolygonAreaXZ(disabledPoly)) : 0,
       footprint,
       remainingSiteAreaSqm: null,
       distancesToBoundary: {
@@ -482,13 +585,18 @@ export function computeSitePlacementMetrics(
     };
   }
 
-  const sw = Math.max(1, site.width);
-  const sd = Math.max(1, site.depth);
-  const siteAreaSqm = round3(sw * sd);
-  const siteMinX = site.center.x - sw * 0.5;
-  const siteMaxX = site.center.x + sw * 0.5;
-  const siteMinZ = site.center.z - sd * 0.5; // Rear (-Z)
-  const siteMaxZ = site.center.z + sd * 0.5; // Front (+Z)
+  const sitePoly = resolveSiteBoundaryPolygon(site);
+  const siteAreaSqm = round3(computePolygonAreaXZ(sitePoly));
+  let siteMinX = Infinity;
+  let siteMaxX = -Infinity;
+  let siteMinZ = Infinity;
+  let siteMaxZ = -Infinity;
+  for (const p of sitePoly) {
+    siteMinX = Math.min(siteMinX, p.x);
+    siteMaxX = Math.max(siteMaxX, p.x);
+    siteMinZ = Math.min(siteMinZ, p.z);
+    siteMaxZ = Math.max(siteMaxZ, p.z);
+  }
 
   if (!hasBuilding) {
     return {
@@ -518,8 +626,19 @@ export function computeSitePlacementMetrics(
   const distLeft = round3(footprint.minX - siteMinX);
   const distRight = round3(siteMaxX - footprint.maxX);
 
+  const isNonRect = (site.shapePreset ?? 'rect') !== 'rect';
+  const cornersInside = isNonRect
+    ? [
+        { x: footprint.minX, z: footprint.minZ },
+        { x: footprint.maxX, z: footprint.minZ },
+        { x: footprint.maxX, z: footprint.maxZ },
+        { x: footprint.minX, z: footprint.maxZ },
+      ].every((c) => isPointInsideOrOnPolygonXZ(c.x, c.z, sitePoly))
+    : true;
+
   const EPS = -0.02;
   const withinSiteBoundary =
+    cornersInside &&
     distFront >= EPS &&
     distRear >= EPS &&
     distLeft >= EPS &&

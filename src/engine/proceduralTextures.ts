@@ -207,7 +207,8 @@ export function applyProceduralPatternToMaterial(
   mat: THREE.MeshStandardMaterial,
   kind: ProceduralPatternKind | undefined,
   repeatU = 2,
-  repeatV = 2
+  repeatV = 2,
+  rotationDeg = 0
 ): void {
   const disposeOldTex = () => {
     if (mat.map && mat.map.userData?.isProceduralPattern) {
@@ -232,16 +233,22 @@ export function applyProceduralPatternToMaterial(
 
   disposeOldTex();
 
+  const rad = THREE.MathUtils.degToRad(rotationDeg || 0);
+
   const mapTex = new THREE.CanvasTexture(entry.albedoSource);
   mapTex.colorSpace = THREE.SRGBColorSpace;
   mapTex.wrapS = THREE.RepeatWrapping;
   mapTex.wrapT = THREE.RepeatWrapping;
+  mapTex.center.set(0.5, 0.5);
+  mapTex.rotation = rad;
   mapTex.repeat.set(Math.max(0.25, repeatU), Math.max(0.25, repeatV));
   mapTex.userData = { isProceduralPattern: true, kind };
 
   const bumpTex = new THREE.CanvasTexture(entry.bumpSource);
   bumpTex.wrapS = THREE.RepeatWrapping;
   bumpTex.wrapT = THREE.RepeatWrapping;
+  bumpTex.center.set(0.5, 0.5);
+  bumpTex.rotation = rad;
   bumpTex.repeat.set(Math.max(0.25, repeatU), Math.max(0.25, repeatV));
   bumpTex.userData = { isProceduralPattern: true, kind };
 
@@ -254,4 +261,60 @@ export function applyProceduralPatternToMaterial(
       ? 0.024
       : 0.018;
   mat.needsUpdate = true;
+}
+
+/**
+ * Re-projects a mesh's UV coordinates in physical World Meters using dominant-normal box/triplanar projection
+ * so stretching a table/beam/wall to `4.0m x 0.1m` NEVER stretches wood grain, ceramic tiles, or bricks!
+ */
+export function applyTriplanarWorldSpaceUVs(
+  geometry: THREE.BufferGeometry,
+  scale: { x: number; y: number; z: number },
+  metersPerTile = 1.0
+): void {
+  const pos = geometry.getAttribute('position');
+  if (!pos || pos.count === 0) return;
+
+  if (!geometry.getAttribute('normal')) {
+    geometry.computeVertexNormals();
+  }
+  const norm = geometry.getAttribute('normal');
+  const invTile = 1 / Math.max(0.1, metersPerTile);
+  const sx = Math.abs(scale.x) || 1;
+  const sy = Math.abs(scale.y) || 1;
+  const sz = Math.abs(scale.z) || 1;
+
+  let uv = geometry.getAttribute('uv') as THREE.BufferAttribute | undefined;
+  if (!uv || uv.count !== pos.count) {
+    uv = new THREE.BufferAttribute(new Float32Array(pos.count * 2), 2);
+    geometry.setAttribute('uv', uv);
+  }
+
+  for (let i = 0; i < pos.count; i++) {
+    const wx = pos.getX(i) * sx;
+    const wy = pos.getY(i) * sy;
+    const wz = pos.getZ(i) * sz;
+
+    const nx = norm ? Math.abs(norm.getX(i)) : 0;
+    const ny = norm ? Math.abs(norm.getY(i)) : 1;
+    const nz = norm ? Math.abs(norm.getZ(i)) : 0;
+
+    let u = 0;
+    let v = 0;
+    if (ny >= nx && ny >= nz) {
+      // Top / Bottom face -> project XZ
+      u = wx * invTile;
+      v = wz * invTile;
+    } else if (nx >= ny && nx >= nz) {
+      // Left / Right face -> project ZY
+      u = wz * invTile;
+      v = wy * invTile;
+    } else {
+      // Front / Back face -> project XY
+      u = wx * invTile;
+      v = wy * invTile;
+    }
+    uv.setXY(i, u, v);
+  }
+  uv.needsUpdate = true;
 }

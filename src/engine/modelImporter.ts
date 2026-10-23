@@ -1,9 +1,5 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
-import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import {
   getImportedModelBlob,
@@ -77,6 +73,9 @@ async function parseRaw3DFileToObject(
   }
 
   if (ext === 'obj') {
+    const { OBJLoader } = await import(
+      'three/examples/jsm/loaders/OBJLoader.js'
+    );
     const text = new TextDecoder('utf-8').decode(buffer);
     const loader = new OBJLoader();
     const obj = loader.parse(text);
@@ -97,6 +96,9 @@ async function parseRaw3DFileToObject(
   }
 
   if (ext === 'stl') {
+    const { STLLoader } = await import(
+      'three/examples/jsm/loaders/STLLoader.js'
+    );
     const loader = new STLLoader();
     const geo = loader.parse(buffer);
     if (!geo.getAttribute('normal')) {
@@ -111,6 +113,9 @@ async function parseRaw3DFileToObject(
   }
 
   if (ext === 'ply') {
+    const { PLYLoader } = await import(
+      'three/examples/jsm/loaders/PLYLoader.js'
+    );
     const loader = new PLYLoader();
     const geo = loader.parse(buffer);
     if (!geo.getAttribute('normal')) {
@@ -127,6 +132,9 @@ async function parseRaw3DFileToObject(
   }
 
   if (ext === 'fbx') {
+    const { FBXLoader } = await import(
+      'three/examples/jsm/loaders/FBXLoader.js'
+    );
     const loader = new FBXLoader();
     return loader.parse(buffer, '');
   }

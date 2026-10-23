@@ -28,6 +28,10 @@ import {
   Unlock,
   Ruler,
   AlignHorizontalJustifyCenter,
+  Search,
+  ChevronDown,
+  Folder,
+  Scissors,
 } from 'lucide-react';
 import { getLocalizedShapeMeta } from '../i18n/shapeTranslations';
 import { TRANSLATIONS } from '../i18n/translations';
@@ -36,6 +40,7 @@ import {
   AppLanguage,
   BuildingFloorLayer,
   ConstructionMaterialDef,
+  CsgBooleanMode,
   DEFAULT_MODIFIER_SETTINGS,
   DEFAULT_SUBDIVISION_SETTINGS,
   isModifierActive,
@@ -157,7 +162,10 @@ interface InspectorPanelProps {
   onToggleEditSinglePart: (enabled: boolean) => void;
   onGroupSceneObjects: () => void;
   onUngroupSelected: () => void;
-  onSaveAsCustomAsset: (customName?: string) => void;
+  onSaveAsCustomAsset: (customName?: string, bundleAll?: boolean) => void;
+  onApplyBooleanCSG?: (mode: CsgBooleanMode) => void;
+  onClearObjectCSG?: (id: string) => void;
+  onOpenCustomProfileModal?: (editSelected?: boolean) => void;
   onUpdateTransform: (
     id: string,
     patch: Partial<{ position: Vec3; rotation: Vec3; scale: Vec3 }>
@@ -169,6 +177,8 @@ interface InspectorPanelProps {
       visible?: boolean;
       proceduralPattern?: ProceduralPatternKind;
       patternScale?: number;
+      patternRotationDeg?: number;
+      patternWorldScale?: boolean;
     },
     commitHistory?: boolean
   ) => void;
@@ -235,6 +245,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onGroupSceneObjects,
   onUngroupSelected,
   onSaveAsCustomAsset,
+  onApplyBooleanCSG,
+  onClearObjectCSG,
+  onOpenCustomProfileModal,
   onUpdateTransform,
   onUpdateMaterial,
   onUpdateSubdivision,
@@ -264,6 +277,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   );
   const [uniformScale, setUniformScale] = useState(false);
   const [lockExactDims, setLockExactDims] = useState(false);
+  const [outlinerQuery, setOutlinerQuery] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
+    {}
+  );
 
   const selected = objects.find((o) => o.id === selectedId) ?? null;
 
@@ -392,121 +409,260 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </div>
 
           {objects.length > 0 && (
-            <div className="outliner-group-bar">
-              {objects.length >= 2 && (
-                <button
-                  type="button"
-                  className="outliner-mini-btn"
-                  onClick={onGroupSceneObjects}
-                  title={t.groupAction}
-                >
-                  <Boxes size={12} />
-                  <span>{t.groupAction}</span>
-                </button>
-              )}
-              <button
-                type="button"
-                className="outliner-mini-btn accent"
-                onClick={() => onSaveAsCustomAsset()}
-                title={t.saveToAssets}
-              >
-                <Sparkles size={12} />
-                <span>{t.saveToAssets}</span>
-              </button>
-            </div>
+            <>
+              <div className="outliner-search-box">
+                <Search size={13} className="outliner-search-icon" />
+                <input
+                  type="text"
+                  value={outlinerQuery}
+                  onChange={(e) => setOutlinerQuery(e.target.value)}
+                  placeholder={t.outlinerSearchPlaceholder}
+                />
+                {outlinerQuery && (
+                  <button
+                    type="button"
+                    className="tiny-icon-btn"
+                    onClick={() => setOutlinerQuery('')}
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
+
+              <div className="outliner-group-bar">
+                {objects.length >= 2 && (
+                  <button
+                    type="button"
+                    className="outliner-mini-btn"
+                    onClick={onGroupSceneObjects}
+                    title={t.groupAction}
+                  >
+                    <Boxes size={12} />
+                    <span>{t.groupAction}</span>
+                  </button>
+                )}
+                {selectedIds.length > 0 ? (
+                  <button
+                    type="button"
+                    className="outliner-mini-btn accent"
+                    onClick={() => onSaveAsCustomAsset(undefined, false)}
+                    title={t.saveToAssets}
+                  >
+                    <Sparkles size={12} />
+                    <span>{t.saveToAssets}</span>
+                  </button>
+                ) : (
+                  studioMode === 'modeling' && (
+                    <button
+                      type="button"
+                      className="outliner-mini-btn accent"
+                      onClick={() => onSaveAsCustomAsset(undefined, true)}
+                      title={t.saveWholeScenePrefabBtn}
+                    >
+                      <Sparkles size={12} />
+                      <span>{t.saveWholeScenePrefabBtn}</span>
+                    </button>
+                  )
+                )}
+              </div>
+            </>
           )}
 
           {objects.length === 0 ? (
             <div className="empty-box">{t.emptyOutlinerHint}</div>
           ) : (
             <div className="outliner-list">
-              {objects.map((obj) => {
-                const isSelected =
-                  obj.id === selectedId || selectedIds.includes(obj.id);
-                const isGrouped = Boolean(obj.groupId);
-                return (
-                  <div
-                    key={obj.id}
-                    className={`outliner-row ${isSelected ? 'selected' : ''}`}
-                    onClick={(e) => {
-                      if (e.shiftKey || e.ctrlKey || e.metaKey) {
-                        onToggleSelectObject(obj.id);
-                      } else {
-                        onSelectObject(obj.id);
-                      }
-                      if (isMobileDrawer) setMobileSection('inspector');
-                    }}
-                  >
-                    <span
-                      className="swatch-dot"
-                      style={{ backgroundColor: obj.color }}
-                    />
-                    <span className="kind-icon">{renderKindIcon(obj.kind)}</span>
-                    <span className="outliner-name">
-                      {obj.name}
-                      {isGrouped && (
-                        <span className="group-tag-badge">GRP</span>
-                      )}
-                      {obj.modelAssetId && (
-                        <span className="group-tag-badge">3D</span>
-                      )}
-                      {obj.locked && (
-                        <span className="group-tag-badge locked">LOCK</span>
-                      )}
-                      {obj.subdivision &&
-                        isSubdivisionActive(obj.subdivision) && (
-                          <span className="subdiv-mini-tag">
-                            {obj.subdivision.cutsX}×{obj.subdivision.cutsY}×
-                            {obj.subdivision.cutsZ}
-                          </span>
-                        )}
-                    </span>
+              {(() => {
+                const q = outlinerQuery.trim().toLowerCase();
+                const filtered = q
+                  ? objects.filter(
+                      (o) =>
+                        o.name.toLowerCase().includes(q) ||
+                        (o.groupId && o.groupId.toLowerCase().includes(q))
+                    )
+                  : objects;
 
+                const renderedGroupHeaders = new Set<string>();
+                const rows: React.ReactNode[] = [];
+
+                for (const obj of filtered) {
+                  const gid = obj.groupId;
+                  if (gid && !q && !renderedGroupHeaders.has(gid)) {
+                    renderedGroupHeaders.add(gid);
+                    const members = filtered.filter((m) => m.groupId === gid);
+                    if (members.length >= 2) {
+                      const isCollapsed = Boolean(collapsedGroups[gid]);
+                      const allVisible = members.every((m) => m.visible);
+                      const groupSelected = members.some(
+                        (m) => m.id === selectedId || selectedIds.includes(m.id)
+                      );
+                      rows.push(
+                        <div
+                          key={`grp-hdr-${gid}`}
+                          className={`outliner-folder-row ${
+                            groupSelected ? 'selected' : ''
+                          }`}
+                          onClick={() => {
+                            onSelectObject(members[0].id);
+                            if (isMobileDrawer) setMobileSection('inspector');
+                          }}
+                        >
+                          <button
+                            type="button"
+                            className="tiny-icon-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCollapsedGroups((prev) => ({
+                                ...prev,
+                                [gid]: !prev[gid],
+                              }));
+                            }}
+                          >
+                            {isCollapsed ? (
+                              <ChevronRight size={13} />
+                            ) : (
+                              <ChevronDown size={13} />
+                            )}
+                          </button>
+                          <Folder size={13} className="outliner-folder-icon" />
+                          <span className="outliner-name">
+                            {t.outlinerFolderBadge} ({members.length})
+                          </span>
+                          <div
+                            className="outliner-actions"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              className="tiny-icon-btn"
+                              onClick={() => {
+                                for (const m of members) {
+                                  onUpdateMaterial(m.id, {
+                                    visible: !allVisible,
+                                  });
+                                }
+                              }}
+                            >
+                              {allVisible ? (
+                                <Eye size={13} />
+                              ) : (
+                                <EyeOff size={13} />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    }
+                  }
+
+                  if (gid && !q && collapsedGroups[gid]) {
+                    const countInGrp = filtered.filter(
+                      (m) => m.groupId === gid
+                    ).length;
+                    if (countInGrp >= 2) continue;
+                  }
+
+                  const isSelected =
+                    obj.id === selectedId || selectedIds.includes(obj.id);
+                  const isGrouped = Boolean(obj.groupId);
+                  rows.push(
                     <div
-                      className="outliner-actions"
-                      onClick={(e) => e.stopPropagation()}
+                      key={obj.id}
+                      className={`outliner-row ${isSelected ? 'selected' : ''} ${
+                        isGrouped && !q ? 'indented' : ''
+                      }`}
+                      onClick={(e) => {
+                        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                          onToggleSelectObject(obj.id);
+                        } else {
+                          onSelectObject(obj.id);
+                        }
+                        if (isMobileDrawer) setMobileSection('inspector');
+                      }}
                     >
-                      {onToggleObjectLock && (
+                      <span
+                        className="swatch-dot"
+                        style={{ backgroundColor: obj.color }}
+                      />
+                      <span className="kind-icon">{renderKindIcon(obj.kind)}</span>
+                      <span className="outliner-name">
+                        {obj.name}
+                        {isGrouped && (
+                          <span className="group-tag-badge">GRP</span>
+                        )}
+                        {obj.csgOperations && obj.csgOperations.length > 0 && (
+                          <span className="group-tag-badge">CSG</span>
+                        )}
+                        {obj.customProfile && (
+                          <span className="group-tag-badge">2D→3D</span>
+                        )}
+                        {obj.modelAssetId && (
+                          <span className="group-tag-badge">3D</span>
+                        )}
+                        {obj.locked && (
+                          <span className="group-tag-badge locked">LOCK</span>
+                        )}
+                        {obj.subdivision &&
+                          isSubdivisionActive(obj.subdivision) && (
+                            <span className="subdiv-mini-tag">
+                              {obj.subdivision.cutsX}×{obj.subdivision.cutsY}×
+                              {obj.subdivision.cutsZ}
+                            </span>
+                          )}
+                      </span>
+
+                      <div
+                        className="outliner-actions"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {onToggleObjectLock && (
+                          <button
+                            type="button"
+                            className={`tiny-icon-btn ${
+                              obj.locked ? 'active' : ''
+                            }`}
+                            title={
+                              obj.locked ? t.unlockObjectTip : t.lockObjectTip
+                            }
+                            onClick={() => onToggleObjectLock(obj.id)}
+                          >
+                            {obj.locked ? (
+                              <Lock size={13} />
+                            ) : (
+                              <Unlock size={13} />
+                            )}
+                          </button>
+                        )}
                         <button
                           type="button"
-                          className={`tiny-icon-btn ${obj.locked ? 'active' : ''}`}
-                          title={obj.locked ? t.unlockObjectTip : t.lockObjectTip}
-                          onClick={() => onToggleObjectLock(obj.id)}
+                          className="tiny-icon-btn"
+                          title={obj.visible ? t.hideObject : t.showObject}
+                          onClick={() =>
+                            onUpdateMaterial(obj.id, { visible: !obj.visible })
+                          }
                         >
-                          {obj.locked ? (
-                            <Lock size={13} />
+                          {obj.visible ? (
+                            <Eye size={13} />
                           ) : (
-                            <Unlock size={13} />
+                            <EyeOff size={13} />
                           )}
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        className="tiny-icon-btn"
-                        title={obj.visible ? t.hideObject : t.showObject}
-                        onClick={() =>
-                          onUpdateMaterial(obj.id, { visible: !obj.visible })
-                        }
-                      >
-                        {obj.visible ? (
-                          <Eye size={13} />
-                        ) : (
-                          <EyeOff size={13} />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        className="tiny-icon-btn danger"
-                        title={t.delete}
-                        disabled={Boolean(obj.locked)}
-                        onClick={() => onDeleteObject(obj.id)}
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                        <button
+                          type="button"
+                          className="tiny-icon-btn danger"
+                          title={t.delete}
+                          disabled={Boolean(obj.locked)}
+                          onClick={() => onDeleteObject(obj.id)}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                }
+
+                return rows;
+              })()}
             </div>
           )}
         </section>
@@ -722,6 +878,40 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         </button>
                       </>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* True 3D CSG Boolean Operations (Target A + Cutter B) */}
+              {onApplyBooleanCSG && (
+                <div className="align-distribute-box" style={{ marginTop: 8 }}>
+                  <div className="align-distribute-head">
+                    <Scissors size={13} />
+                    <span>{t.csgCardTitle}</span>
+                  </div>
+                  <p className="csg-helper-note">{t.csgCardHint}</p>
+                  <div className="csg-action-row">
+                    <button
+                      type="button"
+                      className="align-chip-btn accent"
+                      onClick={() => onApplyBooleanCSG('subtract')}
+                    >
+                      {t.csgSubtractBtn}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onApplyBooleanCSG('union')}
+                    >
+                      {t.csgUnionBtn}
+                    </button>
+                    <button
+                      type="button"
+                      className="align-chip-btn"
+                      onClick={() => onApplyBooleanCSG('intersect')}
+                    >
+                      {t.csgIntersectBtn}
+                    </button>
                   </div>
                 </div>
               )}
@@ -1204,6 +1394,79 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
                   {selected.pointLight?.enabled && (
                     <div className="point-light-controls">
+                      <div className="segmented-tabs" style={{ marginBottom: 8 }}>
+                        <button
+                          type="button"
+                          className={`seg-btn ${
+                            (selected.pointLight.lightType ?? 'point') ===
+                            'point'
+                              ? 'active'
+                              : ''
+                          }`}
+                          onClick={() =>
+                            onUpdatePointLight(
+                              selected.id,
+                              { lightType: 'point' },
+                              true
+                            )
+                          }
+                        >
+                          {t.lightTypePoint}
+                        </button>
+                        <button
+                          type="button"
+                          className={`seg-btn ${
+                            selected.pointLight.lightType === 'spot'
+                              ? 'active'
+                              : ''
+                          }`}
+                          onClick={() =>
+                            onUpdatePointLight(
+                              selected.id,
+                              {
+                                lightType: 'spot',
+                                coneAngleDeg:
+                                  selected.pointLight?.coneAngleDeg ?? 48,
+                              },
+                              true
+                            )
+                          }
+                        >
+                          {t.lightTypeSpot}
+                        </button>
+                      </div>
+
+                      {selected.pointLight.lightType === 'spot' && (
+                        <div className="arch-slider-group">
+                          <div className="arch-slider-head">
+                            <span>{t.lightConeAngleLabel}</span>
+                            <strong>
+                              {Math.round(
+                                selected.pointLight.coneAngleDeg ?? 48
+                              )}
+                              °
+                            </strong>
+                          </div>
+                          <input
+                            type="range"
+                            min={15}
+                            max={85}
+                            step={1}
+                            value={selected.pointLight.coneAngleDeg ?? 48}
+                            onChange={(e) =>
+                              onUpdatePointLight(
+                                selected.id,
+                                { coneAngleDeg: parseFloat(e.target.value) },
+                                false
+                              )
+                            }
+                            onPointerUp={() =>
+                              onUpdatePointLight(selected.id, {}, true)
+                            }
+                          />
+                        </div>
+                      )}
+
                       <div className="arch-slider-group">
                         <div className="arch-slider-head">
                           <span>{t.pointLightIntensity}</span>
@@ -1262,28 +1525,64 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                         />
                       </div>
 
-                      <div className="arch-swatch-row">
-                        {['#fde68a', '#fef08a', '#fb923c', '#ffffff', '#bae6fd', '#f9a8d4'].map(
-                          (hex) => (
+                      <div className="kelvin-preset-row">
+                        <span className="prop-label">{t.lightKelvinLabel}</span>
+                        <div className="pattern-chip-grid">
+                          {[
+                            { k: 2700, label: '2700K Warm', hex: '#fdba74' },
+                            { k: 3200, label: '3200K Soft', hex: '#fde68a' },
+                            { k: 4000, label: '4000K Neutral', hex: '#fef9c3' },
+                            { k: 6000, label: '6000K Cool', hex: '#e0f2fe' },
+                          ].map((kp) => (
                             <button
-                              key={hex}
+                              key={kp.k}
                               type="button"
-                              className={`arch-color-swatch ${
-                                (selected.pointLight?.color ?? '#fde68a') === hex
+                              className={`pattern-chip-btn ${
+                                selected.pointLight?.kelvin === kp.k
                                   ? 'active'
                                   : ''
                               }`}
-                              style={{ backgroundColor: hex }}
                               onClick={() =>
                                 onUpdatePointLight(
                                   selected.id,
-                                  { color: hex },
+                                  { color: kp.hex, kelvin: kp.k },
                                   true
                                 )
                               }
-                            />
-                          )
-                        )}
+                            >
+                              {kp.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="arch-swatch-row">
+                        {[
+                          '#fde68a',
+                          '#fef08a',
+                          '#fb923c',
+                          '#ffffff',
+                          '#bae6fd',
+                          '#f9a8d4',
+                        ].map((hex) => (
+                          <button
+                            key={hex}
+                            type="button"
+                            className={`arch-color-swatch ${
+                              (selected.pointLight?.color ?? '#fde68a') === hex
+                                ? 'active'
+                                : ''
+                            }`}
+                            style={{ backgroundColor: hex }}
+                            onClick={() =>
+                              onUpdatePointLight(
+                                selected.id,
+                                { color: hex },
+                                true
+                              )
+                            }
+                          />
+                        ))}
                         <input
                           type="color"
                           className="arch-native-color"
@@ -1297,6 +1596,21 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                           }
                         />
                       </div>
+
+                      <label className="arch-wf-checkbox-row" style={{ marginTop: 6 }}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selected.pointLight.autoNightOnly)}
+                          onChange={(e) =>
+                            onUpdatePointLight(
+                              selected.id,
+                              { autoNightOnly: e.target.checked },
+                              true
+                            )
+                          }
+                        />
+                        <span>{t.lightAutoNightLabel}</span>
+                      </label>
                     </div>
                   )}
                 </div>
@@ -1342,29 +1656,76 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     })}
                   </div>
                   {(selected.proceduralPattern ?? 'none') !== 'none' && (
-                    <div className="slider-row" style={{ marginTop: 8 }}>
-                      <div className="slider-head">
-                        <span>{t.patternScaleLabel}</span>
-                        <strong>
-                          {(selected.patternScale ?? 1).toFixed(1)}×
-                        </strong>
+                    <>
+                      <div className="slider-row" style={{ marginTop: 8 }}>
+                        <div className="slider-head">
+                          <span>{t.patternScaleLabel}</span>
+                          <strong>
+                            {(selected.patternScale ?? 1).toFixed(1)}×
+                          </strong>
+                        </div>
+                        <input
+                          type="range"
+                          min={0.4}
+                          max={4.0}
+                          step={0.1}
+                          value={selected.patternScale ?? 1}
+                          onChange={(e) =>
+                            onUpdateMaterial(
+                              selected.id,
+                              { patternScale: parseFloat(e.target.value) },
+                              false
+                            )
+                          }
+                          onPointerUp={onCommitHistory}
+                        />
                       </div>
-                      <input
-                        type="range"
-                        min={0.4}
-                        max={4.0}
-                        step={0.1}
-                        value={selected.patternScale ?? 1}
-                        onChange={(e) =>
-                          onUpdateMaterial(
-                            selected.id,
-                            { patternScale: parseFloat(e.target.value) },
-                            false
-                          )
-                        }
-                        onPointerUp={onCommitHistory}
-                      />
-                    </div>
+
+                      <div className="subdiv-row-head" style={{ marginTop: 8 }}>
+                        <span className="prop-label">{t.patternRotateLabel}</span>
+                      </div>
+                      <div className="pattern-chip-grid">
+                        {[0, 45, 90, 135].map((deg) => (
+                          <button
+                            key={deg}
+                            type="button"
+                            className={`pattern-chip-btn ${
+                              Math.round(selected.patternRotationDeg ?? 0) ===
+                              deg
+                                ? 'active'
+                                : ''
+                            }`}
+                            onClick={() =>
+                              onUpdateMaterial(
+                                selected.id,
+                                { patternRotationDeg: deg },
+                                true
+                              )
+                            }
+                          >
+                            {deg}°
+                          </button>
+                        ))}
+                      </div>
+
+                      <label
+                        className="arch-wf-checkbox-row"
+                        style={{ marginTop: 8 }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected.patternWorldScale !== false}
+                          onChange={(e) =>
+                            onUpdateMaterial(
+                              selected.id,
+                              { patternWorldScale: e.target.checked },
+                              true
+                            )
+                          }
+                        />
+                        <span>{t.worldScaleTexLabel}</span>
+                      </label>
+                    </>
                   )}
                 </div>
               )}
@@ -1385,6 +1746,45 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                       <strong>{t.subdivHeaderTitle}</strong>
                     </div>
                     <p>{t.subdivHeaderDesc}</p>
+                  </div>
+
+                  {/* Custom 2D-to-3D Profile Studio + Non-Destructive CSG Restore */}
+                  <div className="subdiv-block">
+                    {onOpenCustomProfileModal && (
+                      <button
+                        type="button"
+                        className="restore-orig-mat-btn"
+                        style={{ width: '100%', justifyContent: 'center' }}
+                        onClick={() =>
+                          onOpenCustomProfileModal(
+                            Boolean(selected.customProfile)
+                          )
+                        }
+                      >
+                        <RotateCw size={14} />
+                        <span>{t.profileStudioBtn}</span>
+                      </button>
+                    )}
+
+                    {selected.csgOperations &&
+                      selected.csgOperations.length > 0 &&
+                      onClearObjectCSG && (
+                        <button
+                          type="button"
+                          className="restore-orig-mat-btn"
+                          style={{
+                            width: '100%',
+                            justifyContent: 'center',
+                            marginTop: 6,
+                          }}
+                          onClick={() => onClearObjectCSG(selected.id)}
+                        >
+                          <RotateCcw size={14} />
+                          <span>
+                            {t.csgResetBtn} ({selected.csgOperations.length})
+                          </span>
+                        </button>
+                      )}
                   </div>
 
                   {/* Live Subdivision Stats */}

@@ -8912,6 +8912,476 @@ html[data-theme='daylight'] .agb-save-asset-btn {
   }
 }
 
+/* =========================================================
+   Next-Gen Studio Upgrades: Outliner Folders, CSG, 2D->3D Profile Studio,
+   Quick Meter Dimension Pill, Touch Precision Loupe & Dual-Pad Walkthrough
+   ========================================================= */
+
+.outliner-search-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid var(--border-subtle);
+}
+
+.outliner-search-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.outliner-search-box input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.outliner-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  cursor: pointer;
+  margin-bottom: 3px;
+}
+
+.outliner-folder-row.selected {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.48);
+}
+
+.outliner-folder-icon {
+  color: #38bdf8;
+  flex-shrink: 0;
+}
+
+.outliner-row.indented {
+  margin-left: 14px;
+}
+
+.csg-helper-note {
+  margin: 4px 0 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+.csg-action-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.kelvin-preset-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 6px 0;
+}
+
+.arch-wf-input {
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.55);
+  color: var(--text-primary);
+  font-size: 12px;
+  outline: none;
+}
+
+.arch-wf-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* Segmented Tabs (Profile Studio, Light Mode, Studio Photo Style) */
+.segmented-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(15, 23, 42, 0.52);
+  border: 1px solid var(--border-subtle);
+}
+
+.seg-btn {
+  flex: 1;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.seg-btn.active {
+  background: var(--accent-primary, #3b82f6);
+  color: #ffffff;
+}
+
+/* Custom 2D-to-3D Lathe & Extrude Profile Studio Modal */
+.custom-profile-modal {
+  width: min(680px, 95vw);
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+
+.profile-studio-body {
+  display: grid;
+  grid-template-columns: minmax(250px, 290px) minmax(0, 1fr);
+  gap: 14px;
+  padding: 6px 0 10px;
+}
+
+.profile-canvas-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-svg-frame {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: radial-gradient(circle at center, #111c33 0%, #090f1d 100%);
+  touch-action: none;
+}
+
+.profile-editor-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  touch-action: none;
+  user-select: none;
+}
+
+.profile-canvas-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.35;
+}
+
+.profile-controls-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.profile-template-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.profile-pt-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid var(--border-subtle);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.btn-primary,
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.btn-primary {
+  background: var(--accent-primary, #3b82f6);
+  color: #ffffff;
+}
+
+.btn-secondary {
+  background: rgba(148, 163, 184, 0.14);
+  border-color: var(--border-subtle);
+  color: var(--text-primary);
+}
+
+/* On-Canvas Quick Meter Dimension & 3D Laser Measure Pill */
+.quick-dim-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 92px;
+  transform: translateX(-50%);
+  z-index: 26;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  max-width: calc(100vw - 24px);
+}
+
+.quick-dim-pill.clickable {
+  cursor: pointer;
+}
+
+.quick-dim-pill.clickable:hover {
+  border-color: rgba(56, 189, 248, 0.65);
+}
+
+.quick-dim-pill.measure-mode {
+  border-color: rgba(250, 204, 21, 0.65);
+}
+
+.quick-dim-pill.expanded {
+  border-radius: 14px;
+  padding: 7px 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.quick-dim-icon {
+  color: #38bdf8;
+  flex-shrink: 0;
+}
+
+.quick-dim-icon.amber {
+  color: #facc15;
+}
+
+.quick-dim-edit-cue {
+  color: #94a3b8;
+}
+
+.quick-measure-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.quick-measure-readout strong {
+  color: #fef08a;
+  font-size: 13.5px;
+}
+
+.quick-measure-readout span,
+.quick-measure-hint {
+  color: #cbd5e1;
+  font-size: 11.5px;
+}
+
+.quick-dim-inputs-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quick-dim-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 7px;
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.quick-dim-field .axis-x {
+  color: #f87171;
+  font-weight: 800;
+  font-size: 11px;
+}
+
+.quick-dim-field .axis-y {
+  color: #4ade80;
+  font-weight: 800;
+  font-size: 11px;
+}
+
+.quick-dim-field .axis-z {
+  color: #60a5fa;
+  font-weight: 800;
+  font-size: 11px;
+}
+
+.quick-dim-field input {
+  width: 52px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.quick-dim-apply-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: none;
+  background: #10b981;
+  color: #052e16;
+  font-size: 11.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.quick-dim-mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(148, 163, 184, 0.16);
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+/* Floating 2.2x Touch Precision Magnifier Loupe */
+.touch-precision-loupe {
+  position: fixed;
+  z-index: 95;
+  width: 108px;
+  height: 108px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2.5px solid #34d399;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 0 2px rgba(15, 23, 42, 0.85);
+  pointer-events: none;
+  background: #0f172a;
+}
+
+.touch-precision-loupe canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Walkthrough Gen-2 Dual-Pad & Interactive Proximity HUD */
+.walk-top-pills {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.walk-mini-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.walk-mini-pill.active {
+  background: rgba(56, 189, 248, 0.25);
+  border-color: #38bdf8;
+  color: #f0f9ff;
+}
+
+.walk-interact-pill {
+  position: absolute;
+  left: 50%;
+  bottom: 132px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: 999px;
+  border: 1.5px solid #34d399;
+  background: rgba(15, 23, 42, 0.92);
+  color: #ecfdf5;
+  font-size: 12.5px;
+  cursor: pointer;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+}
+
+.walk-interact-pill kbd {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(52, 211, 153, 0.22);
+  color: #6ee7b7;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.walk-joystick-pad.right-look-pad {
+  left: auto;
+  right: 22px;
+}
+
+.walk-joystick-knob.look-knob {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e0f2fe;
+}
+
+@media (max-width: 768px) {
+  .profile-studio-body {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-dim-pill {
+    bottom: 72px;
+  }
+}
+
+
 
 
 

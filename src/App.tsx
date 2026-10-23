@@ -65,10 +65,13 @@ import {
   BuildingFloorLayer,
   ConstructionMaterialDef,
   createEmptyArchHouseData,
+  CsgBooleanMode,
   CustomAssetCategory,
   CustomAssetRecord,
+  CustomProfileData,
   DEFAULT_BUILDING_FLOORS,
   DEFAULT_GRID_SETTINGS,
+  DEFAULT_SECTION_CUT_CONFIG,
   DEFAULT_SNAP_SETTINGS,
   DEFAULT_SURFACE_SETTINGS,
   DEFAULT_TERRAIN_SCULPT_SETTINGS,
@@ -81,6 +84,7 @@ import {
   GlobalAppSettings,
   GridSettings,
   LightingMood,
+  LiveSectionCutConfig,
   ObjectModifierSettings,
   ObjectPointLightConfig,
   ObjectSubdivisionSettings,
@@ -110,6 +114,8 @@ import {
   TransformSpace,
   ValidationAutoFixAction,
   Vec3,
+  ViewportShadingMode,
+  WalkthroughInteractPrompt,
   WallDrawDefaults,
 } from './types/studio';
 import { MainMenu } from './components/MainMenu';
@@ -128,6 +134,9 @@ import { ArchStudioBar } from './components/ArchStudioBar';
 import { ArchContextPanel } from './components/ArchContextPanel';
 import { ArchProjectDrawer } from './components/ArchProjectDrawer';
 import { StudioPhotoModal } from './components/StudioPhotoModal';
+import { CustomProfileModal } from './components/CustomProfileModal';
+import { QuickDimensionPill } from './components/QuickDimensionPill';
+import { TouchLoupeOverlay } from './components/TouchLoupeOverlay';
 import {
   IntegratedProjectAnalysisBundle,
   runIntegratedProjectAnalysis,
@@ -164,15 +173,19 @@ function computeProjectContentSignature(
           },${o.subdivision.panelGroove.toFixed(2)}`
         : '1,1,1,1,0';
       const pl = o.pointLight
-        ? `${o.pointLight.enabled ? 1 : 0}:${o.pointLight.color}:${o.pointLight.intensity.toFixed(
+        ? `${o.pointLight.enabled ? 1 : 0}:${o.pointLight.lightType || 'point'}:${o.pointLight.color}:${o.pointLight.intensity.toFixed(
             1
-          )}:${o.pointLight.distance.toFixed(1)}`
+          )}:${o.pointLight.distance.toFixed(1)}:${Math.round(o.pointLight.coneAngleDeg ?? 48)}:${o.pointLight.autoNightOnly ? 1 : 0}`
         : '0';
       const md = o.modifiers
         ? `${o.modifiers.bevel.toFixed(2)},${o.modifiers.taperX.toFixed(2)},${o.modifiers.taperZ.toFixed(
             2
           )},${o.modifiers.mirrorX ? 1 : 0},${o.modifiers.mirrorZ ? 1 : 0},${o.modifiers.mirrorOffset.toFixed(2)}`
         : '0';
+      const csgSig = o.csgOperations?.length ?? 0;
+      const profSig = o.customProfile
+        ? `${o.customProfile.mode}:${o.customProfile.points.length}:${o.customProfile.depth.toFixed(2)}:${(o.customProfile.hollowThickness ?? 0).toFixed(2)}`
+        : '';
       return [
         o.id,
         o.kind,
@@ -203,6 +216,10 @@ function computeProjectContentSignature(
         o.flatShading ? 1 : 0,
         o.proceduralPattern || 'none',
         (o.patternScale ?? 1).toFixed(1),
+        Math.round(o.patternRotationDeg ?? 0),
+        o.patternWorldScale !== false ? 1 : 0,
+        csgSig,
+        profSig,
         md,
         sub,
         pl,
@@ -438,6 +455,33 @@ export const App: React.FC = () => {
   const [isArchActivelyDrawing, setIsArchActivelyDrawing] = useState(false);
   const [pendingArchCommit, setPendingArchCommit] =
     useState<PendingArchCommit | null>(null);
+
+  // Advanced Visuals, Section Cut, 3D Measure, Custom Profile Studio, Walkthrough Gen-2 & Touch Loupe
+  const [viewportShading, setViewportShading] =
+    useState<ViewportShadingMode>('shaded');
+  const [sectionCut, setSectionCut] = useState<LiveSectionCutConfig>({
+    ...DEFAULT_SECTION_CUT_CONFIG,
+  });
+  const [universalMeasureActive, setUniversalMeasureActive] = useState(false);
+  const [measuredSpan, setMeasuredSpan] = useState<{
+    total: number;
+    dx: number;
+    dy: number;
+    dz: number;
+  } | null>(null);
+  const [walkPrompt, setWalkPrompt] =
+    useState<WalkthroughInteractPrompt | null>(null);
+  const [walkGhostMode, setWalkGhostMode] = useState(false);
+  const [walkEyeHeight, setWalkEyeHeight] = useState(1.65);
+  const [touchLoupeState, setTouchLoupeState] = useState<{
+    active: boolean;
+    clientX: number;
+    clientY: number;
+  }>({ active: false, clientX: 0, clientY: 0 });
+  const [profileStudioModal, setProfileStudioModal] = useState<{
+    open: boolean;
+    editTargetId: string | null;
+  }>({ open: false, editTargetId: null });
 
   // Integrated 6-System Architectural Project Workflow States (`Buat Rumah` only)
   const [archWorkflowOpen, setArchWorkflowOpen] = useState(false);
@@ -757,6 +801,13 @@ export const App: React.FC = () => {
           setCameraLensFov(state.cameraLensFov);
           setIsArchActivelyDrawing(state.isArchActivelyDrawing);
           setPendingArchCommit(state.pendingArchCommit);
+          setViewportShading(state.viewportShading);
+          setSectionCut(state.sectionCut);
+          setUniversalMeasureActive(state.universalMeasureActive);
+          setMeasuredSpan(state.measuredSpan);
+          setWalkPrompt(state.walkPrompt);
+          setWalkGhostMode(state.walkGhostMode);
+          setWalkEyeHeight(state.walkEyeHeight);
         },
         onDragFeedback: (feedback) => {
           setDragFeedback(feedback);
@@ -772,6 +823,9 @@ export const App: React.FC = () => {
         },
         onBoxSelectRect: (rect) => {
           setBoxSelectRect(rect);
+        },
+        onTouchLoupeChange: (loupe) => {
+          setTouchLoupeState(loupe);
         },
       },
       activeProject.scene.objects
@@ -1507,25 +1561,33 @@ export const App: React.FC = () => {
   const [saveAssetModal, setSaveAssetModal] = useState<{
     name: string;
     category: CustomAssetCategory;
+    bundleAll?: boolean;
   } | null>(null);
 
   const handleSaveAsCustomAsset = useCallback(
-    async (customName?: string, categoryOverride?: CustomAssetCategory) => {
+    async (
+      customName?: string,
+      bundleAll = false,
+      categoryOverride?: CustomAssetCategory
+    ) => {
       const engine = engineRef.current;
       if (!engine) return;
-      const extracted = engine.extractPartsForCustomAsset();
+      const extracted = engine.extractPartsForCustomAsset(bundleAll);
       if (!extracted) return;
 
       if (!customName) {
         setSaveAssetModal({
           name: editingCustomAsset?.name || extracted.defaultName,
           category: editingCustomAsset?.category || 'other',
+          bundleAll,
         });
         return;
       }
 
       const finalName = (customName || extracted.defaultName).trim();
-      const thumb = renderPartsThumbnailDataUrl(extracted.parts);
+      const thumb =
+        extracted.thumbnailDataUrl ||
+        renderPartsThumbnailDataUrl(extracted.parts);
 
       const record: CustomAssetRecord = {
         id: `asset_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -1535,6 +1597,7 @@ export const App: React.FC = () => {
         updatedAt: Date.now(),
         thumbnailDataUrl: thumb,
         parts: extracted.parts,
+        dimensions: extracted.dimensions,
       };
 
       await saveCustomAssetRecord(record);
@@ -1560,15 +1623,18 @@ export const App: React.FC = () => {
   const handleUpdateExistingCustomAsset = useCallback(async () => {
     const engine = engineRef.current;
     if (!engine || !editingCustomAsset) return;
-    const extracted = engine.extractPartsForCustomAsset();
+    const extracted = engine.extractPartsForCustomAsset(true);
     if (!extracted) return;
 
-    const thumb = renderPartsThumbnailDataUrl(extracted.parts);
+    const thumb =
+      extracted.thumbnailDataUrl ||
+      renderPartsThumbnailDataUrl(extracted.parts);
     const updated: CustomAssetRecord = {
       ...editingCustomAsset,
       updatedAt: Date.now(),
       thumbnailDataUrl: thumb,
       parts: extracted.parts,
+      dimensions: extracted.dimensions,
     };
     await saveCustomAssetRecord(updated);
     await refreshLibraries();
@@ -1736,11 +1802,14 @@ export const App: React.FC = () => {
   }, []);
 
   const handleExport = useCallback(
-    async (format: 'glb' | 'gltf') => {
+    async (format: 'glb' | 'gltf' | 'obj', onlySelected = false) => {
       const engine = engineRef.current;
       if (!engine) return;
       try {
-        const { blob, filename } = await engine.exportScene(format);
+        const { blob, filename } = await engine.exportScene(
+          format,
+          onlySelected
+        );
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -1755,6 +1824,48 @@ export const App: React.FC = () => {
       }
     },
     [showToast]
+  );
+
+  const handleApplyBooleanCSG = useCallback(
+    (mode: CsgBooleanMode) => {
+      const ok = engineRef.current?.applyBooleanCSGSelected(mode);
+      if (ok) {
+        showToast(t.csgAppliedToast);
+      }
+    },
+    [showToast, t.csgAppliedToast]
+  );
+
+  const handleClearObjectCSG = useCallback(
+    (id: string) => {
+      const ok = engineRef.current?.clearObjectCSG(id);
+      if (ok) {
+        showToast(t.csgResetBtn);
+      }
+    },
+    [showToast, t.csgResetBtn]
+  );
+
+  const handleOpenCustomProfileModal = useCallback(
+    (editSelected = false) => {
+      setProfileStudioModal({
+        open: true,
+        editTargetId: editSelected && selectedId ? selectedId : null,
+      });
+    },
+    [selectedId]
+  );
+
+  const handleApplyCustomProfile = useCallback(
+    (profile: CustomProfileData, customName?: string) => {
+      engineRef.current?.spawnOrUpdateCustomProfile(
+        profile,
+        profileStudioModal.editTargetId,
+        customName
+      );
+      setProfileStudioModal({ open: false, editTargetId: null });
+    },
+    [profileStudioModal.editTargetId]
   );
 
   const handleClearScene = useCallback(() => {
@@ -1888,6 +1999,7 @@ export const App: React.FC = () => {
           | 'floorPattern'
           | 'floorMaterialId'
           | 'ceilingVisible'
+          | 'isVoid'
         >
       >,
       commit = true
@@ -2082,6 +2194,8 @@ export const App: React.FC = () => {
         visible?: boolean;
         proceduralPattern?: ProceduralPatternKind;
         patternScale?: number;
+        patternRotationDeg?: number;
+        patternWorldScale?: boolean;
       },
       commitHistory = true
     ) => {
@@ -2475,6 +2589,18 @@ export const App: React.FC = () => {
         onFocusCamera={handleFocusCamera}
         onCameraPreset={handleCameraPreset}
         onExport={handleExport}
+        viewportShading={viewportShading}
+        sectionCut={sectionCut}
+        universalMeasureActive={universalMeasureActive}
+        onChangeViewportShading={(mode) =>
+          engineRef.current?.setViewportShadingMode(mode)
+        }
+        onChangeSectionCut={(patch) =>
+          engineRef.current?.setLiveSectionCut(patch)
+        }
+        onToggleUniversalMeasure={() =>
+          engineRef.current?.setUniversalMeasureMode(!universalMeasureActive)
+        }
         onClearScene={handleClearScene}
         onToggleInspector={() => setInspectorOpen((v) => !v)}
         onToggleFullscreen={handleToggleFullscreen}
@@ -2724,15 +2850,63 @@ export const App: React.FC = () => {
             />
           )}
 
-          {/* First-Person Walkthrough HUD + Mobile Virtual Joystick */}
+          {/* First-Person Walkthrough HUD + Dual-Thumb Mobile Virtual Joysticks */}
           <WalkthroughOverlay
             active={walkthroughActive}
             language={globalSettings.language}
+            floors={activeProject.mode === 'house' ? floors : []}
+            walkPrompt={walkPrompt}
+            ghostMode={walkGhostMode}
+            eyeHeight={walkEyeHeight}
             onJoystickChange={(x, y) => engineRef.current?.setWalkJoystick(x, y)}
+            onLookVelocityChange={(yawRate, pitchRate) =>
+              engineRef.current?.setWalkLookVelocity(yawRate, pitchRate)
+            }
+            onToggleGhostMode={(enabled) =>
+              engineRef.current?.setWalkGhostMode(enabled)
+            }
+            onChangeEyeHeight={(meters) =>
+              engineRef.current?.setWalkEyeHeight(meters)
+            }
+            onTeleportToFloor={(floorId) =>
+              engineRef.current?.teleportWalkToFloor(floorId)
+            }
+            onTriggerInteract={() => engineRef.current?.triggerWalkInteract()}
             onExit={() => {
               setWalkthroughActive(false);
               engineRef.current?.setWalkthroughMode(false);
             }}
+          />
+
+          {/* Universal 3D Tape Measure Readout & Selected Object Quick Meter Input Pill */}
+          {!walkthroughActive && !dragFeedback.active && (
+            <QuickDimensionPill
+              t={t}
+              universalMeasureActive={universalMeasureActive}
+              measuredSpan={measuredSpan}
+              onClearMeasure={() => engineRef.current?.clearUniversalMeasure()}
+              onExitMeasure={() =>
+                engineRef.current?.setUniversalMeasureMode(false)
+              }
+              selectedDimensions={selectedExactDimensions}
+              isObjectLocked={Boolean(
+                selectedId && objects.find((o) => o.id === selectedId)?.locked
+              )}
+              onApplyExactDimensions={(dims) =>
+                handleSetExactDimensions(dims, false)
+              }
+            />
+          )}
+
+          {/* Touch Precision Magnifier Loupe above thumb while snapping */}
+          <TouchLoupeOverlay
+            enabled={globalSettings.touchLoupe !== false}
+            active={touchLoupeState.active}
+            clientX={touchLoupeState.clientX}
+            clientY={touchLoupeState.clientY}
+            getSourceCanvas={() =>
+              engineRef.current?.getCanvasElement() ?? null
+            }
           />
 
           {/* Right-edge Expand Tab when Desktop Inspector Sidebar is hidden */}
@@ -2903,6 +3077,9 @@ export const App: React.FC = () => {
               onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
               onExportAssetsPack={handleExportAssetsPack}
               onImportAssetsPackFile={(f) => void handleImportAssetsPack(f)}
+              onOpenCustomProfileStudio={() =>
+                handleOpenCustomProfileModal(false)
+              }
             />
           )}
 
@@ -2969,7 +3146,12 @@ export const App: React.FC = () => {
             onToggleEditSinglePart={handleToggleEditSinglePart}
             onGroupSceneObjects={handleGroupSceneObjects}
             onUngroupSelected={handleUngroupSelected}
-            onSaveAsCustomAsset={(name) => void handleSaveAsCustomAsset(name)}
+            onSaveAsCustomAsset={(name, bundleAll) =>
+              void handleSaveAsCustomAsset(name, bundleAll)
+            }
+            onApplyBooleanCSG={handleApplyBooleanCSG}
+            onClearObjectCSG={handleClearObjectCSG}
+            onOpenCustomProfileModal={handleOpenCustomProfileModal}
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
@@ -3022,7 +3204,12 @@ export const App: React.FC = () => {
             onToggleEditSinglePart={handleToggleEditSinglePart}
             onGroupSceneObjects={handleGroupSceneObjects}
             onUngroupSelected={handleUngroupSelected}
-            onSaveAsCustomAsset={(name) => void handleSaveAsCustomAsset(name)}
+            onSaveAsCustomAsset={(name, bundleAll) =>
+              void handleSaveAsCustomAsset(name, bundleAll)
+            }
+            onApplyBooleanCSG={handleApplyBooleanCSG}
+            onClearObjectCSG={handleClearObjectCSG}
+            onOpenCustomProfileModal={handleOpenCustomProfileModal}
             onUpdateTransform={handleUpdateTransform}
             onUpdateMaterial={handleUpdateMaterial}
             onUpdateSubdivision={handleUpdateSubdivision}
@@ -3067,6 +3254,7 @@ export const App: React.FC = () => {
           onDeleteCustomAsset={(id) => void handleDeleteCustomAsset(id)}
           onExportAssetsPack={handleExportAssetsPack}
           onImportAssetsPackFile={(f) => void handleImportAssetsPack(f)}
+          onOpenCustomProfileStudio={() => handleOpenCustomProfileModal(false)}
           objectCount={objects.length}
           drawerOpen={mobileDrawerOpen}
           onToggleDrawer={() => setMobileDrawerOpen((v) => !v)}
@@ -3164,6 +3352,7 @@ export const App: React.FC = () => {
                 onClick={() =>
                   void handleSaveAsCustomAsset(
                     saveAssetModal.name,
+                    Boolean(saveAssetModal.bundleAll),
                     saveAssetModal.category
                   )
                 }
@@ -3175,6 +3364,29 @@ export const App: React.FC = () => {
           </div>
         </div>
       )}
+
+      <CustomProfileModal
+        open={profileStudioModal.open}
+        language={globalSettings.language}
+        t={t}
+        initialProfile={
+          profileStudioModal.editTargetId
+            ? objects.find((o) => o.id === profileStudioModal.editTargetId)
+                ?.customProfile ?? null
+            : null
+        }
+        initialName={
+          profileStudioModal.editTargetId
+            ? objects.find((o) => o.id === profileStudioModal.editTargetId)
+                ?.name ?? ''
+            : ''
+        }
+        isUpdatingExisting={Boolean(profileStudioModal.editTargetId)}
+        onApply={handleApplyCustomProfile}
+        onClose={() =>
+          setProfileStudioModal({ open: false, editTargetId: null })
+        }
+      />
 
       <StudioPhotoModal
         open={photoStudioOpen}

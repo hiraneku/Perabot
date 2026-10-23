@@ -60,6 +60,10 @@ export function cloneSitePlanningData(
     center: src.center
       ? { x: Number(src.center.x) || 0, z: Number(src.center.z) || 0 }
       : { ...def.center },
+    shapePreset: src.shapePreset ?? 'rect',
+    polygon: Array.isArray(src.polygon)
+      ? src.polygon.map((p) => ({ x: Number(p.x) || 0, z: Number(p.z) || 0 }))
+      : undefined,
     setbacksEnabled:
       src.setbacksEnabled !== undefined ? Boolean(src.setbacksEnabled) : true,
     setbacks: src.setbacks
@@ -142,6 +146,26 @@ export function cloneSceneObjects(
     subdivision: { ...o.subdivision },
     modifiers: o.modifiers ? { ...o.modifiers } : undefined,
     pointLight: o.pointLight ? { ...o.pointLight } : undefined,
+    csgOperations: Array.isArray(o.csgOperations)
+      ? o.csgOperations.map((op) => ({
+          ...op,
+          relativeMatrix: [...op.relativeMatrix],
+          subdivision: op.subdivision ? { ...op.subdivision } : undefined,
+          modifiers: op.modifiers ? { ...op.modifiers } : undefined,
+          customProfile: op.customProfile
+            ? {
+                ...op.customProfile,
+                points: op.customProfile.points.map((pt) => ({ ...pt })),
+              }
+            : undefined,
+        }))
+      : undefined,
+    customProfile: o.customProfile
+      ? {
+          ...o.customProfile,
+          points: o.customProfile.points.map((pt) => ({ ...pt })),
+        }
+      : undefined,
   }));
 }
 

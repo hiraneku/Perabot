@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Camera, Check, Download, Sparkles, X } from 'lucide-react';
-import { StudioSnapshotOptions } from '../types/studio';
+import { StudioSnapshotOptions, ViewportShadingMode } from '../types/studio';
 import { StudioStrings } from '../i18n/translations';
 
 interface StudioPhotoModalProps {
@@ -20,23 +20,48 @@ export const StudioPhotoModal: React.FC<StudioPhotoModalProps> = ({
   onClose,
   onSavedToast,
 }) => {
-  const [resolution, setResolution] = useState<'1080p' | '2k-square'>('1080p');
+  const [resolution, setResolution] = useState<
+    '1080p' | '2k-square' | '4k-uhd'
+  >('1080p');
   const [transparentBg, setTransparentBg] = useState(false);
+  const [twoPointPerspective, setTwoPointPerspective] = useState(true);
+  const [shadingOverride, setShadingOverride] =
+    useState<ViewportShadingMode>('shaded');
   const [previewUrl, setPreviewUrl] = useState<string>('');
 
   useEffect(() => {
     if (!open) return;
     const id = window.requestAnimationFrame(() => {
-      const url = onCapture({ resolution, transparentBg });
+      // Render fast 1080p/2k preview, and full 4k on capture/preview cleanly
+      const url = onCapture({
+        resolution,
+        transparentBg,
+        twoPointPerspective,
+        shadingOverride,
+      });
       setPreviewUrl(url);
     });
     return () => window.cancelAnimationFrame(id);
-  }, [open, resolution, transparentBg, onCapture]);
+  }, [
+    open,
+    resolution,
+    transparentBg,
+    twoPointPerspective,
+    shadingOverride,
+    onCapture,
+  ]);
 
   if (!open) return null;
 
   const handleDownload = () => {
-    const url = previewUrl || onCapture({ resolution, transparentBg });
+    const url =
+      previewUrl ||
+      onCapture({
+        resolution,
+        transparentBg,
+        twoPointPerspective,
+        shadingOverride,
+      });
     if (!url) return;
     const safeTitle =
       projectName
@@ -44,11 +69,15 @@ export const StudioPhotoModal: React.FC<StudioPhotoModalProps> = ({
         .toLowerCase()
         .replace(/[^a-z0-9-_]+/g, '-')
         .replace(/^-+|-+$/g, '') || 'perabot-studio';
+    const resSlug =
+      resolution === '4k-uhd'
+        ? '3840x2160-4k'
+        : resolution === '2k-square'
+        ? '2048x2048'
+        : '1920x1080';
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${safeTitle}-${
-      resolution === '2k-square' ? '2048x2048' : '1920x1080'
-    }.png`;
+    link.download = `${safeTitle}-${resSlug}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -119,7 +148,50 @@ export const StudioPhotoModal: React.FC<StudioPhotoModalProps> = ({
               <Sparkles size={13} />
               <span>{t.photoRes2kSquare}</span>
             </button>
+            <button
+              type="button"
+              className={`studio-photo-pill ${
+                resolution === '4k-uhd' ? 'active' : ''
+              }`}
+              onClick={() => setResolution('4k-uhd')}
+            >
+              <Sparkles size={13} />
+              <span>{t.photoRes4kLabel}</span>
+            </button>
           </div>
+
+          <div className="segmented-tabs">
+            {(
+              [
+                { id: 'shaded', label: t.shadingModeShaded },
+                { id: 'clay', label: t.shadingModeClay },
+                { id: 'technical', label: t.shadingModeTech },
+              ] as const
+            ).map((sm) => (
+              <button
+                key={sm.id}
+                type="button"
+                className={`seg-btn ${
+                  shadingOverride === sm.id ? 'active' : ''
+                }`}
+                onClick={() => setShadingOverride(sm.id)}
+              >
+                {sm.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="studio-photo-check">
+            <input
+              type="checkbox"
+              checked={twoPointPerspective}
+              onChange={(e) => setTwoPointPerspective(e.target.checked)}
+            />
+            <span className="studio-photo-check-box">
+              {twoPointPerspective && <Check size={12} />}
+            </span>
+            <span>{t.photoTwoPointLabel}</span>
+          </label>
 
           <label className="studio-photo-check">
             <input

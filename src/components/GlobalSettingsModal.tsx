@@ -203,6 +203,17 @@ export const GlobalSettingsModal: React.FC<GlobalSettingsModalProps> = ({
               </div>
             </div>
           </div>
+
+          <label className="arch-wf-checkbox-row" style={{ marginTop: 4 }}>
+            <input
+              type="checkbox"
+              checked={settings.touchLoupe !== false}
+              onChange={(e) =>
+                onUpdateSettings({ touchLoupe: e.target.checked })
+              }
+            />
+            <span>{t.touchLoupeSettingLabel}</span>
+          </label>
         </div>
 
         <button type="button" className="modal-done-btn" onClick={onClose}>

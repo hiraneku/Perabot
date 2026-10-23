@@ -24,6 +24,7 @@ import { applyProceduralPatternToMaterial } from './proceduralTextures';
 import {
   computeSitePlacementMetrics,
   resolveSemanticRoomType,
+  resolveSiteBoundaryPolygon,
 } from './archAnalysis/geometryMetrics';
 import { cloneArchHouseData } from './archAnalysis/schemaMigration';
 
@@ -479,6 +480,7 @@ export function detectClosedRoomsOnFloor(
       floorPattern: matched?.floorPattern ?? 'wood',
       floorMaterialId: matched?.floorMaterialId,
       ceilingVisible: matched?.ceilingVisible !== false,
+      isVoid: Boolean(matched?.isVoid),
     });
   });
 
@@ -1879,6 +1881,7 @@ export class ArchBuilderEngine {
         | 'floorPattern'
         | 'floorMaterialId'
         | 'ceilingVisible'
+        | 'isVoid'
       >
     >
   ): boolean {
@@ -1897,6 +1900,7 @@ export class ArchBuilderEngine {
         floorPattern: detected.floorPattern ?? 'wood',
         floorMaterialId: detected.floorMaterialId,
         ceilingVisible: detected.ceilingVisible,
+        isVoid: Boolean(detected.isVoid),
       };
       this.data.roomMetas.push(meta);
     }
@@ -2009,6 +2013,7 @@ export class ArchBuilderEngine {
       floors.find((f) => f.id === activeFloorId) ?? sortedFloors[0];
 
     // Prefer walls on active floor; if empty (e.g. user clicked Roof floor), inspect floor right below!
+    let refFloorId = activeFl.id;
     let refWalls = this.data.walls.filter((w) => w.floorId === activeFl.id);
     let baseY = activeFl.elevation + activeFl.height;
     if (refWalls.length === 0) {
@@ -2017,6 +2022,7 @@ export class ArchBuilderEngine {
           (w) => w.floorId === sortedFloors[i].id
         );
         if (candidate.length > 0) {
+          refFloorId = sortedFloors[i].id;
           refWalls = candidate;
           const maxWallH = Math.max(...candidate.map((w) => w.height));
           baseY = sortedFloors[i].elevation + maxWallH;
@@ -2049,8 +2055,150 @@ export class ArchBuilderEngine {
       }
     }
 
-    const width = Math.max(2.0, round3(maxX - minX));
-    const depth = Math.max(2.0, round3(maxZ - minZ));
+    const totalBoxW = Math.max(2.0, round3(maxX - minX));
+    const totalBoxD = Math.max(2.0, round3(maxZ - minZ));
+    const totalBoxArea = totalBoxW * totalBoxD;
+
+    // Smart Multi-Wing L / T / U Auto-Roof Decomposition:
+    // If the reference floor contains 2+ closed rooms whose union area is < 84% of the outer AABB,
+    // automatically generate cleanly joined wing roofs instead of floating roof over outdoor courtyards!
+    const refRooms = detectClosedRoomsOnFloor(
+      refWalls,
+      refFloorId,
+      this.data.roomMetas,
+      'Room'
+    );
+    const sumRoomArea = refRooms.reduce((acc, r) => acc + r.areaSqm, 0);
+
+    if (refRooms.length >= 1 && sumRoomArea > 4 && sumRoomArea < totalBoxArea * 0.84) {
+      const wingBoxes: Array<{
+        minX: number;
+        maxX: number;
+        minZ: number;
+        maxZ: number;
+      }> = [];
+
+      const pointInPolyXZ = (
+        px: number,
+        pz: number,
+        poly: Array<{ x: number; z: number }>
+      ): boolean => {
+        let inside = false;
+        for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+          const xi = poly[i].x,
+            zi = poly[i].z;
+          const xj = poly[j].x,
+            zj = poly[j].z;
+          const intersect =
+            zi > pz !== zj > pz &&
+            px < ((xj - xi) * (pz - zi)) / (zj - zi + 1e-12) + xi;
+          if (intersect) inside = !inside;
+        }
+        return inside;
+      };
+
+      for (const rm of refRooms) {
+        const xs = Array.from(
+          new Set(rm.polygon.map((p) => Math.round(p.x * 20) / 20))
+        ).sort((a, b) => a - b);
+        const zs = Array.from(
+          new Set(rm.polygon.map((p) => Math.round(p.z * 20) / 20))
+        ).sort((a, b) => a - b);
+
+        if (xs.length >= 2 && zs.length >= 2) {
+          for (let xi = 0; xi < xs.length - 1; xi++) {
+            for (let zi = 0; zi < zs.length - 1; zi++) {
+              const x0 = xs[xi],
+                x1 = xs[xi + 1];
+              const z0 = zs[zi],
+                z1 = zs[zi + 1];
+              if (x1 - x0 < 0.35 || z1 - z0 < 0.35) continue;
+              if (
+                pointInPolyXZ((x0 + x1) * 0.5, (z0 + z1) * 0.5, rm.polygon)
+              ) {
+                wingBoxes.push({
+                  minX: x0 - 0.08,
+                  maxX: x1 + 0.08,
+                  minZ: z0 - 0.08,
+                  maxZ: z1 + 0.08,
+                });
+              }
+            }
+          }
+        }
+      }
+
+      // Merge collinear adjacent room boxes so aligned rooms share one unified roof ridge
+      let merged = true;
+      while (merged) {
+        merged = false;
+        for (let i = 0; i < wingBoxes.length && !merged; i++) {
+          for (let j = i + 1; j < wingBoxes.length && !merged; j++) {
+            const a = wingBoxes[i];
+            const b = wingBoxes[j];
+            const sameX =
+              Math.abs(a.minX - b.minX) < 0.35 &&
+              Math.abs(a.maxX - b.maxX) < 0.35 &&
+              Math.max(a.minZ, b.minZ) <= Math.min(a.maxZ, b.maxZ) + 0.35;
+            const sameZ =
+              Math.abs(a.minZ - b.minZ) < 0.35 &&
+              Math.abs(a.maxZ - b.maxZ) < 0.35 &&
+              Math.max(a.minX, b.minX) <= Math.min(a.maxX, b.maxX) + 0.35;
+            if (sameX || sameZ) {
+              a.minX = Math.min(a.minX, b.minX);
+              a.maxX = Math.max(a.maxX, b.maxX);
+              a.minZ = Math.min(a.minZ, b.minZ);
+              a.maxZ = Math.max(a.maxZ, b.maxZ);
+              wingBoxes.splice(j, 1);
+              merged = true;
+            }
+          }
+        }
+      }
+
+      if (wingBoxes.length >= 2) {
+        // Sort largest wing first so primary wing becomes selected roof
+        wingBoxes.sort(
+          (a, b) =>
+            (b.maxX - b.minX) * (b.maxZ - b.minZ) -
+            (a.maxX - a.minX) * (a.maxZ - a.minZ)
+        );
+        let primaryRoof: ArchRoofItem | null = null;
+        wingBoxes.forEach((wb, idx) => {
+          const ww = Math.max(1.8, round3(wb.maxX - wb.minX));
+          const wd = Math.max(1.8, round3(wb.maxZ - wb.minZ));
+          const wcx = round3((wb.minX + wb.maxX) * 0.5);
+          const wcz = round3((wb.minZ + wb.maxZ) * 0.5);
+          const wingItem: ArchRoofItem = {
+            id: `roof_${Date.now().toString(36)}_${idx}_${Math.random().toString(36).slice(2, 5)}`,
+            floorId: activeFl.id,
+            name: idx === 0 ? roofName : `${roofName} ${idx + 1}`,
+            style,
+            center: { x: wcx, z: wcz },
+            width: ww,
+            depth: wd,
+            baseY: round3(baseY),
+            pitchDeg: style === 'shed' ? 18 : 30,
+            overhang: 0.45,
+            ridgeAxis: ww >= wd ? 'x' : 'z',
+            color: '#b85d3b',
+            fasciaColor: '#e2e8f0',
+            rotationY: 0,
+            roofMaterialId:
+              style === 'flat' ? 'mat_roof_slab' : 'mat_roof_terracotta',
+          };
+          this.data.roofs.push(wingItem);
+          if (idx === 0) primaryRoof = wingItem;
+        });
+        if (primaryRoof) {
+          this.selection = { kind: 'roof', id: (primaryRoof as ArchRoofItem).id };
+          return primaryRoof;
+        }
+      }
+    }
+
+    const width = totalBoxW;
+    const depth = totalBoxD;
     const cx = round3((minX + maxX) * 0.5);
     const cz = round3((minZ + maxZ) * 0.5);
 
@@ -2374,9 +2522,10 @@ export class ArchBuilderEngine {
       }
     }
 
-    // 2. Check if walker is standing on a detected upper-story Room Floor Slab (unless inside a stairwell hole!)
+    // 2. Check if walker is standing on a detected upper-story Room Floor Slab (unless inside a stairwell hole or double-height Void!)
     let bestSlabY: number | null = null;
     for (const rm of this.detectedRooms) {
+      if (rm.isVoid) continue;
       const fl = floors.find((f) => f.id === rm.floorId);
       if (!fl || fl.elevation <= 0.05) continue;
       if (Math.abs(fl.elevation - currentFootY) > 1.2) continue;
@@ -2390,6 +2539,41 @@ export class ArchBuilderEngine {
       }
     }
     return bestSlabY;
+  }
+
+  /**
+   * Finds the closest interactive Door (`door-single` / `door-double`) within `maxDist` meters
+   * of the walker in Walkthrough mode so the HUD can offer 1-tap Open / Close!
+   */
+  public findNearestDoorInRange(
+    x: number,
+    z: number,
+    footY: number,
+    floors: BuildingFloorLayer[],
+    maxDist = 2.15
+  ): { id: string; isOpen: boolean; kind: ArchOpeningKind } | null {
+    let best: { id: string; isOpen: boolean; kind: ArchOpeningKind; d: number } | null =
+      null;
+    for (const op of this.data.openings) {
+      if (!op.kind.startsWith('door')) continue;
+      const wall = this.data.walls.find((w) => w.id === op.wallId);
+      if (!wall) continue;
+      const fl = floors.find((f) => f.id === wall.floorId);
+      const baseY = fl ? fl.elevation : 0;
+      if (Math.abs(footY - baseY) > 1.5) continue;
+
+      const pt = sampleWallCurvePoint(wall, op.offsetRatio);
+      const d = Math.hypot(x - pt.x, z - pt.z);
+      if (d <= maxDist && (!best || d < best.d)) {
+        best = {
+          id: op.id,
+          isOpen: op.isOpen !== false,
+          kind: op.kind,
+          d,
+        };
+      }
+    }
+    return best ? { id: best.id, isOpen: best.isOpen, kind: best.kind } : null;
   }
 
   private isInsideStairwellCutout(x: number, z: number, upperFloorY: number): boolean {
@@ -2562,6 +2746,23 @@ export class ArchBuilderEngine {
         }
       }
 
+      // Double-Height Void / Mezzanine Room: punch interior open leaving a clean 0.18m structural rim!
+      if (room.isVoid && fStyle.baseY > 0.05 && room.polygon.length >= 3) {
+        const insetHole = new THREE.Path();
+        room.polygon.forEach((pt, idx) => {
+          const dx = room.centroid.x - pt.x;
+          const dz = room.centroid.z - pt.z;
+          const len = Math.hypot(dx, dz) || 1;
+          const step = Math.min(0.2, len * 0.22);
+          const ix = pt.x + (dx / len) * step;
+          const iz = pt.z + (dz / len) * step;
+          if (idx === 0) insetHole.moveTo(ix, iz);
+          else insetHole.lineTo(ix, iz);
+        });
+        insetHole.closePath();
+        shape.holes.push(insetHole);
+      }
+
       const isRoomSelected =
         this.selection?.kind === 'room' && this.selection.id === room.id;
 
@@ -2597,10 +2798,73 @@ export class ArchBuilderEngine {
       };
       this.structuralGroup.add(slabMesh);
 
-      // Smart Auto-Hide Ceiling (with automatic Skylight hole when a Skylight Roof sits overhead!)
-      if (room.ceilingVisible && !fStyle.ghost) {
-        const ceilShape = shape.clone();
+      // Smart Auto-Hide Ceiling (with automatic Stairwell holes, Double-Height Void holes, & Skylight holes!)
+      if (room.ceilingVisible && !fStyle.ghost && !room.isVoid) {
+        const ceilShape = new THREE.Shape();
+        room.polygon.forEach((pt, idx) => {
+          if (idx === 0) ceilShape.moveTo(pt.x, pt.z);
+          else ceilShape.lineTo(pt.x, pt.z);
+        });
+        ceilShape.closePath();
         const ceilingY = fStyle.baseY + fStyle.storyH;
+
+        // 1. Punch Stairwell Ceiling Hole for stairs climbing up through this room's ceiling!
+        for (const st of this.data.stairs) {
+          if (!st.autoCutoutUpper) continue;
+          const stairTopY = st.position.y + st.height;
+          if (Math.abs(stairTopY - ceilingY) > 0.55) continue;
+          if (this.pointInPolygonXZ(st.position.x, st.position.z, room.polygon)) {
+            const hw = st.width * 0.5;
+            const hl = st.runLength * 0.5;
+            const cos = Math.cos(st.rotationY * DEG2RAD);
+            const sin = Math.sin(st.rotationY * DEG2RAD);
+            const stHole = new THREE.Path();
+            const cornersLocal: Array<[number, number]> = [
+              [-hw, -hl],
+              [hw, -hl],
+              [hw, hl],
+              [-hw, hl],
+            ];
+            cornersLocal.forEach(([lx, lz], idx) => {
+              const wx = st.position.x + lx * cos + lz * sin;
+              const wz = st.position.z - lx * sin + lz * cos;
+              if (idx === 0) stHole.moveTo(wx, wz);
+              else stHole.lineTo(wx, wz);
+            });
+            stHole.closePath();
+            ceilShape.holes.push(stHole);
+          }
+        }
+
+        // 2. Punch Double-Height Atrium / Mezzanine Void Hole if an upper room directly above is `isVoid`!
+        for (const upperRm of allRooms) {
+          if (!upperRm.isVoid || upperRm.floorId === room.floorId) continue;
+          const uFl = floors.find((f) => f.id === upperRm.floorId);
+          if (!uFl || Math.abs(uFl.elevation - ceilingY) > 0.55) continue;
+          if (
+            this.pointInPolygonXZ(
+              upperRm.centroid.x,
+              upperRm.centroid.z,
+              room.polygon
+            )
+          ) {
+            const voidHole = new THREE.Path();
+            upperRm.polygon.forEach((pt, idx) => {
+              const dx = upperRm.centroid.x - pt.x;
+              const dz = upperRm.centroid.z - pt.z;
+              const len = Math.hypot(dx, dz) || 1;
+              const step = Math.min(0.2, len * 0.22);
+              const ix = pt.x + (dx / len) * step;
+              const iz = pt.z + (dz / len) * step;
+              if (idx === 0) voidHole.moveTo(ix, iz);
+              else voidHole.lineTo(ix, iz);
+            });
+            voidHole.closePath();
+            ceilShape.holes.push(voidHole);
+          }
+        }
+
+        // 3. Punch Skylight Hole if a Skylight Roof sits overhead!
         for (const rf of this.data.roofs) {
           if (!rf.hasSkylight) continue;
           if (Math.abs(rf.baseY - ceilingY) > 0.85) continue;
@@ -2872,10 +3136,17 @@ export class ArchBuilderEngine {
     const sd = Math.max(2, site.depth);
     const cx = site.center.x;
     const cz = site.center.z;
-    const minX = cx - sw * 0.5;
-    const maxX = cx + sw * 0.5;
-    const minZ = cz - sd * 0.5; // Rear (-Z)
-    const maxZ = cz + sd * 0.5; // Front (+Z)
+    const sitePoly = resolveSiteBoundaryPolygon(site);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const p of sitePoly) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minZ = Math.min(minZ, p.z);
+      maxZ = Math.max(maxZ, p.z);
+    }
     const ySite = 0.024;
 
     const siteMetrics = computeSitePlacementMetrics(
@@ -2885,13 +3156,10 @@ export class ArchBuilderEngine {
       site
     );
 
-    // 1. Survey Site Boundary Loop
+    // 1. Survey Site Boundary Loop (supports Rectangular, Trapezoid, Hook Corner, L-Lot, & Custom Polygons!)
     const boundaryPts = [
-      new THREE.Vector3(minX, ySite, minZ),
-      new THREE.Vector3(maxX, ySite, minZ),
-      new THREE.Vector3(maxX, ySite, maxZ),
-      new THREE.Vector3(minX, ySite, maxZ),
-      new THREE.Vector3(minX, ySite, minZ),
+      ...sitePoly.map((p) => new THREE.Vector3(p.x, ySite, p.z)),
+      new THREE.Vector3(sitePoly[0].x, ySite, sitePoly[0].z),
     ];
     const boundaryColor = siteMetrics.withinSiteBoundary ? '#f59e0b' : '#ef4444';
     const bLine = new THREE.Line(
@@ -2908,14 +3176,9 @@ export class ArchBuilderEngine {
     // Corner survey markers
     const pinGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.14, 12);
     const pinMat = new THREE.MeshBasicMaterial({ color: boundaryColor });
-    for (const [px, pz] of [
-      [minX, minZ],
-      [maxX, minZ],
-      [maxX, maxZ],
-      [minX, maxZ],
-    ]) {
+    for (const p of sitePoly) {
       const pin = new THREE.Mesh(pinGeo, pinMat);
-      pin.position.set(px, 0.07, pz);
+      pin.position.set(p.x, 0.07, p.z);
       pin.raycast = () => {};
       this.labelsGroup.add(pin);
     }
@@ -2923,7 +3186,7 @@ export class ArchBuilderEngine {
     // Site Dimensions Badge at Rear Edge
     const siteBadge = makeLabelSprite(
       `SITE ${sw.toFixed(1)} × ${sd.toFixed(1)} m`,
-      `${(sw * sd).toFixed(0)} m²`,
+      `${siteMetrics.siteAreaSqm.toFixed(0)} m²`,
       {
         bg: 'rgba(69, 26, 3, 0.90)',
         border: boundaryColor,

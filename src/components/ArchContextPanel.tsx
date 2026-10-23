@@ -89,6 +89,7 @@ interface ArchContextPanelProps {
         | 'floorPattern'
         | 'floorMaterialId'
         | 'ceilingVisible'
+        | 'isVoid'
       >
     >,
     commit?: boolean
@@ -1561,6 +1562,31 @@ export const ArchContextPanel: React.FC<ArchContextPanelProps> = ({
                         />
                         <span>{t.archRoomAutoCeiling}</span>
                       </label>
+
+                      {activeFloor && activeFloor.elevation > 0.05 && (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <label
+                            className="arch-check-row"
+                            style={{ marginTop: 4 }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={Boolean(room.isVoid)}
+                              onChange={(e) =>
+                                onUpdateRoomMeta(
+                                  room.id,
+                                  { isVoid: e.target.checked },
+                                  true
+                                )
+                              }
+                            />
+                            <span>{t.roomVoidToggleLabel}</span>
+                          </label>
+                          {room.isVoid && (
+                            <p className="csg-helper-note">{t.roomVoidHint}</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -13,6 +13,7 @@ import {
   calcWallCenterlineLength,
   computeSingleRoofQuantities,
   computeSitePlacementMetrics,
+  resolveSiteBoundaryPolygon,
 } from './archAnalysis/geometryMetrics';
 import {
   createDefaultConstructionMaterialCatalog,
@@ -589,14 +590,20 @@ export function exportSitePlanPNG(params: {
     drawY0 + drawH * 0.5 + (wz - czWorld) * scale,
   ];
 
-  // Site Plot Boundary
-  const [p0x, p0y] = toPx(sMinX, sMinZ);
-  const [p1x, p1y] = toPx(sMaxX, sMaxZ);
+  // Site Plot Boundary (supports Rectangular, Trapezoid, Hook Corner, L-Lot, & Custom Polygons!)
+  const sitePoly = resolveSiteBoundaryPolygon(site);
+  ctx.beginPath();
+  sitePoly.forEach((pt, idx) => {
+    const [px, py] = toPx(pt.x, pt.z);
+    if (idx === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  });
+  ctx.closePath();
   ctx.fillStyle = 'rgba(245, 158, 11, 0.06)';
   ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 4;
-  ctx.fillRect(p0x, p0y, p1x - p0x, p1y - p0y);
-  ctx.strokeRect(p0x, p0y, p1x - p0x, p1y - p0y);
+  ctx.fill();
+  ctx.stroke();
 
   // Setback Envelope
   if (showSetbacks && site.setbacksEnabled) {
@@ -1151,6 +1158,547 @@ export function exportElevationDrawingPNG(params: {
       dataUrl,
       `${safeName}_Elevation_${direction.toUpperCase()}.png`
     );
+  }
+  return dataUrl;
+}
+
+/**
+ * 3B. True Plane-Intersected Architectural Building Section Exporter (`.PNG`)
+ * - `axis === 'x'` -> Cross Section A–A' along X at `Z = offsetMeters` (looking toward -Z)
+ * - `axis === 'z'` -> Longitudinal Section B–B' along Z at `X = offsetMeters` (looking toward -X)
+ */
+export function exportBuildingSectionPNG(params: {
+  projectName: string;
+  archData: ArchHouseData;
+  floors: BuildingFloorLayer[];
+  detectedRooms?: ArchDetectedRoom[];
+  axis?: 'x' | 'z';
+  offsetMeters?: number;
+  paperTheme?: 'blueprint-dark' | 'architect-white';
+  sourceLabel?: string;
+  download?: boolean;
+}): string {
+  const {
+    projectName,
+    archData,
+    floors,
+    detectedRooms = [],
+    axis = 'x',
+    offsetMeters = 0,
+    paperTheme = 'blueprint-dark',
+    sourceLabel,
+    download = true,
+  } = params;
+
+  const pal = resolvePaperPalette(paperTheme);
+  const W = 2200;
+  const H = 1560;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+
+  ctx.fillStyle = pal.bg;
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = pal.frameStroke;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(28, 28, W - 56, H - 56);
+
+  const floorElev = new Map<string, number>();
+  const floorHeight = new Map<string, number>();
+  for (const fl of floors) {
+    floorElev.set(fl.id, fl.elevation);
+    floorHeight.set(fl.id, fl.height);
+  }
+
+  // Coordinate mapping:
+  // u = horizontal abscissa along the section cut (`x` when axis==='x', `z` when axis==='z')
+  // v = depth perpendicular to cut (`z` when axis==='x', `x` when axis==='z').
+  // Cut plane is `v === offsetMeters`, viewing into `v <= offsetMeters`.
+  const toUV = (x: number, z: number): { u: number; v: number } =>
+    axis === 'x' ? { u: x, v: z } : { u: z, v: x };
+
+  let minU = Infinity;
+  let maxU = -Infinity;
+  let maxY = 4.2;
+
+  for (const w of archData.walls) {
+    const p0 = toUV(w.start.x, w.start.z);
+    const p1 = toUV(w.end.x, w.end.z);
+    minU = Math.min(minU, p0.u - 0.5, p1.u - 0.5);
+    maxU = Math.max(maxU, p0.u + 0.5, p1.u + 0.5);
+    const by = floorElev.get(w.floorId) ?? 0;
+    maxY = Math.max(maxY, by + w.height + 0.8);
+  }
+  for (const rf of archData.roofs) {
+    const rq = computeSingleRoofQuantities(rf);
+    const span =
+      (axis === 'x' ? rf.width : rf.depth) * 0.5 + rf.overhang;
+    const centerU = axis === 'x' ? rf.center.x : rf.center.z;
+    minU = Math.min(minU, centerU - span - 0.5);
+    maxU = Math.max(maxU, centerU + span + 0.5);
+    maxY = Math.max(maxY, rf.baseY + rq.ridgeRiseM + 1.0);
+  }
+
+  if (!Number.isFinite(minU)) {
+    minU = -6;
+    maxU = 6;
+  }
+
+  const drawX0 = 210;
+  const drawW = W - 400;
+  const groundPxY = H - 255;
+  const availH = groundPxY - 125;
+  const scale = Math.min(
+    drawW / Math.max(4, maxU - minU),
+    availH / Math.max(3.5, maxY)
+  );
+  const midU = (minU + maxU) * 0.5;
+
+  const toSecPx = (u: number, y: number): [number, number] => [
+    drawX0 + drawW * 0.5 + (u - midU) * scale,
+    groundPxY - y * scale,
+  ];
+
+  // Helper: fill diagonal structural hatch inside cut elements
+  const fillSectionHatch = (
+    x0: number,
+    y0: number,
+    wPx: number,
+    hPx: number,
+    strokeCol: string
+  ) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x0, y0, wPx, hPx);
+    ctx.clip();
+    ctx.strokeStyle = strokeCol;
+    ctx.lineWidth = 1.4;
+    const step = 9;
+    const minXRect = Math.min(x0, x0 + wPx);
+    const maxXRect = Math.max(x0, x0 + wPx);
+    const minYRect = Math.min(y0, y0 + hPx);
+    const maxYRect = Math.max(y0, y0 + hPx);
+    for (
+      let d = minXRect - (maxYRect - minYRect);
+      d <= maxXRect + (maxYRect - minYRect);
+      d += step
+    ) {
+      ctx.beginPath();
+      ctx.moveTo(d, maxYRect);
+      ctx.lineTo(d + (maxYRect - minYRect), minYRect);
+      ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  // 1. Floor Level Datum Lines + Triangular Architectural Level Markers
+  const sortedFloors = [...floors].sort((a, b) => a.elevation - b.elevation);
+  for (const fl of sortedFloors) {
+    const [, py] = toSecPx(0, fl.elevation);
+    ctx.save();
+    ctx.setLineDash([10, 7]);
+    ctx.strokeStyle = pal.gridMajor;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(90, py);
+    ctx.lineTo(W - 90, py);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Architectural Datum Triangle Symbol on Left Margin
+    ctx.fillStyle = pal.titleAccent;
+    ctx.beginPath();
+    ctx.moveTo(118, py);
+    ctx.lineTo(104, py - 12);
+    ctx.lineTo(132, py - 12);
+    ctx.closePath();
+    ctx.fill();
+
+    const signPrefix = fl.elevation === 0 ? '±' : '+';
+    ctx.fillStyle = pal.titlePrimary;
+    ctx.font = '800 16px Inter, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(
+      `${signPrefix}${fl.elevation.toFixed(2)}m · ${fl.name}`,
+      94,
+      py - 18
+    );
+    ctx.restore();
+  }
+
+  // 2. Background Visible Walls & Openings Behind the Cut Plane (`v <= offsetMeters + 0.08`)
+  for (const w of archData.walls) {
+    const baseY = floorElev.get(w.floorId) ?? 0;
+    const p0 = toUV(w.start.x, w.start.z);
+    const p1 = toUV(w.end.x, w.end.z);
+    if (p0.v > offsetMeters + 0.08 && p1.v > offsetMeters + 0.08) continue;
+
+    // Clip segment to `v <= offsetMeters`
+    let uA = p0.u,
+      vA = p0.v,
+      uB = p1.u,
+      vB = p1.v;
+    if (vA > offsetMeters && vB <= offsetMeters) {
+      const t = (offsetMeters - vA) / (vB - vA);
+      uA = uA + (uB - uA) * t;
+      vA = offsetMeters;
+    } else if (vB > offsetMeters && vA <= offsetMeters) {
+      const t = (offsetMeters - vA) / (vB - vA);
+      uB = uA + (uB - uA) * t;
+      vB = offsetMeters;
+    }
+
+    if (Math.abs(uB - uA) > 0.12) {
+      const [x0, yTop] = toSecPx(Math.min(uA, uB), baseY + w.height);
+      const [x1, yBot] = toSecPx(Math.max(uA, uB), baseY);
+      ctx.fillStyle =
+        paperTheme === 'architect-white'
+          ? 'rgba(226, 232, 240, 0.42)'
+          : 'rgba(148, 163, 184, 0.09)';
+      ctx.strokeStyle = pal.dimStroke;
+      ctx.lineWidth = 1.6;
+      ctx.fillRect(x0, yTop, x1 - x0, yBot - yTop);
+      ctx.strokeRect(x0, yTop, x1 - x0, yBot - yTop);
+
+      // Background doors/windows on this wall
+      const hosted = archData.openings.filter((o) => o.wallId === w.id);
+      const wLen = Math.max(0.1, calcWallCenterlineLength(w));
+      const cosProj = Math.abs(p1.u - p0.u) / wLen;
+      if (cosProj > 0.2) {
+        for (const op of hosted) {
+          const opPt = sampleCurve(w, op.offsetRatio);
+          const opUV = toUV(opPt.x, opPt.z);
+          if (opUV.v > offsetMeters + 0.1) continue;
+          const hw = op.width * 0.5 * cosProj;
+          const [ox0, oy0] = toSecPx(
+            opUV.u - hw,
+            baseY + op.sillHeight + op.height
+          );
+          const [ox1, oy1] = toSecPx(opUV.u + hw, baseY + op.sillHeight);
+          ctx.fillStyle = op.kind.startsWith('window')
+            ? 'rgba(56, 189, 248, 0.22)'
+            : 'rgba(52, 211, 153, 0.18)';
+          ctx.strokeStyle = op.kind.startsWith('window')
+            ? pal.windowColor
+            : pal.doorColor;
+          ctx.lineWidth = 2;
+          ctx.fillRect(ox0, oy0, ox1 - ox0, oy1 - oy0);
+          ctx.strokeRect(ox0, oy0, ox1 - ox0, oy1 - oy0);
+        }
+      }
+    }
+  }
+
+  // 3. Stepped Staircases Visible Behind or Cut by Section Plane
+  for (const st of archData.stairs) {
+    const stUV = toUV(st.position.x, st.position.z);
+    if (stUV.v > offsetMeters + st.runLength * 0.6) continue;
+    const steps = 12;
+    const runU = st.runLength;
+    const uStart = stUV.u - runU * 0.5;
+    const stepU = runU / steps;
+    const stepH = st.height / steps;
+
+    ctx.beginPath();
+    const [sx0, sy0] = toSecPx(uStart, st.position.y);
+    ctx.moveTo(sx0, sy0);
+    for (let i = 0; i < steps; i++) {
+      const [pxRiser, pyRiser] = toSecPx(
+        uStart + i * stepU,
+        st.position.y + (i + 1) * stepH
+      );
+      const [pxTread, pyTread] = toSecPx(
+        uStart + (i + 1) * stepU,
+        st.position.y + (i + 1) * stepH
+      );
+      ctx.lineTo(pxRiser, pyRiser);
+      ctx.lineTo(pxTread, pyTread);
+    }
+    const [sxEnd, syEnd] = toSecPx(
+      uStart + runU,
+      Math.max(st.position.y, st.position.y + st.height - 0.18)
+    );
+    ctx.lineTo(sxEnd, syEnd);
+    ctx.lineTo(sx0, sy0);
+    ctx.closePath();
+    ctx.fillStyle =
+      paperTheme === 'architect-white'
+        ? 'rgba(180, 83, 9, 0.22)'
+        : 'rgba(251, 191, 36, 0.24)';
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2.4;
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // 4. Cut Structural Floor Slabs & Sliced Room Callouts (omitting Void & Stairwell openings!)
+  for (const room of detectedRooms) {
+    const baseY = floorElev.get(room.floorId) ?? 0;
+    const storyH = floorHeight.get(room.floorId) ?? 3.0;
+    // Intersect `v = offsetMeters` with room polygon edges
+    const hitUs: number[] = [];
+    for (let i = 0; i < room.polygon.length; i++) {
+      const a = toUV(room.polygon[i].x, room.polygon[i].z);
+      const b = toUV(
+        room.polygon[(i + 1) % room.polygon.length].x,
+        room.polygon[(i + 1) % room.polygon.length].z
+      );
+      if (
+        (a.v <= offsetMeters && b.v > offsetMeters) ||
+        (b.v <= offsetMeters && a.v > offsetMeters)
+      ) {
+        const t = (offsetMeters - a.v) / (b.v - a.v);
+        hitUs.push(a.u + (b.u - a.u) * t);
+      }
+    }
+    hitUs.sort((a, b) => a - b);
+    for (let k = 0; k + 1 < hitUs.length; k += 2) {
+      const u0 = hitUs[k];
+      const u1 = hitUs[k + 1];
+      if (u1 - u0 < 0.2) continue;
+
+      // Draw structural concrete floor slab unless upper room is marked `isVoid`
+      if (!room.isVoid) {
+        const slabThick = 0.16;
+        const [sx0, syTop] = toSecPx(u0, baseY);
+        const [sx1, syBot] = toSecPx(u1, baseY - slabThick);
+        ctx.fillStyle =
+          paperTheme === 'architect-white' ? '#cbd5e1' : '#334155';
+        ctx.fillRect(sx0, syTop, sx1 - sx0, syBot - syTop);
+        fillSectionHatch(
+          sx0,
+          syTop,
+          sx1 - sx0,
+          syBot - syTop,
+          pal.frameStroke
+        );
+        ctx.strokeStyle = pal.wallFill;
+        ctx.lineWidth = 3;
+        ctx.strokeRect(sx0, syTop, sx1 - sx0, syBot - syTop);
+      }
+
+      // Room Section Label + Clear Ceiling Height inside sliced room cavity
+      const [midPx, midPy] = toSecPx((u0 + u1) * 0.5, baseY + storyH * 0.46);
+      ctx.textAlign = 'center';
+      ctx.fillStyle = pal.titlePrimary;
+      ctx.font = '800 20px Inter, system-ui, sans-serif';
+      ctx.fillText(
+        room.isVoid ? `${room.name} (VOID)` : room.name,
+        midPx,
+        midPy - 6
+      );
+      ctx.fillStyle = pal.doorColor;
+      ctx.font = '700 15px Inter, system-ui, sans-serif';
+      ctx.fillText(`CH ${storyH.toFixed(2)}m`, midPx, midPy + 16);
+    }
+  }
+
+  // 5. Heavy Pochéd Section-Cut Walls (Pierced directly by `v = offsetMeters`!)
+  for (const w of archData.walls) {
+    const baseY = floorElev.get(w.floorId) ?? 0;
+    const samples = Math.abs(w.curveBulge) >= 0.04 ? 16 : 1;
+    const wallLen = Math.max(0.1, calcWallCenterlineLength(w));
+    const hosted = archData.openings.filter((o) => o.wallId === w.id);
+
+    for (let s = 0; s < samples; s++) {
+      const t0 = s / samples;
+      const t1 = (s + 1) / samples;
+      const c0 = sampleCurve(w, t0);
+      const c1 = sampleCurve(w, t1);
+      const a = toUV(c0.x, c0.z);
+      const b = toUV(c1.x, c1.z);
+
+      // Case A: Wall runs nearly coplanar along the cut plane (`|v - offset| <= thickness`)
+      const coplanarHit =
+        Math.abs(a.v - offsetMeters) <= w.thickness * 0.65 &&
+        Math.abs(b.v - offsetMeters) <= w.thickness * 0.65;
+
+      // Case B: Wall crosses `v = offsetMeters` transversely
+      const crossesPlane =
+        (a.v - offsetMeters) * (b.v - offsetMeters) <= 0 &&
+        Math.abs(a.v - b.v) > 0.04;
+
+      if (coplanarHit) {
+        const [x0, yTop] = toSecPx(Math.min(a.u, b.u), baseY + w.height);
+        const [x1, yBot] = toSecPx(Math.max(a.u, b.u), baseY);
+        ctx.fillStyle =
+          paperTheme === 'architect-white' ? '#cbd5e1' : '#1e293b';
+        ctx.fillRect(x0, yTop, x1 - x0, yBot - yTop);
+        fillSectionHatch(x0, yTop, x1 - x0, yBot - yTop, pal.titleAccent);
+        ctx.strokeStyle = pal.wallFill;
+        ctx.lineWidth = 3.5;
+        ctx.strokeRect(x0, yTop, x1 - x0, yBot - yTop);
+      } else if (crossesPlane) {
+        const frac = (offsetMeters - a.v) / (b.v - a.v);
+        const uHit = a.u + (b.u - a.u) * frac;
+        const sAlong = (t0 + (t1 - t0) * frac) * wallLen;
+        const halfThick = Math.max(0.075, w.thickness * 0.5);
+
+        // Check if cut plane passes right through a Door or Window opening!
+        const slicedOp = hosted.find(
+          (op) =>
+            Math.abs(sAlong - op.offsetRatio * wallLen) <= op.width * 0.5
+        );
+
+        const drawWallSpanY = (yBottom: number, yTopVal: number) => {
+          if (yTopVal - yBottom < 0.04) return;
+          const [wx0, pyTop] = toSecPx(uHit - halfThick, yTopVal);
+          const [wx1, pyBot] = toSecPx(uHit + halfThick, yBottom);
+          const wPx = Math.max(8, wx1 - wx0);
+          ctx.fillStyle =
+            paperTheme === 'architect-white' ? '#94a3b8' : '#0f172a';
+          ctx.fillRect(wx0, pyTop, wPx, pyBot - pyTop);
+          fillSectionHatch(wx0, pyTop, wPx, pyBot - pyTop, pal.wallFill);
+          ctx.strokeStyle = pal.wallFill;
+          ctx.lineWidth = 3.5;
+          ctx.strokeRect(wx0, pyTop, wPx, pyBot - pyTop);
+        };
+
+        if (slicedOp) {
+          // Draw sill wall below opening + lintel header wall above opening + glass/door line inside!
+          drawWallSpanY(baseY, baseY + slicedOp.sillHeight);
+          drawWallSpanY(
+            baseY + slicedOp.sillHeight + slicedOp.height,
+            baseY + w.height
+          );
+          const [gx, gyTop] = toSecPx(
+            uHit,
+            baseY + slicedOp.sillHeight + slicedOp.height
+          );
+          const [, gyBot] = toSecPx(uHit, baseY + slicedOp.sillHeight);
+          ctx.strokeStyle = slicedOp.kind.startsWith('window')
+            ? pal.windowColor
+            : pal.doorColor;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(gx, gyTop);
+          ctx.lineTo(gx, gyBot);
+          ctx.stroke();
+        } else {
+          drawWallSpanY(baseY, baseY + w.height);
+        }
+      }
+    }
+  }
+
+  // 6. Intersected Roof Section Profile (Rafters + Ridge + Ceiling Tie)
+  for (const rf of archData.roofs) {
+    const rq = computeSingleRoofQuantities(rf);
+    const rfCenter = toUV(rf.center.x, rf.center.z);
+    const spanU = (axis === 'x' ? rf.width : rf.depth) * 0.5 + rf.overhang;
+    const spanV = (axis === 'x' ? rf.depth : rf.width) * 0.5 + rf.overhang;
+    if (Math.abs(rfCenter.v - offsetMeters) > spanV + 0.25) continue;
+
+    const u0 = rfCenter.u - spanU;
+    const u1 = rfCenter.u + spanU;
+    const topY = rf.baseY + rq.ridgeRiseM;
+    const rafterThick = 0.16;
+
+    const pitchedCross =
+      rf.style !== 'flat' &&
+      ((axis === 'x' && rf.ridgeAxis === 'z') ||
+        (axis === 'z' && rf.ridgeAxis === 'x') ||
+        rf.style === 'hip');
+
+    ctx.beginPath();
+    if (pitchedCross) {
+      const uMid = (u0 + u1) * 0.5;
+      const [pL0x, pL0y] = toSecPx(u0, rf.baseY);
+      const [pMx, pMy] = toSecPx(uMid, topY);
+      const [pR0x, pR0y] = toSecPx(u1, rf.baseY);
+      const [pR1x, pR1y] = toSecPx(u1, rf.baseY - rafterThick);
+      const [pM1x, pM1y] = toSecPx(uMid, topY - rafterThick);
+      const [pL1x, pL1y] = toSecPx(u0, rf.baseY - rafterThick);
+      ctx.moveTo(pL0x, pL0y);
+      ctx.lineTo(pMx, pMy);
+      ctx.lineTo(pR0x, pR0y);
+      ctx.lineTo(pR1x, pR1y);
+      ctx.lineTo(pM1x, pM1y);
+      ctx.lineTo(pL1x, pL1y);
+    } else {
+      const [p0x, p0y] = toSecPx(u0, topY);
+      const [p1x, p1y] = toSecPx(u1, topY);
+      const [p2x, p2y] = toSecPx(u1, rf.baseY);
+      const [p3x, p3y] = toSecPx(u0, rf.baseY);
+      ctx.moveTo(p0x, p0y);
+      ctx.lineTo(p1x, p1y);
+      ctx.lineTo(p2x, p2y);
+      ctx.lineTo(p3x, p3y);
+    }
+    ctx.closePath();
+    ctx.fillStyle =
+      paperTheme === 'architect-white'
+        ? 'rgba(184, 93, 59, 0.34)'
+        : 'rgba(217, 107, 67, 0.42)';
+    ctx.strokeStyle = pal.wallFill;
+    ctx.lineWidth = 3.5;
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // 7. Heavy Earth Ground Line + Subgrade Hatch
+  ctx.fillStyle =
+    paperTheme === 'architect-white'
+      ? 'rgba(100, 116, 139, 0.14)'
+      : 'rgba(148, 163, 184, 0.12)';
+  ctx.fillRect(70, groundPxY, W - 140, 26);
+  fillSectionHatch(70, groundPxY, W - 140, 26, pal.dimStroke);
+  ctx.strokeStyle = pal.titlePrimary;
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.moveTo(70, groundPxY);
+  ctx.lineTo(W - 70, groundPxY);
+  ctx.stroke();
+
+  // 8. Title Block
+  const tbY = H - 166;
+  const secTag = axis === 'x' ? "SECTION A–A' (CROSS)" : "SECTION B–B' (LONGITUDINAL)";
+  const coordTag =
+    axis === 'x'
+      ? `Cut Plane Z = ${offsetMeters >= 0 ? '+' : ''}${offsetMeters.toFixed(2)}m`
+      : `Cut Plane X = ${offsetMeters >= 0 ? '+' : ''}${offsetMeters.toFixed(2)}m`;
+
+  ctx.fillStyle = pal.titleBg;
+  ctx.strokeStyle = pal.frameStroke;
+  ctx.lineWidth = 2.5;
+  ctx.fillRect(42, tbY, W - 84, 124);
+  ctx.strokeRect(42, tbY, W - 84, 124);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = pal.titleAccent;
+  ctx.font = '800 20px Inter, system-ui, sans-serif';
+  ctx.fillText(
+    sourceLabel
+      ? `PERABOT ARCHITECTURAL SECTION · ${sourceLabel.toUpperCase()}`
+      : 'PERABOT TRUE CUT-PLANE BUILDING SECTION',
+    72,
+    tbY + 38
+  );
+  ctx.fillStyle = pal.titlePrimary;
+  ctx.font = '800 32px Inter, system-ui, sans-serif';
+  ctx.fillText(`${projectName} — ${secTag}`, 72, tbY + 84);
+
+  drawGraphicScaleBar(
+    ctx,
+    W * 0.54,
+    tbY + 74,
+    scale,
+    pal.titlePrimary,
+    pal.titleAccent
+  );
+
+  ctx.textAlign = 'right';
+  ctx.fillStyle = pal.titleSub;
+  ctx.font = '600 18px Inter, system-ui, sans-serif';
+  ctx.fillText(`${coordTag} · Peak +${(maxY - 0.8).toFixed(2)}m`, W - 72, tbY + 68);
+
+  const dataUrl = canvas.toDataURL('image/png');
+  if (download) {
+    const safeName = projectName.replace(/[^a-zA-Z0-9_-]+/g, '_');
+    const code = axis === 'x' ? 'Section_AA' : 'Section_BB';
+    triggerDataUrlDownload(dataUrl, `${safeName}_${code}.png`);
   }
   return dataUrl;
 }

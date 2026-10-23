@@ -43,6 +43,7 @@ import {
   GridStyle,
   GridVerticalMode,
   LightingMood,
+  LiveSectionCutConfig,
   MagnetStrength,
   PlacementValidationStatus,
   SnapSettings,
@@ -51,6 +52,7 @@ import {
   SurfaceConformMode,
   SurfaceSettings,
   TerrainPreset,
+  ViewportShadingMode,
 } from '../types/studio';
 
 interface PortalDropdownProps {
@@ -194,7 +196,13 @@ interface TopBarProps {
   onAlignGridToSelection: () => void;
   onFocusCamera: () => void;
   onCameraPreset: (preset: CameraPresetType) => void;
-  onExport: (format: 'glb' | 'gltf') => void;
+  onExport: (format: 'glb' | 'gltf' | 'obj', onlySelected?: boolean) => void;
+  viewportShading?: ViewportShadingMode;
+  sectionCut?: LiveSectionCutConfig;
+  universalMeasureActive?: boolean;
+  onChangeViewportShading?: (mode: ViewportShadingMode) => void;
+  onChangeSectionCut?: (patch: Partial<LiveSectionCutConfig>) => void;
+  onToggleUniversalMeasure?: () => void;
   onClearScene: () => void;
   onToggleInspector: () => void;
   onToggleFullscreen: () => void;
@@ -249,6 +257,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   onFocusCamera,
   onCameraPreset,
   onExport,
+  viewportShading = 'shaded',
+  sectionCut,
+  universalMeasureActive = false,
+  onChangeViewportShading,
+  onChangeSectionCut,
+  onToggleUniversalMeasure,
   onClearScene,
   onToggleInspector,
   onToggleFullscreen,
@@ -264,7 +278,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   }, [projectName]);
 
   const [openMenu, setOpenMenu] = useState<
-    null | 'snap' | 'surface' | 'grid' | 'view' | 'export'
+    null | 'snap' | 'surface' | 'grid' | 'view' | 'visual' | 'export'
   >(null);
 
   const exportRef = useRef<HTMLDivElement>(null);
@@ -272,8 +286,11 @@ export const TopBar: React.FC<TopBarProps> = ({
   const surfaceRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
+  const visualRef = useRef<HTMLDivElement>(null);
 
-  const toggleMenu = (id: 'snap' | 'surface' | 'grid' | 'view' | 'export') => {
+  const toggleMenu = (
+    id: 'snap' | 'surface' | 'grid' | 'view' | 'visual' | 'export'
+  ) => {
     setOpenMenu((prev) => (prev === id ? null : id));
   };
 
@@ -1514,6 +1531,161 @@ export const TopBar: React.FC<TopBarProps> = ({
             </PortalDropdown>
           </div>
 
+          {/* Universal 3D Laser Tape Measure (`Mode Modeling` & `Buat Rumah`) */}
+          {onToggleUniversalMeasure && (
+            <button
+              type="button"
+              className={`chip-btn ${universalMeasureActive ? 'active' : ''}`}
+              onClick={onToggleUniversalMeasure}
+              title={t.measure3dHint}
+            >
+              <Ruler size={15} />
+              <span>{t.measure3dToolLabel}</span>
+            </button>
+          )}
+
+          {/* Viewport Shading Mode (PBR / Clay Maquette / Technical) + Live 3D Section Cut */}
+          {(onChangeViewportShading || onChangeSectionCut) && (
+            <div className="dropdown-wrap" ref={visualRef}>
+              <button
+                type="button"
+                className={`chip-btn ${
+                  viewportShading !== 'shaded' || sectionCut?.enabled
+                    ? 'active'
+                    : ''
+                }`}
+                onClick={() => toggleMenu('visual')}
+                title={t.shadingModeTitle}
+              >
+                <ScanLine size={15} />
+                <span>
+                  {viewportShading === 'clay'
+                    ? t.shadingModeClay
+                    : viewportShading === 'technical'
+                    ? t.shadingModeTech
+                    : t.shadingModeShaded}
+                </span>
+                <ChevronDown size={13} />
+              </button>
+
+              <PortalDropdown
+                open={openMenu === 'visual'}
+                anchorRef={visualRef}
+                onClose={() => setOpenMenu(null)}
+                className="snap-popover"
+              >
+                {onChangeViewportShading && (
+                  <>
+                    <div className="dropdown-label">{t.shadingModeTitle}</div>
+                    <div className="snap-sub-chips" style={{ paddingLeft: 0 }}>
+                      {(
+                        [
+                          { id: 'shaded', label: t.shadingModeShaded },
+                          { id: 'clay', label: t.shadingModeClay },
+                          { id: 'technical', label: t.shadingModeTech },
+                        ] as Array<{ id: ViewportShadingMode; label: string }>
+                      ).map((sm) => (
+                        <button
+                          key={sm.id}
+                          type="button"
+                          className={`sub-chip ${
+                            viewportShading === sm.id ? 'active' : ''
+                          }`}
+                          onClick={() => onChangeViewportShading(sm.id)}
+                        >
+                          {sm.label}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {sectionCut && onChangeSectionCut && (
+                  <>
+                    <div
+                      className="dropdown-label"
+                      style={{ marginTop: 10 }}
+                    >
+                      {t.sectionCut3dTitle}
+                    </div>
+                    <div
+                      className={`snap-mode-card ${
+                        sectionCut.enabled ? 'selected' : ''
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        className="snap-mode-row"
+                        onClick={() =>
+                          onChangeSectionCut({ enabled: !sectionCut.enabled })
+                        }
+                      >
+                        <span className="snap-check-box">
+                          {sectionCut.enabled && <Check size={13} />}
+                        </span>
+                        <div className="snap-mode-info">
+                          <strong>{t.sectionCutEnable}</strong>
+                        </div>
+                      </button>
+                    </div>
+
+                    {sectionCut.enabled && (
+                      <div style={{ padding: '6px 4px 2px' }}>
+                        <div
+                          className="snap-sub-chips"
+                          style={{ paddingLeft: 0, marginBottom: 8 }}
+                        >
+                          {(['y', 'x', 'z'] as const).map((ax) => (
+                            <button
+                              key={ax}
+                              type="button"
+                              className={`sub-chip ${
+                                sectionCut.axis === ax ? 'active' : ''
+                              }`}
+                              onClick={() => onChangeSectionCut({ axis: ax })}
+                            >
+                              Axis {ax.toUpperCase()}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            className={`sub-chip ${
+                              sectionCut.flip ? 'active' : ''
+                            }`}
+                            onClick={() =>
+                              onChangeSectionCut({ flip: !sectionCut.flip })
+                            }
+                          >
+                            {t.sectionCutFlip}
+                          </button>
+                        </div>
+
+                        <div className="grid-slider-row">
+                          <div className="grid-slider-head">
+                            <span>Pos ({sectionCut.axis.toUpperCase()})</span>
+                            <strong>{sectionCut.position.toFixed(2)} m</strong>
+                          </div>
+                          <input
+                            type="range"
+                            min={sectionCut.axis === 'y' ? 0.2 : -12}
+                            max={12}
+                            step={0.1}
+                            value={sectionCut.position}
+                            onChange={(e) =>
+                              onChangeSectionCut({
+                                position: parseFloat(e.target.value),
+                              })
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </PortalDropdown>
+            </div>
+          )}
+
           {/* Studio HD Photo Snapshot (Available in BOTH Mode Modeling & Buat Rumah) */}
           {onOpenPhotoStudio && (
             <button
@@ -1611,6 +1783,47 @@ export const TopBar: React.FC<TopBarProps> = ({
                 <div className="dropdown-sub">{t.exportGltfSub}</div>
               </div>
             </button>
+            <button
+              type="button"
+              className="dropdown-item"
+              onClick={() => {
+                onExport('obj');
+                setOpenMenu(null);
+              }}
+            >
+              <div>
+                <strong>{t.exportObjLabel}</strong>
+                <div className="dropdown-sub">Wavefront .OBJ Mesh</div>
+              </div>
+            </button>
+            {hasSelection && (
+              <>
+                <button
+                  type="button"
+                  className="dropdown-item"
+                  onClick={() => {
+                    onExport('glb', true);
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div>
+                    <strong>{t.exportSelectedGlbLabel}</strong>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="dropdown-item"
+                  onClick={() => {
+                    onExport('obj', true);
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div>
+                    <strong>{t.exportSelectedObjLabel}</strong>
+                  </div>
+                </button>
+              </>
+            )}
           </PortalDropdown>
         </div>
 

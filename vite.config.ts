@@ -19,6 +19,15 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          if (
+            id.includes('FBXLoader') ||
+            id.includes('OBJLoader') ||
+            id.includes('STLLoader') ||
+            id.includes('PLYLoader') ||
+            id.includes('fflate')
+          ) {
+            return 'three-heavy-loaders';
+          }
           if (id.includes('node_modules/three/examples')) {
             return 'three-addons';
           }

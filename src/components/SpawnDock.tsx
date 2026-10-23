@@ -14,6 +14,7 @@ import {
   Trash2,
   Upload,
   X,
+  RotateCw,
 } from 'lucide-react';
 import {
   BASIC_SHAPES_CATALOG,
@@ -210,6 +211,7 @@ interface CatalogDrawerProps {
   onDeleteCustomAsset?: (id: string) => void;
   onExportAssetsPack?: () => void;
   onImportAssetsPackFile?: (file: File) => void;
+  onOpenCustomProfileStudio?: () => void;
 }
 
 const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
@@ -227,6 +229,7 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
   onDeleteCustomAsset,
   onExportAssetsPack,
   onImportAssetsPackFile,
+  onOpenCustomProfileStudio,
 }) => {
   const t = TRANSLATIONS[language];
   const isHouse = studioMode === 'house';
@@ -451,6 +454,19 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
 
           {catalogView === 'shapes' && (
             <div className="basic-shapes-tabs" role="tablist">
+              {onOpenCustomProfileStudio && (
+                <button
+                  type="button"
+                  className="basic-subcat-tab active"
+                  onClick={() => {
+                    onClose();
+                    onOpenCustomProfileStudio();
+                  }}
+                >
+                  <RotateCw size={12} style={{ marginRight: 4 }} />
+                  {t.profileStudioBtn}
+                </button>
+              )}
               {SUBCATEGORY_ORDER.map((tabId) => {
                 const label =
                   tabId === 'all'
@@ -674,6 +690,11 @@ const CatalogDrawer: React.FC<CatalogDrawerProps> = ({
                   <strong>{asset.name}</strong>
                   <small>
                     {asset.parts.length} {t.partsUnit}
+                    {asset.dimensions
+                      ? ` · ${asset.dimensions.x.toFixed(2)}×${asset.dimensions.y.toFixed(
+                          2
+                        )}×${asset.dimensions.z.toFixed(2)}m`
+                      : ''}
                   </small>
                 </div>
               </div>
@@ -759,6 +780,7 @@ interface SpawnDockProps {
   onDeleteCustomAsset?: (id: string) => void;
   onExportAssetsPack?: () => void;
   onImportAssetsPackFile?: (file: File) => void;
+  onOpenCustomProfileStudio?: () => void;
 }
 
 export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
@@ -772,6 +794,7 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
   onDeleteCustomAsset,
   onExportAssetsPack,
   onImportAssetsPackFile,
+  onOpenCustomProfileStudio,
 }) => {
   const t = TRANSLATIONS[language];
   const isHouse = studioMode === 'house';
@@ -885,6 +908,7 @@ export const DesktopSpawnDock: React.FC<SpawnDockProps> = ({
         onDeleteCustomAsset={onDeleteCustomAsset}
         onExportAssetsPack={onExportAssetsPack}
         onImportAssetsPackFile={onImportAssetsPackFile}
+        onOpenCustomProfileStudio={onOpenCustomProfileStudio}
       />
     </>
   );
@@ -907,6 +931,7 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
   onDeleteCustomAsset,
   onExportAssetsPack,
   onImportAssetsPackFile,
+  onOpenCustomProfileStudio,
   objectCount,
   drawerOpen,
   onToggleDrawer,
@@ -1012,6 +1037,7 @@ export const MobileBottomBar: React.FC<MobileBottomBarProps> = ({
         onDeleteCustomAsset={onDeleteCustomAsset}
         onExportAssetsPack={onExportAssetsPack}
         onImportAssetsPackFile={onImportAssetsPackFile}
+        onOpenCustomProfileStudio={onOpenCustomProfileStudio}
       />
     </>
   );

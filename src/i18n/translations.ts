@@ -710,6 +710,73 @@ export interface StudioStrings {
   docExportPngBtn: string;
   docExportHtmlBtn: string;
   docSectionLimitationNote: string;
+
+  // Next-Gen Studio, Modeling, Lighting, Walkthrough & Architectural Pro Upgrades
+  outlinerSearchPlaceholder: string;
+  outlinerFolderBadge: string;
+  saveWholeScenePrefabBtn: string;
+  prefabDimsBadgeLabel: string;
+  exportObjLabel: string;
+  exportSelectedGlbLabel: string;
+  exportSelectedObjLabel: string;
+  worldScaleTexLabel: string;
+  patternRotateLabel: string;
+  csgCardTitle: string;
+  csgCardHint: string;
+  csgSubtractBtn: string;
+  csgUnionBtn: string;
+  csgIntersectBtn: string;
+  csgResetBtn: string;
+  csgAppliedToast: string;
+  profileStudioBtn: string;
+  profileStudioTitle: string;
+  profileStudioDesc: string;
+  profileModeLathe: string;
+  profileModeExtrude: string;
+  profileSmoothLabel: string;
+  profileHollowLabel: string;
+  profileSegmentsLabel: string;
+  profileDepthLabel: string;
+  profileTemplateLabel: string;
+  profileAddPointHint: string;
+  profileApplyBtn: string;
+  lightTypePoint: string;
+  lightTypeSpot: string;
+  lightConeAngleLabel: string;
+  lightKelvinLabel: string;
+  lightAutoNightLabel: string;
+  walkLookPadLabel: string;
+  walkGhostModeLabel: string;
+  walkEyeStanding: string;
+  walkEyeSeated: string;
+  walkInteractOpenDoor: string;
+  walkInteractCloseDoor: string;
+  walkInteractToggleLight: string;
+  roomVoidToggleLabel: string;
+  roomVoidHint: string;
+  siteShapeLabel: string;
+  siteShapeRect: string;
+  siteShapeTrapezoid: string;
+  siteShapeHook: string;
+  siteShapeLLot: string;
+  docKindSection: string;
+  docSectionAxisAA: string;
+  docSectionAxisBB: string;
+  docSectionOffsetLabel: string;
+  shadingModeTitle: string;
+  shadingModeShaded: string;
+  shadingModeClay: string;
+  shadingModeTech: string;
+  sectionCut3dTitle: string;
+  sectionCutEnable: string;
+  sectionCutFlip: string;
+  measure3dToolLabel: string;
+  measure3dHint: string;
+  quickDimEditTitle: string;
+  quickDimApplyBtn: string;
+  photoRes4kLabel: string;
+  photoTwoPointLabel: string;
+  touchLoupeSettingLabel: string;
 }
 
 export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
@@ -1433,7 +1500,76 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     docExportPngBtn: 'Unduh Gambar .PNG',
     docExportHtmlBtn: 'Unduh Paket Laporan Cetak (.HTML/PDF)',
     docSectionLimitationNote:
-      'Catatan Teknis: Gambar denah, rencana tapak, dan tampak ortografis 4 sisi dihasilkan langsung dari geometri model nyata. Potongan melintang penuh (Section Cut) belum disertakan agar tidak menampilkan potongan semu.',
+      'Catatan Teknis: Denah lantai, rencana tapak, 4 tampak ortografis, dan potongan melintang A–A\' / B–B\' dihasilkan langsung dari irisan geometri model nyata.',
+
+    outlinerSearchPlaceholder: 'Cari nama objek atau grup...',
+    outlinerFolderBadge: 'Grup',
+    saveWholeScenePrefabBtn: 'Simpan Rakitan Kanvas ke Katalog',
+    prefabDimsBadgeLabel: 'Ukuran',
+    exportObjLabel: 'Ekspor Model 3D (.OBJ)',
+    exportSelectedGlbLabel: 'Ekspor Pilihan Saja (.GLB)',
+    exportSelectedObjLabel: 'Ekspor Pilihan Saja (.OBJ)',
+    worldScaleTexLabel: 'Skala Tekstur Meter Nyata (Anti-Melar)',
+    patternRotateLabel: 'Rotasi Arah Serat / Pola',
+    csgCardTitle: 'Operasi Boolean 3D (Potong / Gabung / Iris)',
+    csgCardHint:
+      'Pilih 2+ objek (Objek ke-1 = Target Utama, Objek ke-2+ = Pemotong) untuk melubangi wastafel, rak, atau ceruk dinding.',
+    csgSubtractBtn: 'Potong (A - B)',
+    csgUnionBtn: 'Gabung (A + B)',
+    csgIntersectBtn: 'Iris (A ∩ B)',
+    csgResetBtn: 'Pulihkan Bentuk Sebelum Boolean',
+    csgAppliedToast: 'Operasi Boolean 3D berhasil diterapkan',
+    profileStudioBtn: 'Studio Profil 2D ke 3D (Bubut / Extrude)',
+    profileStudioTitle: 'Studio Profil Kustom 2D ke 3D',
+    profileStudioDesc:
+      'Geser titik kurva 2D untuk membentuk kaki meja bubut 360°, vas berongga, kap lampu, atau lis profil memanjang.',
+    profileModeLathe: 'Putar Bubut 360° (Lathe)',
+    profileModeExtrude: 'Tebalkan Memanjang (Extrude)',
+    profileSmoothLabel: 'Haluskan Kurva (Spline)',
+    profileHollowLabel: 'Tebal Dinding Berongga',
+    profileSegmentsLabel: 'Kehalusan Segmen',
+    profileDepthLabel: 'Panjang Ekstrusi',
+    profileTemplateLabel: 'Kurva Dasar Awal',
+    profileAddPointHint: 'Ketuk area kosong untuk tambah titik · Geser titik biru · Ketuk 2x titik untuk hapus',
+    profileApplyBtn: 'Buat / Perbarui Bentuk 3D',
+    lightTypePoint: 'Menyebar 360° (Bohlam)',
+    lightTypeSpot: 'Sorot Bawah (Downlight / Spot)',
+    lightConeAngleLabel: 'Sudut Sorot Lampu',
+    lightKelvinLabel: 'Suhu Warna Kelvin',
+    lightAutoNightLabel: 'Otomatis Menyala Saat Sore / Malam Saja',
+    walkLookPadLabel: 'Geser untuk Menoleh',
+    walkGhostModeLabel: 'Tembus Dinding',
+    walkEyeStanding: 'Berdiri (1.65m)',
+    walkEyeSeated: 'Duduk (1.10m)',
+    walkInteractOpenDoor: 'Buka Pintu',
+    walkInteractCloseDoor: 'Tutup Pintu',
+    walkInteractToggleLight: 'Sakelar Lampu',
+    roomVoidToggleLabel: 'Bukaan Void / Mezzanine Terbuka (2 Lantai)',
+    roomVoidHint:
+      'Membuka pelat lantai ruang atas & plafon di bawahnya untuk ruang keluarga plafon ganda (double-height).',
+    siteShapeLabel: 'Bentuk Kavling Lahan',
+    siteShapeRect: 'Persegi Panjang',
+    siteShapeTrapezoid: 'Trapesium',
+    siteShapeHook: 'Kavling Sudut (Hook)',
+    siteShapeLLot: 'Kavling Bentuk L',
+    docKindSection: 'Potongan Melintang (A–A\' / B–B\')',
+    docSectionAxisAA: 'Potongan Melintang A–A\' (Sumbu X)',
+    docSectionAxisBB: 'Potongan Memanjang B–B\' (Sumbu Z)',
+    docSectionOffsetLabel: 'Posisi Garis Irisan (m)',
+    shadingModeTitle: 'Gaya Visual Viewport',
+    shadingModeShaded: 'Realistis PBR',
+    shadingModeClay: 'Maket Putih (Clay)',
+    shadingModeTech: 'Garis Teknik',
+    sectionCut3dTitle: 'Irisan 3D Langsung (Section Box)',
+    sectionCutEnable: 'Aktifkan Bidang Iris 3D',
+    sectionCutFlip: 'Balik Arah Irisan',
+    measure3dToolLabel: 'Meteran 3D',
+    measure3dHint: 'Ketuk Titik A lalu Titik B pada objek/ruang (otomatis menempel ke sudut terdekat)',
+    quickDimEditTitle: 'Ukuran Presisi Meter (P × T × L)',
+    quickDimApplyBtn: 'Terapkan',
+    photoRes4kLabel: '4K Ultra HD (3840 × 2160)',
+    photoTwoPointLabel: 'Perspektif 2-Titik Arsitektur (Garis Dinding Tegak Lurus)',
+    touchLoupeSettingLabel: 'Kaca Pembesar Presisi Sentuh Saat Geser Sudut',
   },
 
   en: {
@@ -2156,7 +2292,76 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     docExportPngBtn: 'Download .PNG Sheet',
     docExportHtmlBtn: 'Download Printable Report Package (.HTML/PDF)',
     docSectionLimitationNote:
-      'Technical Note: Floor plans, site plans, and 4-side orthographic elevations are generated directly from live model geometry. True plane-cut building sections are omitted rather than approximated.',
+      'Technical Note: Floor plans, site plans, 4-side orthographic elevations, and true cut-plane sections A–A\' / B–B\' are generated directly from live model geometry.',
+
+    outlinerSearchPlaceholder: 'Search objects or groups...',
+    outlinerFolderBadge: 'Group',
+    saveWholeScenePrefabBtn: 'Save Canvas Assembly to Catalog',
+    prefabDimsBadgeLabel: 'Size',
+    exportObjLabel: 'Export 3D Model (.OBJ)',
+    exportSelectedGlbLabel: 'Export Selection Only (.GLB)',
+    exportSelectedObjLabel: 'Export Selection Only (.OBJ)',
+    worldScaleTexLabel: 'Real-Meter Texture Scale (Non-Stretched)',
+    patternRotateLabel: 'Grain / Pattern Rotation',
+    csgCardTitle: '3D Boolean Operations (Cut / Union / Intersect)',
+    csgCardHint:
+      'Select 2+ objects (1st = Target, 2nd+ = Cutter) to carve sinks, shelves, hollow planters, or wall niches.',
+    csgSubtractBtn: 'Subtract (A - B)',
+    csgUnionBtn: 'Union (A + B)',
+    csgIntersectBtn: 'Intersect (A ∩ B)',
+    csgResetBtn: 'Restore Pre-Boolean Shape',
+    csgAppliedToast: '3D Boolean operation applied cleanly',
+    profileStudioBtn: '2D-to-3D Profile Studio (Lathe / Extrude)',
+    profileStudioTitle: 'Custom 2D-to-3D Profile Studio',
+    profileStudioDesc:
+      'Drag 2D curve control points to revolve 360° turned legs, hollow vases, lamp shades, or extruded moldings.',
+    profileModeLathe: '360° Revolve (Lathe)',
+    profileModeExtrude: 'Linear Extrude',
+    profileSmoothLabel: 'Smooth Spline Curve',
+    profileHollowLabel: 'Hollow Wall Thickness',
+    profileSegmentsLabel: 'Radial Segments',
+    profileDepthLabel: 'Extrude Depth',
+    profileTemplateLabel: 'Starter Curve',
+    profileAddPointHint: 'Tap empty grid to add point · Drag blue nodes · Double-tap node to delete',
+    profileApplyBtn: 'Build / Update 3D Shape',
+    lightTypePoint: '360° Point Bulb',
+    lightTypeSpot: 'Downlight / Spotlight',
+    lightConeAngleLabel: 'Beam Cone Angle',
+    lightKelvinLabel: 'Kelvin Color Temp',
+    lightAutoNightLabel: 'Auto-Switch ON at Sunset / Night Only',
+    walkLookPadLabel: 'Drag to Look Around',
+    walkGhostModeLabel: 'No-Clip Walls',
+    walkEyeStanding: 'Standing (1.65m)',
+    walkEyeSeated: 'Seated (1.10m)',
+    walkInteractOpenDoor: 'Open Door',
+    walkInteractCloseDoor: 'Close Door',
+    walkInteractToggleLight: 'Toggle Lamp',
+    roomVoidToggleLabel: 'Double-Height Void / Open Mezzanine',
+    roomVoidHint:
+      'Opens this upper-floor slab and the ceiling below for double-height living rooms or mezzanines.',
+    siteShapeLabel: 'Parcel Lot Shape',
+    siteShapeRect: 'Rectangular',
+    siteShapeTrapezoid: 'Trapezoid',
+    siteShapeHook: 'Corner Chamfer (Hook)',
+    siteShapeLLot: 'L-Shaped Lot',
+    docKindSection: 'Building Section (A–A\' / B–B\')',
+    docSectionAxisAA: 'Cross Section A–A\' (X Axis)',
+    docSectionAxisBB: 'Longitudinal Section B–B\' (Z Axis)',
+    docSectionOffsetLabel: 'Cut Plane Position (m)',
+    shadingModeTitle: 'Viewport Visual Style',
+    shadingModeShaded: 'Realistic PBR',
+    shadingModeClay: 'White Clay Maquette',
+    shadingModeTech: 'Technical Line',
+    sectionCut3dTitle: 'Live 3D Section Cut',
+    sectionCutEnable: 'Enable 3D Cut Plane',
+    sectionCutFlip: 'Flip Cut Side',
+    measure3dToolLabel: '3D Tape Measure',
+    measure3dHint: 'Tap Point A then Point B on any object or room (auto-snaps to nearest vertex)',
+    quickDimEditTitle: 'Exact Meter Size (W × H × D)',
+    quickDimApplyBtn: 'Apply',
+    photoRes4kLabel: '4K Ultra HD (3840 × 2160)',
+    photoTwoPointLabel: 'Architectural 2-Point Perspective (Plumb Vertical Lines)',
+    touchLoupeSettingLabel: 'Touch Precision Magnifier Loupe While Dragging',
   },
 
   ja: {
@@ -2870,7 +3075,76 @@ export const TRANSLATIONS: Record<AppLanguage, StudioStrings> = {
     docExportPngBtn: '.PNG 図面を保存',
     docExportHtmlBtn: '印刷用レポート一式を保存 (.HTML/PDF)',
     docSectionLimitationNote:
-      '技術注記：平面図・配置図・4面立面図は実モデル形状から直接正投影生成されます。擬似的な断面表示を避けるため、切断断面図（Section）は今後の拡張対象としています。',
+      '技術注記：平面図・配置図・4面立面図および切断断面図（A–A\' / B–B\'）は実モデル形状から直接生成されます。',
+
+    outlinerSearchPlaceholder: 'オブジェクト・グループを検索...',
+    outlinerFolderBadge: 'グループ',
+    saveWholeScenePrefabBtn: 'キャンバス全体をマイカタログに保存',
+    prefabDimsBadgeLabel: '寸法',
+    exportObjLabel: '3Dモデル書き出し (.OBJ)',
+    exportSelectedGlbLabel: '選択項目のみ書き出し (.GLB)',
+    exportSelectedObjLabel: '選択項目のみ書き出し (.OBJ)',
+    worldScaleTexLabel: '実寸メートルUVスケール（引き伸ばし防止）',
+    patternRotateLabel: '木目・パターン回転角',
+    csgCardTitle: '3D ブーリアン演算（くり抜き・結合・交差）',
+    csgCardHint:
+      '2つ以上選択（1つ目＝対象、2つ目以降＝カッター）でシンクや棚穴、壁ニッチを正確に削り出せます。',
+    csgSubtractBtn: '減算くり抜き (A - B)',
+    csgUnionBtn: '結合 (A + B)',
+    csgIntersectBtn: '交差 (A ∩ B)',
+    csgResetBtn: 'ブーリアン前の形状に戻す',
+    csgAppliedToast: '3Dブーリアン演算を適用しました',
+    profileStudioBtn: '2D→3D 断面プロファイル作成（回転体 / 押し出し）',
+    profileStudioTitle: 'カスタム 2D→3D プロファイルスタジオ',
+    profileStudioDesc:
+      '2Dカーブの制御点をドラッグして、ろくろ脚、中空の花瓶、ランプシェード、廻り縁を作成します。',
+    profileModeLathe: '360° 回転体 (Lathe)',
+    profileModeExtrude: '直線押し出し (Extrude)',
+    profileSmoothLabel: '曲線を滑らかに補間 (Spline)',
+    profileHollowLabel: '中空の肉厚',
+    profileSegmentsLabel: '分割セグメント数',
+    profileDepthLabel: '押し出し奥行き',
+    profileTemplateLabel: 'ベース曲線テンプレート',
+    profileAddPointHint: '空白タップで点追加・青丸ドラッグで移動・ダブルタップで削除',
+    profileApplyBtn: '3D形状を生成 / 更新',
+    lightTypePoint: '360° 全方向ライト',
+    lightTypeSpot: 'ダウンライト / スポット照射',
+    lightConeAngleLabel: '照射コーン角度',
+    lightKelvinLabel: '色温度 (Kelvin)',
+    lightAutoNightLabel: '夕方・夜間のみ自動点灯',
+    walkLookPadLabel: 'ドラッグで視点回転',
+    walkGhostModeLabel: '壁すり抜け',
+    walkEyeStanding: '立ち目線 (1.65m)',
+    walkEyeSeated: '座り目線 (1.10m)',
+    walkInteractOpenDoor: 'ドアを開ける',
+    walkInteractCloseDoor: 'ドアを閉める',
+    walkInteractToggleLight: '照明スイッチ',
+    roomVoidToggleLabel: '吹き抜け / オープンメザニン (2層貫通)',
+    roomVoidHint:
+      '上階床スラブと直下の天井をくり抜き、開放的な吹き抜け空間を作ります。',
+    siteShapeLabel: '敷地形状プリセット',
+    siteShapeRect: '長方形',
+    siteShapeTrapezoid: '台形敷地',
+    siteShapeHook: '角地（隅切り）',
+    siteShapeLLot: '旗竿・L字敷地',
+    docKindSection: '断面図 (A–A\' / B–B\')',
+    docSectionAxisAA: '横断面図 A–A\' (X軸)',
+    docSectionAxisBB: '縦断面図 B–B\' (Z軸)',
+    docSectionOffsetLabel: '切断ライン位置 (m)',
+    shadingModeTitle: 'ビューポート表示スタイル',
+    shadingModeShaded: 'リアルPBR',
+    shadingModeClay: '白模型 (クレイ)',
+    shadingModeTech: 'テクニカル線画',
+    sectionCut3dTitle: '3D ライブ断面カット',
+    sectionCutEnable: '3D断面カットを有効化',
+    sectionCutFlip: 'カット方向を反転',
+    measure3dToolLabel: '3Dメジャー計測',
+    measure3dHint: '2点をタップして正確な3D距離を計測（頂点へ自動スナップ）',
+    quickDimEditTitle: '実寸メートル指定 (幅 × 高さ × 奥行)',
+    quickDimApplyBtn: '適用',
+    photoRes4kLabel: '4K Ultra HD (3840 × 2160)',
+    photoTwoPointLabel: '建築2点透視補正（垂直ラインを真っ直ぐ保つ）',
+    touchLoupeSettingLabel: 'タッチ移動時の精密拡大ルーペを表示',
   },
 };
 
