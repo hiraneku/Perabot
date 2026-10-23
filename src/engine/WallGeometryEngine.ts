@@ -2121,15 +2121,26 @@ export function buildCornerFilletGeometry(
   const collector = new DualWallMeshCollector();
   const { vertex, wallA, wallB, endA, endB, pullback, height } = spec;
 
-  const sA0 = sampleAdvancedWallPath(wallA, endA === 'start' ? 0 : 1);
-  const sB0 = sampleAdvancedWallPath(wallB, endB === 'start' ? 0 : 1);
-  const tAx = endA === 'start' ? sA0.tx : -sA0.tx;
-  const tAz = endA === 'start' ? sA0.tz : -sA0.tz;
-  const tBx = endB === 'start' ? sB0.tx : -sB0.tx;
-  const tBz = endB === 'start' ? sB0.tz : -sB0.tz;
-
-  const hA = wallA.thickness * 0.5;
-  const hB = wallB.thickness * 0.5;
+  const lenA = Math.max(0.15, computeAdvancedWallLength(wallA));
+  const lenB = Math.max(0.15, computeAdvancedWallLength(wallB));
+  const ratioA = Math.max(0, Math.min(1, (endA === 'start' ? pullback : lenA - pullback) / lenA));
+  const ratioB = Math.max(0, Math.min(1, (endB === 'start' ? pullback : lenB - pullback) / lenB));
+  const sampleA = createAdvancedWallDistanceSampler(wallA)(ratioA);
+  const sampleB = createAdvancedWallDistanceSampler(wallB)(ratioB);
+  const tAx = endA === 'start' ? sampleA.tx : -sampleA.tx;
+  const tAz = endA === 'start' ? sampleA.tz : -sampleA.tz;
+  const tBx = endB === 'start' ? sampleB.tx : -sampleB.tx;
+  const tBz = endB === 'start' ? sampleB.tz : -sampleB.tz;
+  // Fillet ends must meet the actual swept-wall cross sections, not a tangent extrapolation
+  // from the vertex; tangent extrapolation drifts visibly on curved walls.
+  const centerAX = sampleA.x;
+  const centerAZ = sampleA.z;
+  const centerBX = sampleB.x;
+  const centerBZ = sampleB.z;
+  const endTA = wallA.endThickness ?? wallA.thickness;
+  const endTB = wallB.endThickness ?? wallB.thickness;
+  const hA = (wallA.thickness + (endTA - wallA.thickness) * ratioA) * 0.5;
+  const hB = (wallB.thickness + (endTB - wallB.thickness) * ratioB) * 0.5;
   const h = (hA + hB) * 0.5;
 
   // Determine which side of A->B is concave (inner `< 180°`) vs convex (outer `> 180°`)!
@@ -2158,22 +2169,22 @@ export function buildCornerFilletGeometry(
 
   // Inner & outer miter intersections
   const hitIn = intersect2DLines(
-    vertex.x + inNormAx * hA,
-    vertex.z + inNormAz * hA,
+    centerAX + inNormAx * hA,
+    centerAZ + inNormAz * hA,
     tAx,
     tAz,
-    vertex.x + inNormBx * hB,
-    vertex.z + inNormBz * hB,
+    centerBX + inNormBx * hB,
+    centerBZ + inNormBz * hB,
     tBx,
     tBz
   );
   const hitOut = intersect2DLines(
-    vertex.x + outNormAx * hA,
-    vertex.z + outNormAz * hA,
+    centerAX + outNormAx * hA,
+    centerAZ + outNormAz * hA,
     tAx,
     tAz,
-    vertex.x + outNormBx * hB,
-    vertex.z + outNormBz * hB,
+    centerBX + outNormBx * hB,
+    centerBZ + outNormBz * hB,
     tBx,
     tBz
   );
@@ -2280,15 +2291,15 @@ export function buildCornerFilletGeometry(
   }
 
   // Endpoints on Wall A & Wall B at `pullback`
-  const aInX = vertex.x + tAx * pullback + inNormAx * hA;
-  const aInZ = vertex.z + tAz * pullback + inNormAz * hA;
-  const aOutX = vertex.x + tAx * pullback + outNormAx * hA;
-  const aOutZ = vertex.z + tAz * pullback + outNormAz * hA;
+  const aInX = centerAX + inNormAx * hA;
+  const aInZ = centerAZ + inNormAz * hA;
+  const aOutX = centerAX + outNormAx * hA;
+  const aOutZ = centerAZ + outNormAz * hA;
 
-  const bInX = vertex.x + tBx * pullback + inNormBx * hB;
-  const bInZ = vertex.z + tBz * pullback + inNormBz * hB;
-  const bOutX = vertex.x + tBx * pullback + outNormBx * hB;
-  const bOutZ = vertex.z + tBz * pullback + outNormBz * hB;
+  const bInX = centerBX + inNormBx * hB;
+  const bInZ = centerBZ + inNormBz * hB;
+  const bOutX = centerBX + outNormBx * hB;
+  const bOutZ = centerBZ + outNormBz * hB;
 
   // Material indices for inner vs outer sides of Wall A
   const innerMat: 4 | 5 =
@@ -2365,6 +2376,30 @@ export function buildCornerFilletGeometry(
     rawPts.push({ x: bInX, z: bInZ, edgeMat: innerMat });
     rawPts.push({ x: mInX, z: mInZ, edgeMat: innerMat });
     rawPts.push({ x: aInX, z: aInZ, edgeMat: 0, skipSide: true });
+  }
+
+  // Bridge the mitered baseboards across the rounded junction. Wall-body baseboards stop
+  // at the fillet pullbacks, so without this small swept corner shoe the lower trim has a gap.
+  if (
+    (spec.style === 'rounded-inner' || spec.style === 'rounded-outer') &&
+    wallA.hasBaseboard && wallB.hasBaseboard &&
+    wallA.style === 'full' && wallB.style === 'full'
+  ) {
+    const centroid = rawPts.reduce(
+      (acc, p) => ({ x: acc.x + p.x / rawPts.length, z: acc.z + p.z / rawPts.length }),
+      { x: 0, z: 0 }
+    );
+    const baseboardRing = rawPts.map((p) => {
+      const dx = p.x - centroid.x;
+      const dz = p.z - centroid.z;
+      const len = Math.max(1e-6, Math.hypot(dx, dz));
+      return {
+        x: p.x + (dx / len) * 0.014,
+        z: p.z + (dz / len) * 0.014,
+        edgeMat: 0 as const,
+      };
+    });
+    collector.addExtrudedPolygonBlock(baseboardRing, 0, 0.085);
   }
 
   collector.addExtrudedPolygonBlock(rawPts, 0, height);

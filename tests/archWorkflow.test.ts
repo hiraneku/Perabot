@@ -1008,6 +1008,43 @@ describe('Advanced Wall Editing & Transform Constraints', () => {
     withoutOpening.bodyGeo.dispose();
   });
 
+  it('keeps detected room/floor boundaries continuous and smoothly sampled along curved walls', () => {
+    const walls = [
+      makeWall('room-curve', { x: -2, z: -2 }, { x: 2, z: -2 }, {
+        pathMode: 'circular-arc', curveBulge: 0.55,
+      }),
+      makeWall('room-right', { x: 2, z: -2 }, { x: 2, z: 2 }),
+      makeWall('room-top', { x: 2, z: 2 }, { x: -2, z: 2 }),
+      makeWall('room-left', { x: -2, z: 2 }, { x: -2, z: -2 }),
+    ];
+    const rooms = detectClosedRoomsOnFloor(walls, 'floor_1', [], 'Room');
+    assert.equal(rooms.length, 1);
+    assert.ok(rooms[0].polygon.length >= 28,
+      'Room floor boundary should retain dense curve samples instead of a visibly segmented or broken arc');
+    assert.ok(rooms[0].perimeterM > 16,
+      'Room perimeter should follow the arc length rather than the wall chord');
+  });
+
+  it('bridges rounded wall-corner baseboards instead of leaving a visible trim gap', () => {
+    const makeCorner = (hasBaseboard: boolean) => {
+      const first = makeWall(`round-a-${hasBaseboard}`, { x: -2, z: 0 }, { x: 0, z: 0 }, {
+        cornerStyle: 'rounded-inner', cornerRadius: 0.35, hasBaseboard,
+      });
+      const second = makeWall(`round-b-${hasBaseboard}`, { x: 0, z: 0 }, { x: 0, z: 2 }, {
+        cornerStyle: 'rounded-inner', cornerRadius: 0.35, hasBaseboard,
+      });
+      const plan = computeFloorWallJunctions([first, second]);
+      assert.equal(plan.filletPieces.length, 1);
+      return buildCornerFilletGeometry(plan.filletPieces[0])!;
+    };
+    const withTrim = makeCorner(true);
+    const withoutTrim = makeCorner(false);
+    assert.ok(withTrim.getAttribute('position').count > withoutTrim.getAttribute('position').count,
+      'Rounded corner should include a continuous low-level baseboard shoe');
+    withTrim.dispose();
+    withoutTrim.dispose();
+  });
+
   it('joins a curved wall cleanly to a straight wall using endpoint tangents and keeps junction trims valid', () => {
     const curved = makeWall('junction-curve', { x: -2, z: 0 }, { x: 0, z: 0 }, {
       pathMode: 'cubic-bezier',
