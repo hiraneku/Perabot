@@ -2367,6 +2367,31 @@ export function buildCornerFilletGeometry(
     rawPts.push({ x: aInX, z: aInZ, edgeMat: 0 });
   }
 
+  // Continue the raised skirting through the rounded junction. The wall-side strips end
+  // at the fillet pullbacks, so this narrow, slightly proud shoe masks their open ends and
+  // gives the lower trim one uninterrupted path around the inside/outside bend.
+  if (
+    (spec.style === 'rounded-inner' || spec.style === 'rounded-outer') &&
+    wallA.hasBaseboard && wallB.hasBaseboard &&
+    wallA.style === 'full' && wallB.style === 'full'
+  ) {
+    const center = rawPts.reduce(
+      (sum, point) => ({ x: sum.x + point.x / rawPts.length, z: sum.z + point.z / rawPts.length }),
+      { x: 0, z: 0 }
+    );
+    const skirtingRing = rawPts.map((point) => {
+      const dx = point.x - center.x;
+      const dz = point.z - center.z;
+      const radius = Math.max(1e-6, Math.hypot(dx, dz));
+      return {
+        x: point.x + dx / radius * 0.014,
+        z: point.z + dz / radius * 0.014,
+        edgeMat: 0 as const,
+      };
+    });
+    collector.addExtrudedPolygonBlock(skirtingRing, 0, 0.085);
+  }
+
   collector.addExtrudedPolygonBlock(rawPts, 0, height);
 
   return collector.buildGeometry();

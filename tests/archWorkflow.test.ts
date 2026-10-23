@@ -1009,6 +1009,27 @@ describe('Advanced Wall Editing & Transform Constraints', () => {
     withoutOpening.bodyGeo.dispose();
   });
 
+  it('continues baseboard geometry through both rounded corner profiles when enabled', () => {
+    for (const style of ['rounded-inner', 'rounded-outer'] as const) {
+      const build = (hasBaseboard: boolean) => {
+        const a = makeWall(`${style}-base-a-${hasBaseboard}`, { x: -2, z: 0 }, { x: 0, z: 0 }, {
+          cornerStyle: style, cornerRadius: 0.35, hasBaseboard,
+        });
+        const b = makeWall(`${style}-base-b-${hasBaseboard}`, { x: 0, z: 0 }, { x: 0, z: 2 }, {
+          cornerStyle: style, cornerRadius: 0.35, hasBaseboard,
+        });
+        const plan = computeFloorWallJunctions([a, b]);
+        return buildCornerFilletGeometry(plan.filletPieces[0])!;
+      };
+      const trimOn = build(true);
+      const trimOff = build(false);
+      assert.ok(trimOn.getAttribute('position').count > trimOff.getAttribute('position').count,
+        `${style} must include a continuous lower skirting bridge`);
+      trimOn.dispose();
+      trimOff.dispose();
+    }
+  });
+
   it('closes both rounded-corner end seams without projecting spikes beyond the corner envelope', () => {
     for (const style of ['rounded-inner', 'rounded-outer'] as const) {
       const first = makeWall(`${style}-a`, { x: -2, z: 0 }, { x: 0, z: 0 }, {
